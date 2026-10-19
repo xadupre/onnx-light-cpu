@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/scatter_nd_kernel.h"
 
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/execution.h"
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
 #include <gtest/gtest.h>
@@ -240,7 +240,7 @@ struct InlineExecutor {
   int64_t dispatches = 0;
   int64_t blocks = 0;
   static void Run(void *context, int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -252,8 +252,8 @@ struct InlineExecutor {
 
 TEST(OnnxLightScatterNDKernel, CopySchedulingIsRuntimeOwnedAndNestedCallsStaySerial) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {3, 2}), {1, 1}, {1}, Payload(DataType::FLOAT, {1, 2}, 11));
   EXPECT_EQ(executor.dispatches, 0);
   Compare(Payload(DataType::FLOAT, {32, 6656}), {2, 1}, {1, -31},
@@ -263,7 +263,7 @@ TEST(OnnxLightScatterNDKernel, CopySchedulingIsRuntimeOwnedAndNestedCallsStaySer
   EXPECT_LE(executor.blocks, view.effective_threads);
   const int64_t calls = executor.dispatches;
   {
-    cpu_compute::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     Compare(Payload(DataType::FLOAT, {32, 6656}), {1, 1}, {1},
             Payload(DataType::FLOAT, {1, 6656}, 11));
   }

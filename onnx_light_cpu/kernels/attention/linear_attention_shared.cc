@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
 
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -65,32 +65,32 @@ void RequirePacked3D(const std::string &kernel_name, const Tensor &tensor, const
 
 } // namespace
 
-cpu_compute::LinearAttentionRule ParseLinearAttentionRule(const std::string &kernel_name,
-                                                          const std::string &rule) {
+ml_cpu_compute::LinearAttentionRule ParseLinearAttentionRule(const std::string &kernel_name,
+                                                             const std::string &rule) {
   if (rule == "linear") {
-    return cpu_compute::LinearAttentionRule::kLinear;
+    return ml_cpu_compute::LinearAttentionRule::kLinear;
   }
   if (rule == "gated") {
-    return cpu_compute::LinearAttentionRule::kGated;
+    return ml_cpu_compute::LinearAttentionRule::kGated;
   }
   if (rule == "delta") {
-    return cpu_compute::LinearAttentionRule::kDelta;
+    return ml_cpu_compute::LinearAttentionRule::kDelta;
   }
   if (rule == "gated_delta") {
-    return cpu_compute::LinearAttentionRule::kGatedDelta;
+    return ml_cpu_compute::LinearAttentionRule::kGatedDelta;
   }
   throw std::invalid_argument(kernel_name +
                               ": update_rule must be linear, gated, delta, or gated_delta.");
 }
 
-bool LinearAttentionRuleUsesDecay(cpu_compute::LinearAttentionRule rule) {
-  return rule == cpu_compute::LinearAttentionRule::kGated ||
-         rule == cpu_compute::LinearAttentionRule::kGatedDelta;
+bool LinearAttentionRuleUsesDecay(ml_cpu_compute::LinearAttentionRule rule) {
+  return rule == ml_cpu_compute::LinearAttentionRule::kGated ||
+         rule == ml_cpu_compute::LinearAttentionRule::kGatedDelta;
 }
 
-bool LinearAttentionRuleUsesBeta(cpu_compute::LinearAttentionRule rule) {
-  return rule == cpu_compute::LinearAttentionRule::kDelta ||
-         rule == cpu_compute::LinearAttentionRule::kGatedDelta;
+bool LinearAttentionRuleUsesBeta(ml_cpu_compute::LinearAttentionRule rule) {
+  return rule == ml_cpu_compute::LinearAttentionRule::kDelta ||
+         rule == ml_cpu_compute::LinearAttentionRule::kGatedDelta;
 }
 
 std::size_t LinearAttentionCheckedMultiply(const std::string &kernel_name, std::size_t left,
@@ -123,10 +123,10 @@ void ConvertLinearAttentionToFloat(const Tensor &source, std::size_t count, floa
   if (type == DataType::FLOAT) {
     std::memcpy(destination, source.bytes(), count * sizeof(float));
   } else if (type == DataType::FLOAT16) {
-    cpu_compute::detail::ConvertFloat16ToFloat32(
+    ml_cpu_compute::detail::ConvertFloat16ToFloat32(
         reinterpret_cast<const std::uint16_t *>(source.bytes()), destination, count);
   } else {
-    cpu_compute::detail::ConvertBFloat16ToFloat32(
+    ml_cpu_compute::detail::ConvertBFloat16ToFloat32(
         reinterpret_cast<const std::uint16_t *>(source.bytes()), destination, count);
   }
 }
@@ -139,10 +139,10 @@ void ConvertLinearAttentionFromFloat(const float *source, std::size_t count, Dat
   if (type == DataType::FLOAT) {
     std::memcpy(destination.mutable_bytes(), source, count * sizeof(float));
   } else if (type == DataType::FLOAT16) {
-    cpu_compute::detail::ConvertFloat32ToFloat16(
+    ml_cpu_compute::detail::ConvertFloat32ToFloat16(
         source, reinterpret_cast<std::uint16_t *>(destination.mutable_bytes()), count);
   } else {
-    cpu_compute::detail::ConvertFloat32ToBFloat16(
+    ml_cpu_compute::detail::ConvertFloat32ToBFloat16(
         source, reinterpret_cast<std::uint16_t *>(destination.mutable_bytes()), count);
   }
 }
@@ -214,7 +214,8 @@ LinearAttentionPlan PlanLinearAttention(const std::string &kernel_name, const Te
   }
 
   const std::size_t value_head_size = value_hidden / key_value_heads;
-  const cpu_compute::LinearAttentionRule rule = ParseLinearAttentionRule(kernel_name, update_rule);
+  const ml_cpu_compute::LinearAttentionRule rule =
+      ParseLinearAttentionRule(kernel_name, update_rule);
   const bool uses_decay = LinearAttentionRuleUsesDecay(rule);
   const bool uses_beta = LinearAttentionRuleUsesBeta(rule);
   if (decay == nullptr && uses_decay) {
@@ -229,8 +230,8 @@ LinearAttentionPlan PlanLinearAttention(const std::string &kernel_name, const Te
   if (beta != nullptr && !uses_beta && !policy.allow_irrelevant_optional_inputs) {
     throw std::invalid_argument(kernel_name + ": beta presence does not match update_rule.");
   }
-  cpu_compute::LinearAttentionDecayLayout decay_layout =
-      cpu_compute::LinearAttentionDecayLayout::kNone;
+  ml_cpu_compute::LinearAttentionDecayLayout decay_layout =
+      ml_cpu_compute::LinearAttentionDecayLayout::kNone;
   if (decay != nullptr) {
     if (decay->data_type != query.data_type || decay->shape.size() != 3 ||
         decay->shape[0] != query.shape[0] || decay->shape[1] != query.shape[1]) {
@@ -239,20 +240,20 @@ LinearAttentionPlan PlanLinearAttention(const std::string &kernel_name, const Te
     }
     const std::size_t decay_hidden = static_cast<std::size_t>(decay->shape[2]);
     if (decay_hidden == key_value_heads) {
-      decay_layout = cpu_compute::LinearAttentionDecayLayout::kPerHead;
+      decay_layout = ml_cpu_compute::LinearAttentionDecayLayout::kPerHead;
     } else if (decay_hidden == LinearAttentionCheckedMultiply(kernel_name, key_value_heads,
                                                               key_head_size, "decay")) {
-      decay_layout = cpu_compute::LinearAttentionDecayLayout::kPerKeyDimension;
+      decay_layout = ml_cpu_compute::LinearAttentionDecayLayout::kPerKeyDimension;
     } else {
       throw std::invalid_argument(kernel_name + ": decay last dimension must be H_kv or H_kv*d_k.");
     }
     if (!uses_decay) {
-      decay_layout = cpu_compute::LinearAttentionDecayLayout::kNone;
+      decay_layout = ml_cpu_compute::LinearAttentionDecayLayout::kNone;
     }
   }
 
-  cpu_compute::LinearAttentionBetaLayout beta_layout =
-      cpu_compute::LinearAttentionBetaLayout::kNone;
+  ml_cpu_compute::LinearAttentionBetaLayout beta_layout =
+      ml_cpu_compute::LinearAttentionBetaLayout::kNone;
   if (beta != nullptr) {
     if (beta->data_type != query.data_type || beta->shape.size() != 3 ||
         beta->shape[0] != query.shape[0] || beta->shape[1] != query.shape[1]) {
@@ -261,14 +262,14 @@ LinearAttentionPlan PlanLinearAttention(const std::string &kernel_name, const Te
     }
     const std::size_t beta_hidden = static_cast<std::size_t>(beta->shape[2]);
     if (beta_hidden == 1) {
-      beta_layout = cpu_compute::LinearAttentionBetaLayout::kShared;
+      beta_layout = ml_cpu_compute::LinearAttentionBetaLayout::kShared;
     } else if (beta_hidden == key_value_heads) {
-      beta_layout = cpu_compute::LinearAttentionBetaLayout::kPerHead;
+      beta_layout = ml_cpu_compute::LinearAttentionBetaLayout::kPerHead;
     } else {
       throw std::invalid_argument(kernel_name + ": beta last dimension must be 1 or H_kv.");
     }
     if (!uses_beta) {
-      beta_layout = cpu_compute::LinearAttentionBetaLayout::kNone;
+      beta_layout = ml_cpu_compute::LinearAttentionBetaLayout::kNone;
     }
   }
 
@@ -359,11 +360,11 @@ LinearAttentionResult ExecuteLinearAttentionPlan(const std::string &kernel_name,
   const float *value_data =
       as_float(value, CheckedCount(kernel_name, value.shape, "value"), value_buffer);
   const float *decay_data =
-      plan.parameters.decay_layout == cpu_compute::LinearAttentionDecayLayout::kNone
+      plan.parameters.decay_layout == ml_cpu_compute::LinearAttentionDecayLayout::kNone
           ? nullptr
           : as_float(*decay, CheckedCount(kernel_name, decay->shape, "decay"), decay_buffer);
   const float *beta_data =
-      plan.parameters.beta_layout == cpu_compute::LinearAttentionBetaLayout::kNone
+      plan.parameters.beta_layout == ml_cpu_compute::LinearAttentionBetaLayout::kNone
           ? nullptr
           : as_float(*beta, CheckedCount(kernel_name, beta->shape, "beta"), beta_buffer);
 
@@ -394,8 +395,8 @@ LinearAttentionResult ExecuteLinearAttentionPlan(const std::string &kernel_name,
     output_data = output_buffer.data();
   }
 
-  cpu_compute::LinearAttentionFloat32(plan.parameters, query_data, key_data, value_data, decay_data,
-                                      beta_data, state_data, output_data);
+  ml_cpu_compute::LinearAttentionFloat32(plan.parameters, query_data, key_data, value_data,
+                                         decay_data, beta_data, state_data, output_data);
   if (plan.activation_type != DataType::FLOAT) {
     ConvertLinearAttentionFromFloat(output_data, plan.output_count, plan.activation_type, output);
   }

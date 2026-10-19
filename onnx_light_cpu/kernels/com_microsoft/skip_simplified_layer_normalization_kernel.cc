@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/com_microsoft/skip_simplified_layer_normalization.h"
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/com_microsoft/skip_simplified_layer_normalization.h"
+#include "ml_cpu_compute/execution.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -34,7 +34,7 @@ void Normalize(const runtime::Tensor &input, const runtime::Tensor &skip,
   using Traits = normalization::TypeTraits<Type>;
   auto *output = normalization::MutableData<Type>(result.output);
   auto *sum = output_sum ? normalization::MutableData<Type>(result.input_skip_bias_sum) : nullptr;
-  cpu_compute::ExecuteRanges(
+  ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
       [&](std::int64_t begin, std::int64_t end) {
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
@@ -93,7 +93,7 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
   auto result = helpers::Allocate(input, output_sum, output_mean, output_inv_std_var, rt);
   if (input.data_type == runtime::DataType::FLOAT && FloatAligned(input) && FloatAligned(skip) &&
       FloatAligned(gamma) && (bias == nullptr || FloatAligned(*bias))) {
-    cpu_compute::SkipSimplifiedLayerNormalizationFloat32(
+    ml_cpu_compute::SkipSimplifiedLayerNormalizationFloat32(
         input.AsFloat(), skip.AsFloat(), gamma.AsFloat(),
         bias == nullptr ? nullptr : bias->AsFloat(), result.output.AsFloat(),
         output_sum ? result.input_skip_bias_sum.AsFloat() : nullptr,
@@ -114,7 +114,7 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
         output_sum
             ? normalization::MutableData<runtime::DataType::FLOAT16>(result.input_skip_bias_sum)
             : nullptr;
-    if (cpu_compute::TrySkipSimplifiedLayerNormalizationFloat16(
+    if (ml_cpu_compute::TrySkipSimplifiedLayerNormalizationFloat16(
             input_data, skip_data, gamma_data, bias_data, output_data, sum_data,
             output_mean ? result.mean.AsFloat() : nullptr,
             output_inv_std_var ? result.inv_std_var.AsFloat() : nullptr, dims.rows, dims.width,

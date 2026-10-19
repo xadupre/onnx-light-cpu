@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/logical/logical.h"
+#include "ml_cpu_compute/logical/logical.h"
 
 #include <gtest/gtest.h>
 
@@ -13,24 +13,24 @@ namespace {
 
 TEST(NotBool, EmptyInput) {
   std::uint8_t dummy = 1;
-  cpu_compute::NotBool(&dummy, &dummy, 0);
+  ml_cpu_compute::NotBool(&dummy, &dummy, 0);
   EXPECT_EQ(dummy, 1);
 }
 
 TEST(NotBool, SingleElement) {
   std::uint8_t in = 0;
   std::uint8_t out = 5;
-  cpu_compute::NotBool(&in, &out, 1);
+  ml_cpu_compute::NotBool(&in, &out, 1);
   EXPECT_EQ(out, 1);
   in = 1;
-  cpu_compute::NotBool(&in, &out, 1);
+  ml_cpu_compute::NotBool(&in, &out, 1);
   EXPECT_EQ(out, 0);
 }
 
 TEST(NotBool, Basic) {
   std::vector<std::uint8_t> in = {0, 1, 0, 1, 1, 0};
   std::vector<std::uint8_t> out(in.size(), 42);
-  cpu_compute::NotBool(in.data(), out.data(), in.size());
+  ml_cpu_compute::NotBool(in.data(), out.data(), in.size());
   const std::vector<std::uint8_t> expected = {1, 0, 1, 0, 0, 1};
   EXPECT_EQ(out, expected);
 }
@@ -40,7 +40,7 @@ TEST(NotBool, NonZeroBytesTreatedAsTrue) {
   // numpy.logical_not for non-canonical bool storage).
   std::vector<std::uint8_t> in = {0, 2, 5, 255, 0, 128};
   std::vector<std::uint8_t> out(in.size(), 9);
-  cpu_compute::NotBool(in.data(), out.data(), in.size());
+  ml_cpu_compute::NotBool(in.data(), out.data(), in.size());
   const std::vector<std::uint8_t> expected = {1, 0, 0, 0, 1, 0};
   EXPECT_EQ(out, expected);
 }
@@ -53,7 +53,7 @@ TEST(NotBool, LargeArray) {
       in[i] = static_cast<std::uint8_t>(i % 2);
     }
     std::vector<std::uint8_t> out(size, 42);
-    cpu_compute::NotBool(in.data(), out.data(), size);
+    ml_cpu_compute::NotBool(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_EQ(out[i], static_cast<std::uint8_t>(in[i] == 0 ? 1 : 0))
           << "at index " << i << " size=" << size;
@@ -70,7 +70,7 @@ TEST(NotBool, ParallelLargeArrayMatchesScalar) {
   for (std::size_t i = 0; i < size; ++i) {
     in[i] = static_cast<std::uint8_t>(i % 3); // mix of 0, 1, 2
   }
-  cpu_compute::NotBool(in.data(), out.data(), size);
+  ml_cpu_compute::NotBool(in.data(), out.data(), size);
   for (std::size_t i = 0; i < size; ++i) {
     EXPECT_EQ(out[i], static_cast<std::uint8_t>(in[i] == 0 ? 1 : 0)) << "at index " << i;
   }

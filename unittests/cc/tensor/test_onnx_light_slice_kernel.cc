@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/tensor/slice.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/tensor/slice.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
@@ -372,16 +372,17 @@ struct InlineExecutor {
   bool nested = false;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
     for (int64_t block = 0; block < count; ++block) {
       task(task_context, block);
       if (self.nested) {
-        cpu_compute::detail::ExecutionRegionScope region;
-        self.maximum_depth = std::max(
-            self.maximum_depth, static_cast<int64_t>(cpu_compute::detail::ExecutionRegionDepth()));
+        ml_cpu_compute::detail::ExecutionRegionScope region;
+        self.maximum_depth =
+            std::max(self.maximum_depth,
+                     static_cast<int64_t>(ml_cpu_compute::detail::ExecutionRegionDepth()));
         Compare(Payload(DataType::FLOAT, {1024, 1024}), {0}, {1024});
       }
     }
@@ -390,8 +391,8 @@ struct InlineExecutor {
 
 TEST(OnnxLightSliceKernel, SmallLargeContiguousStridedAndNestedScheduling) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {17, 9}), {1}, {16});
   EXPECT_EQ(executor.dispatches, 0);
   Compare(Payload(DataType::FLOAT, {1024, 1024}), {0}, {1024});
@@ -406,7 +407,7 @@ TEST(OnnxLightSliceKernel, SmallLargeContiguousStridedAndNestedScheduling) {
   EXPECT_EQ(executor.maximum_depth, 1);
   const int64_t calls = executor.dispatches;
   {
-    cpu_compute::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     Compare(Payload(DataType::FLOAT, {1024, 1024}), {-1}, {-9999}, Values{0}, Values{-1});
   }
   EXPECT_EQ(executor.dispatches, calls);

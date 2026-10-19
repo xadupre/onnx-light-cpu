@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/com_microsoft/cdist.h"
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/com_microsoft/cdist.h"
+#include "ml_cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 
@@ -17,17 +17,17 @@
 
 namespace {
 
-using cpu_compute::CDistExecutionTuning;
-using cpu_compute::CDistFloat32;
-using cpu_compute::CDistFloat32WithTuning;
-using cpu_compute::CDistFloat64;
-using cpu_compute::CDistMetric;
+using ml_cpu_compute::CDistExecutionTuning;
+using ml_cpu_compute::CDistFloat32;
+using ml_cpu_compute::CDistFloat32WithTuning;
+using ml_cpu_compute::CDistFloat64;
+using ml_cpu_compute::CDistMetric;
 
 // Direct (non-expanded) reference implementation used to check the scalar
 // kernel's numerics without sharing any code path with it.
 template <typename T>
 std::vector<T> Reference(const std::vector<T> &a, const std::vector<T> &b, std::size_t m,
-                         std::size_t k, std::size_t n, cpu_compute::CDistMetric metric) {
+                         std::size_t k, std::size_t n, ml_cpu_compute::CDistMetric metric) {
   std::vector<T> expected(m * k);
   for (std::size_t row = 0; row < m; ++row) {
     for (std::size_t col = 0; col < k; ++col) {
@@ -37,7 +37,7 @@ std::vector<T> Reference(const std::vector<T> &a, const std::vector<T> &b, std::
         sum_squares += difference * difference;
       }
       expected[row * k + col] =
-          metric == cpu_compute::CDistMetric::kEuclidean ? std::sqrt(sum_squares) : sum_squares;
+          metric == ml_cpu_compute::CDistMetric::kEuclidean ? std::sqrt(sum_squares) : sum_squares;
     }
   }
   return expected;
@@ -51,10 +51,10 @@ TEST(CDist, Float32SqEuclideanMatchesDirectReference) {
                                 2.5f, -3.0f, 0.0f, 0.0f, 0.0f,  0.0f};
   const std::vector<float> b = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f};
   std::vector<float> output(m * k);
-  cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), m, k, n,
-                            cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), m, k, n,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
   const std::vector<float> expected =
-      Reference(a, b, m, k, n, cpu_compute::CDistMetric::kSqEuclidean);
+      Reference(a, b, m, k, n, ml_cpu_compute::CDistMetric::kSqEuclidean);
   for (std::size_t i = 0; i < output.size(); ++i) {
     EXPECT_NEAR(output[i], expected[i], 1e-5f) << i;
   }
@@ -68,10 +68,10 @@ TEST(CDist, Float32EuclideanTakesSquareRootOfSqEuclidean) {
   const std::vector<float> b = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 3.0f, 3.0f, 3.0f};
   std::vector<float> sq(m * k);
   std::vector<float> eu(m * k);
-  cpu_compute::CDistFloat32(a.data(), b.data(), sq.data(), m, k, n,
-                            cpu_compute::CDistMetric::kSqEuclidean);
-  cpu_compute::CDistFloat32(a.data(), b.data(), eu.data(), m, k, n,
-                            cpu_compute::CDistMetric::kEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), sq.data(), m, k, n,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), eu.data(), m, k, n,
+                               ml_cpu_compute::CDistMetric::kEuclidean);
   for (std::size_t i = 0; i < sq.size(); ++i) {
     EXPECT_NEAR(eu[i], std::sqrt(sq[i]), 1e-5f) << i;
   }
@@ -89,10 +89,10 @@ TEST(CDist, Float64MatchesDirectReferenceForBothMetrics) {
   for (std::size_t i = 0; i < b.size(); ++i) {
     b[i] = static_cast<double>(static_cast<int>(i % 7) - 3) * 0.25;
   }
-  for (cpu_compute::CDistMetric metric :
-       {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+  for (ml_cpu_compute::CDistMetric metric :
+       {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
     std::vector<double> output(m * k);
-    cpu_compute::CDistFloat64(a.data(), b.data(), output.data(), m, k, n, metric);
+    ml_cpu_compute::CDistFloat64(a.data(), b.data(), output.data(), m, k, n, metric);
     const std::vector<double> expected = Reference(a, b, m, k, n, metric);
     for (std::size_t i = 0; i < output.size(); ++i) {
       EXPECT_NEAR(output[i], expected[i], 1e-9) << i;
@@ -112,10 +112,10 @@ TEST(CDist, VectorizedFeatureTailMatchesDirectReference) {
   for (std::size_t i = 0; i < b.size(); ++i) {
     b[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.03125f;
   }
-  for (cpu_compute::CDistMetric metric :
-       {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+  for (ml_cpu_compute::CDistMetric metric :
+       {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
     std::vector<float> output(m * k);
-    cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), m, k, n, metric);
+    ml_cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), m, k, n, metric);
     const std::vector<float> expected = Reference(a, b, m, k, n, metric);
     for (std::size_t i = 0; i < output.size(); ++i) {
       EXPECT_NEAR(output[i], expected[i], 1e-4f) << i;
@@ -125,15 +125,15 @@ TEST(CDist, VectorizedFeatureTailMatchesDirectReference) {
 
 TEST(CDist, ZeroRowsOrColumnsProduceNoWrites) {
   std::vector<float> sentinel(1, -42.0f);
-  cpu_compute::CDistFloat32(nullptr, nullptr, sentinel.data(), 0, 0, 3,
-                            cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(nullptr, nullptr, sentinel.data(), 0, 0, 3,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
   EXPECT_EQ(sentinel[0], -42.0f);
 }
 
 TEST(CDist, ZeroFeatureDimensionProducesPositiveZero) {
   std::vector<double> output(6, -1.0);
-  cpu_compute::CDistFloat64(nullptr, nullptr, output.data(), 2, 3, 0,
-                            cpu_compute::CDistMetric::kEuclidean);
+  ml_cpu_compute::CDistFloat64(nullptr, nullptr, output.data(), 2, 3, 0,
+                               ml_cpu_compute::CDistMetric::kEuclidean);
   for (double value : output) {
     EXPECT_EQ(value, 0.0);
     EXPECT_FALSE(std::signbit(value));
@@ -147,10 +147,10 @@ TEST(CDist, NearIdenticalLargePointsRemainFiniteAndNonNegative) {
   b.back() = std::nextafter(b.back(), std::numeric_limits<float>::infinity());
   float squared = -1.0f;
   float euclidean = -1.0f;
-  cpu_compute::CDistFloat32(a.data(), b.data(), &squared, 1, 1, n,
-                            cpu_compute::CDistMetric::kSqEuclidean);
-  cpu_compute::CDistFloat32(a.data(), b.data(), &euclidean, 1, 1, n,
-                            cpu_compute::CDistMetric::kEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), &squared, 1, 1, n,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), &euclidean, 1, 1, n,
+                               ml_cpu_compute::CDistMetric::kEuclidean);
   EXPECT_TRUE(std::isfinite(squared));
   EXPECT_GE(squared, 0.0f);
   EXPECT_FLOAT_EQ(euclidean, std::sqrt(squared));
@@ -161,15 +161,15 @@ TEST(CDist, NonFiniteAndSignedZeroBehavior) {
   const std::vector<float> a = {infinity, 0.0f, -0.0f};
   const std::vector<float> b = {infinity, 0.0f, 1.0f, 0.0f, -0.0f, 0.0f};
   std::vector<float> output(2);
-  cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), 1, 2, 3,
-                            cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), output.data(), 1, 2, 3,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
   EXPECT_TRUE(std::isnan(output[0]));
   EXPECT_TRUE(std::isinf(output[1]));
 
   const std::vector<float> zeros = {0.0f, -0.0f};
   float zero_distance = -1.0f;
-  cpu_compute::CDistFloat32(zeros.data(), zeros.data(), &zero_distance, 1, 1, 2,
-                            cpu_compute::CDistMetric::kSqEuclidean);
+  ml_cpu_compute::CDistFloat32(zeros.data(), zeros.data(), &zero_distance, 1, 1, 2,
+                               ml_cpu_compute::CDistMetric::kSqEuclidean);
   EXPECT_EQ(zero_distance, 0.0f);
   EXPECT_FALSE(std::signbit(zero_distance));
 }
@@ -188,15 +188,15 @@ TEST(CDist, TunedDispatchWithParallelThresholdMatchesUntuned) {
   }
   std::vector<float> serial(m * k);
   std::vector<float> parallel(m * k);
-  cpu_compute::CDistFloat32(a.data(), b.data(), serial.data(), m, k, n,
-                            cpu_compute::CDistMetric::kEuclidean);
+  ml_cpu_compute::CDistFloat32(a.data(), b.data(), serial.data(), m, k, n,
+                               ml_cpu_compute::CDistMetric::kEuclidean);
 
-  cpu_compute::CDistExecutionTuning tuning;
+  ml_cpu_compute::CDistExecutionTuning tuning;
   tuning.parallel_threshold_bytes = 1;
   tuning.target_block_bytes = 1;
   tuning.use_cost_model = false;
-  cpu_compute::CDistFloat32WithTuning(a.data(), b.data(), parallel.data(), m, k, n,
-                                      cpu_compute::CDistMetric::kEuclidean, tuning);
+  ml_cpu_compute::CDistFloat32WithTuning(a.data(), b.data(), parallel.data(), m, k, n,
+                                         ml_cpu_compute::CDistMetric::kEuclidean, tuning);
   for (std::size_t i = 0; i < serial.size(); ++i) {
     EXPECT_NEAR(serial[i], parallel[i], 1e-5f) << i;
   }
@@ -204,12 +204,12 @@ TEST(CDist, TunedDispatchWithParallelThresholdMatchesUntuned) {
 
 template <typename T>
 void RunCDist(const T *a, const T *b, T *c, std::size_t m, std::size_t k, std::size_t n,
-              cpu_compute::CDistMetric metric,
-              const cpu_compute::CDistExecutionTuning &tuning = {}) {
+              ml_cpu_compute::CDistMetric metric,
+              const ml_cpu_compute::CDistExecutionTuning &tuning = {}) {
   if constexpr (std::is_same_v<T, float>) {
-    cpu_compute::CDistFloat32WithTuning(a, b, c, m, k, n, metric, tuning);
+    ml_cpu_compute::CDistFloat32WithTuning(a, b, c, m, k, n, metric, tuning);
   } else {
-    cpu_compute::CDistFloat64WithTuning(a, b, c, m, k, n, metric, tuning);
+    ml_cpu_compute::CDistFloat64WithTuning(a, b, c, m, k, n, metric, tuning);
   }
 }
 
@@ -247,7 +247,7 @@ TYPED_TEST(CDistPacked, TileBoundariesAndAllSimdTails) {
         const std::vector<T> a_values(a.begin() + 1, a.end());
         const std::vector<T> b_values(b.begin() + 1, b.end());
         for (auto metric :
-             {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+             {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
           RunCDist(a.data() + 1, b.data() + 1, output.data() + 1, m, k, n, metric);
           const auto expected = Reference(a_values, b_values, m, k, n, metric);
           for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -282,7 +282,7 @@ TYPED_TEST(CDistPacked, StableDistancesAndSpecialValues) {
     std::fill(a.begin() + 60 * n, a.end(), T(-0.0));
     std::fill(b.begin() + (k - 1) * n, b.end(), T(0));
     for (auto metric :
-         {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+         {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
       RunCDist(a.data(), b.data(), output.data(), m, k, n, metric);
       const auto expected = Reference(a, b, m, k, n, metric);
       for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -305,7 +305,7 @@ struct CDistExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<CDistExecutor *>(context);
     ++self.calls;
     self.blocks = count;
@@ -320,7 +320,7 @@ struct ConcurrentCDistExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ConcurrentCDistExecutor *>(context);
     self.blocks = count;
     std::vector<std::thread> threads;
@@ -344,14 +344,14 @@ TEST(CDist, LargeFloat32RowsAreDynamicallyClaimed) {
     b[i] = static_cast<float>(i % 13) / 8.0f;
   }
   ConcurrentCDistExecutor executor;
-  const cpu_compute::ExecutionExecutorView view{&executor, 4, &ConcurrentCDistExecutor::Run};
-  const cpu_compute::ExecutionExecutorScope scope(&view);
-  cpu_compute::CDistExecutionTuning tuning;
+  const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &ConcurrentCDistExecutor::Run};
+  const ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::CDistExecutionTuning tuning;
   tuning.parallel_threshold_bytes = 1;
   tuning.target_block_bytes = 1;
   tuning.use_cost_model = false;
   for (const auto metric :
-       {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+       {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
     RunCDist(a.data(), b.data(), output.data(), m, k, n, metric, tuning);
     EXPECT_EQ(executor.blocks, 4);
     const auto expected = Reference(a, b, m, k, n, metric);
@@ -373,22 +373,22 @@ TYPED_TEST(CDistPacked, ExecutorSlicesAndNestedFallback) {
       b[i] = T(i % 13) / T(8);
     }
     CDistExecutor executor;
-    const cpu_compute::ExecutionExecutorView view{&executor, 4, &CDistExecutor::Run};
-    const cpu_compute::ExecutionExecutorScope scope(&view);
-    cpu_compute::CDistExecutionTuning tuning;
+    const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &CDistExecutor::Run};
+    const ml_cpu_compute::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::CDistExecutionTuning tuning;
     tuning.parallel_threshold_bytes = 1;
     tuning.target_block_bytes = 1;
     tuning.use_cost_model = false;
     for (auto metric :
-         {cpu_compute::CDistMetric::kSqEuclidean, cpu_compute::CDistMetric::kEuclidean}) {
+         {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
       executor.calls = 0;
       RunCDist(a.data(), b.data(), output.data(), m, k, n, metric, tuning);
       EXPECT_EQ(executor.calls, 1);
       EXPECT_GT(executor.blocks, 1);
       EXPECT_EQ(output, Reference(a, b, m, k, n, metric));
       // No nested executor submissions, even when the enclosing range is inline.
-      cpu_compute::ExecuteRanges(
-          1, cpu_compute::ExecutionSchedule{1, 1, 4}, [&](std::int64_t, std::int64_t) {
+      ml_cpu_compute::ExecuteRanges(
+          1, ml_cpu_compute::ExecutionSchedule{1, 1, 4}, [&](std::int64_t, std::int64_t) {
             RunCDist(a.data(), b.data(), output.data(), m, k, n, metric, tuning);
           });
       EXPECT_EQ(executor.calls, 1);

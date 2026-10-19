@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/com_microsoft/qmoe.h"
+#include "ml_cpu_compute/com_microsoft/qmoe.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -35,7 +35,7 @@ public:
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
-  cpu_compute::QMoEAttributes attributes_;
+  ml_cpu_compute::QMoEAttributes attributes_;
 };
 
 void RegisterQMoEKernel();

@@ -5,9 +5,9 @@
 #include "onnx_light_cpu/kernels/com_microsoft/multi_head_attention_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/checked_arithmetic.h"
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -40,10 +40,10 @@ float Read(const Tensor &tensor, std::size_t index) {
   case DataType::FLOAT:
     return reinterpret_cast<const float *>(tensor.bytes())[index];
   case DataType::FLOAT16:
-    return cpu_compute::detail::Float16BitsToFloat(
+    return ml_cpu_compute::detail::Float16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
   case DataType::BFLOAT16:
-    return cpu_compute::detail::Bfloat16BitsToFloat(
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
   default:
     throw std::invalid_argument("MultiHeadAttention: unsupported floating-point type.");
@@ -57,11 +57,11 @@ void Write(Tensor &tensor, std::size_t index, float value) {
     break;
   case DataType::FLOAT16:
     reinterpret_cast<std::uint16_t *>(tensor.mutable_bytes())[index] =
-        cpu_compute::detail::FloatToFloat16Bits(value);
+        ml_cpu_compute::detail::FloatToFloat16Bits(value);
     break;
   case DataType::BFLOAT16:
     reinterpret_cast<std::uint16_t *>(tensor.mutable_bytes())[index] =
-        cpu_compute::detail::FloatToBFloat16Bits(value);
+        ml_cpu_compute::detail::FloatToBFloat16Bits(value);
     break;
   default:
     throw std::invalid_argument("MultiHeadAttention: unsupported floating-point type.");
@@ -74,12 +74,12 @@ std::int64_t AttributeInt(const NodeProto &node, const char *name, std::int64_t 
 
 Tensor Output(rt_ns::RuntimeContext &rt, int slot, DataType dtype, rt_ns::Shape shape) {
   const std::size_t count =
-      cpu_compute::CheckedDimension(shape.product(0, shape.size(), "MultiHeadAttention output"),
-                                    "MultiHeadAttention", "output element count");
-  return rt.MakeOutputTensor(slot, dtype, shape,
-                             cpu_compute::CheckedByteSize(count, dtype == DataType::FLOAT ? 4 : 2,
-                                                          "MultiHeadAttention",
-                                                          "output byte size"));
+      ml_cpu_compute::CheckedDimension(shape.product(0, shape.size(), "MultiHeadAttention output"),
+                                       "MultiHeadAttention", "output element count");
+  return rt.MakeOutputTensor(
+      slot, dtype, shape,
+      ml_cpu_compute::CheckedByteSize(count, dtype == DataType::FLOAT ? 4 : 2, "MultiHeadAttention",
+                                      "output byte size"));
 }
 
 } // namespace
@@ -123,9 +123,9 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
   const std::int64_t l = cross ? k.shape[2] : k.shape[1];
   const std::int64_t hv = cross ? v.shape[3] : v.shape[2] / heads;
   const std::int64_t q_width =
-      cpu_compute::CheckedIndexMultiply(heads, h, "MultiHeadAttention", "query width");
+      ml_cpu_compute::CheckedIndexMultiply(heads, h, "MultiHeadAttention", "query width");
   const std::int64_t v_width =
-      cpu_compute::CheckedIndexMultiply(heads, hv, "MultiHeadAttention", "value width");
+      ml_cpu_compute::CheckedIndexMultiply(heads, hv, "MultiHeadAttention", "value width");
   if (b < 0 || s < 0 || l < 0 || h <= 0 || hv <= 0 || k.shape[0] != b || v.shape[0] != b ||
       (cross ? (k.shape[1] != heads || v.shape[1] != heads || k.shape[3] != h || v.shape[2] != l)
              : (k.shape[1] != v.shape[1] || k.shape[2] != q.shape[2] || v.shape[2] % heads != 0))) {
@@ -144,15 +144,15 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
     throw std::invalid_argument("MultiHeadAttention: past key must have rank 4.");
   }
   const std::int64_t t =
-      cpu_compute::CheckedIndexAdd(p, l, "MultiHeadAttention", "total sequence length");
+      ml_cpu_compute::CheckedIndexAdd(p, l, "MultiHeadAttention", "total sequence length");
   if ((t == 0 && s != 0) || (cross && past_k) ||
       (past_k && (past_k->data_type != q.data_type || past_v->data_type != q.data_type ||
                   past_k->shape != rt_ns::Shape{b, heads, p, h} ||
                   past_v->shape != rt_ns::Shape{b, heads, p, hv}))) {
     throw std::invalid_argument("MultiHeadAttention: incompatible past key/value.");
   }
-  const auto bias_width = cpu_compute::CheckedIndexAdd(
-      cpu_compute::CheckedIndexMultiply(2, q_width, "MultiHeadAttention", "projection bias"),
+  const auto bias_width = ml_cpu_compute::CheckedIndexAdd(
+      ml_cpu_compute::CheckedIndexMultiply(2, q_width, "MultiHeadAttention", "projection bias"),
       v_width, "MultiHeadAttention", "projection bias");
   if (bias &&
       (bias->data_type != q.data_type || bias->shape.size() != 1 || bias->shape[0] != bias_width)) {
@@ -225,8 +225,8 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
       }
     }
   }
-  const std::int64_t rows = cpu_compute::CheckedIndexMultiply(
-      cpu_compute::CheckedIndexMultiply(b, heads, "MultiHeadAttention", "rows"), s,
+  const std::int64_t rows = ml_cpu_compute::CheckedIndexMultiply(
+      ml_cpu_compute::CheckedIndexMultiply(b, heads, "MultiHeadAttention", "rows"), s,
       "MultiHeadAttention", "rows");
   if (rows == 0) {
     rt_ns::SetOutput(node, 0, std::move(output), rt);
@@ -237,15 +237,15 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
     return;
   }
   const double cost = static_cast<double>(t) * (static_cast<double>(h) + hv);
-  const std::int64_t blocks = cpu_compute::ExecutionBlockCount(rows, cost);
+  const std::int64_t blocks = ml_cpu_compute::ExecutionBlockCount(rows, cost);
   const std::int64_t block_size = rows / blocks + (rows % blocks != 0);
-  const std::int64_t score_count =
-      cpu_compute::CheckedIndexMultiply(blocks, t, "MultiHeadAttention", "score scratch elements");
+  const std::int64_t score_count = ml_cpu_compute::CheckedIndexMultiply(
+      blocks, t, "MultiHeadAttention", "score scratch elements");
   rt_ns::detail::TemporaryTypedBuffer<float> score_scratch(
-      cpu_compute::CheckedDimension(score_count, "MultiHeadAttention", "score scratch elements"),
+      ml_cpu_compute::CheckedDimension(score_count, "MultiHeadAttention", "score scratch elements"),
       rt.execution_allocator(), "MultiHeadAttention score scratch");
-  cpu_compute::ExecuteRanges(
-      rows, cpu_compute::ExecutionSchedule{1, 1, blocks, blocks},
+  ml_cpu_compute::ExecuteRanges(
+      rows, ml_cpu_compute::ExecutionSchedule{1, 1, blocks, blocks},
       [&](std::int64_t begin, std::int64_t end) {
         float *scores = score_scratch.data() + (begin / block_size) * t;
         for (std::int64_t row = begin; row < end; ++row) {

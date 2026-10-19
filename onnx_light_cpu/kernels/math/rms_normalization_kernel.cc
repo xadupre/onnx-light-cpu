@@ -7,8 +7,8 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/rms_normalization.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/rms_normalization.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -41,10 +41,11 @@ template <typename Fn> void ExecuteRows(std::size_t rows, std::size_t inner, Fn 
   if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::invalid_argument("onnx_light_cpu::RMSNormalization: row count exceeds int64_t.");
   }
-  cpu_compute::ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(inner) * 0.625,
-                             [&](std::int64_t begin, std::int64_t end) {
-                               fn(static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
-                             });
+  ml_cpu_compute::ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(inner) * 0.625,
+                                [&](std::int64_t begin, std::int64_t end) {
+                                  fn(static_cast<std::size_t>(begin),
+                                     static_cast<std::size_t>(end));
+                                });
 }
 
 template <DataType XType, DataType VType>
@@ -114,9 +115,9 @@ void Normalize(const Tensor &x, const Tensor &scale, Tensor &output,
                std::size_t inner, float epsilon, bool scale_by_inner) {
   if (static_cast<DataType>(x.data_type) == DataType::FLOAT &&
       static_cast<DataType>(scale.data_type) == DataType::FLOAT && scale_by_inner) {
-    cpu_compute::RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
-                                         reinterpret_cast<float *>(output.mutable_bytes()), outer,
-                                         inner, epsilon);
+    ml_cpu_compute::RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
+                                            reinterpret_cast<float *>(output.mutable_bytes()),
+                                            outer, inner, epsilon);
     return;
   }
   if (static_cast<DataType>(x.data_type) == DataType::FLOAT16 &&
@@ -124,7 +125,7 @@ void Normalize(const Tensor &x, const Tensor &scale, Tensor &output,
     const auto *input = reinterpret_cast<const std::uint16_t *>(x.bytes());
     const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
     auto *result = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    cpu_compute::RmsNormalizationFloat16(input, scale_data, result, outer, inner, epsilon);
+    ml_cpu_compute::RmsNormalizationFloat16(input, scale_data, result, outer, inner, epsilon);
     return;
   }
   if (static_cast<DataType>(x.data_type) == DataType::BFLOAT16 &&
@@ -132,7 +133,7 @@ void Normalize(const Tensor &x, const Tensor &scale, Tensor &output,
     const auto *input = reinterpret_cast<const std::uint16_t *>(x.bytes());
     const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
     auto *result = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    cpu_compute::RmsNormalizationBFloat16(input, scale_data, result, outer, inner, epsilon);
+    ml_cpu_compute::RmsNormalizationBFloat16(input, scale_data, result, outer, inner, epsilon);
     return;
   }
   normalization::DispatchFloatType(x.data_type, [&]<DataType XType>() {

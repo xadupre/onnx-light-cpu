@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
 
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
@@ -71,8 +71,8 @@ TEST(OnnxLightRotaryEmbeddingKernel, InterleavedRank3PerTokenAndHalfTypes) {
       const auto expected = std::vector<float>{-2, 1, -4, 3, 5, 6, 7, 8};
       for (std::size_t i = 0; i < expected.size(); ++i) {
         const auto value = type == rt_ns::DataType::FLOAT16
-                               ? cpu_compute::detail::Float16BitsToFloat(bits[i])
-                               : cpu_compute::detail::Bfloat16BitsToFloat(bits[i]);
+                               ? ml_cpu_compute::detail::Float16BitsToFloat(bits[i])
+                               : ml_cpu_compute::detail::Bfloat16BitsToFloat(bits[i]);
         EXPECT_FLOAT_EQ(value, expected[i]);
       }
     }

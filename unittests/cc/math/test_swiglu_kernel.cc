@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/half_conversion.h"
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <gtest/gtest.h>
 
@@ -24,7 +24,7 @@ TEST(SwiGLU, Float32UsesAlphaAndExpPrimitiveSemantics) {
   const std::array<float, 7> gate = {-3.0f, -1.0f, -0.0f, 0.5f, 1.0f, 2.0f, 4.0f};
   const std::array<float, 7> value = {0.5f, -2.0f, 3.0f, 1.0f, -1.0f, 2.0f, 0.25f};
   std::array<float, 7> output{};
-  cpu_compute::SwiGLUFloat32(gate.data(), value.data(), output.data(), output.size(), 0.5f);
+  ml_cpu_compute::SwiGLUFloat32(gate.data(), value.data(), output.data(), output.size(), 0.5f);
   for (std::size_t i = 0; i < output.size(); ++i) {
     EXPECT_NEAR(output[i], Reference(gate[i], value[i], 0.5f), 2e-6f) << i;
   }
@@ -44,21 +44,25 @@ TEST(SwiGLU, Float16AndBFloat16MatchConvertedReferenceAcrossVectorTail) {
     std::vector<std::uint16_t> value_bits(count);
     std::vector<std::uint16_t> output(count);
     if (bfloat16) {
-      cpu_compute::detail::ConvertFloat32ToBFloat16(gate.data(), gate_bits.data(), count);
-      cpu_compute::detail::ConvertFloat32ToBFloat16(value.data(), value_bits.data(), count);
-      cpu_compute::SwiGLUBFloat16(gate_bits.data(), value_bits.data(), output.data(), count, 1.0f);
+      ml_cpu_compute::detail::ConvertFloat32ToBFloat16(gate.data(), gate_bits.data(), count);
+      ml_cpu_compute::detail::ConvertFloat32ToBFloat16(value.data(), value_bits.data(), count);
+      ml_cpu_compute::SwiGLUBFloat16(gate_bits.data(), value_bits.data(), output.data(), count,
+                                     1.0f);
     } else {
-      cpu_compute::detail::ConvertFloat32ToFloat16(gate.data(), gate_bits.data(), count);
-      cpu_compute::detail::ConvertFloat32ToFloat16(value.data(), value_bits.data(), count);
-      cpu_compute::SwiGLUFloat16(gate_bits.data(), value_bits.data(), output.data(), count, 1.0f);
+      ml_cpu_compute::detail::ConvertFloat32ToFloat16(gate.data(), gate_bits.data(), count);
+      ml_cpu_compute::detail::ConvertFloat32ToFloat16(value.data(), value_bits.data(), count);
+      ml_cpu_compute::SwiGLUFloat16(gate_bits.data(), value_bits.data(), output.data(), count,
+                                    1.0f);
     }
     for (std::size_t i = 0; i < count; ++i) {
-      const float actual = bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(output[i])
-                                    : cpu_compute::detail::Float16BitsToFloat(output[i]);
-      const float rounded_gate = bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(gate_bits[i])
-                                          : cpu_compute::detail::Float16BitsToFloat(gate_bits[i]);
-      const float rounded_value = bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(value_bits[i])
-                                           : cpu_compute::detail::Float16BitsToFloat(value_bits[i]);
+      const float actual = bfloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(output[i])
+                                    : ml_cpu_compute::detail::Float16BitsToFloat(output[i]);
+      const float rounded_gate = bfloat16
+                                     ? ml_cpu_compute::detail::Bfloat16BitsToFloat(gate_bits[i])
+                                     : ml_cpu_compute::detail::Float16BitsToFloat(gate_bits[i]);
+      const float rounded_value = bfloat16
+                                      ? ml_cpu_compute::detail::Bfloat16BitsToFloat(value_bits[i])
+                                      : ml_cpu_compute::detail::Float16BitsToFloat(value_bits[i]);
       const float tolerance = bfloat16 ? 2e-2f : 3e-3f;
       EXPECT_NEAR(actual, Reference(rounded_gate, rounded_value, 1.0f), tolerance) << i;
     }
@@ -71,9 +75,11 @@ TEST(SwiGLU, BFloat16TailsAliasingAndSpecialValues) {
   const std::array<float, 12> gates = {-inf, -8.0f, -1.0f, -0.0f, 0.0f,      0.25f,
                                        1.0f, 8.0f,  inf,   nan,   0x1p-126f, -0x1p-126f};
   const std::array<float, 9> values = {-inf, -2.0f, -0.0f, 0.0f, 0.5f, 2.0f, inf, nan, 0x1p-126f};
-  const auto encode = [](float value) { return cpu_compute::detail::FloatToBFloat16Bits(value); };
+  const auto encode = [](float value) {
+    return ml_cpu_compute::detail::FloatToBFloat16Bits(value);
+  };
   const auto decode = [](std::uint16_t value) {
-    return cpu_compute::detail::Bfloat16BitsToFloat(value);
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(value);
   };
   const auto check = [&](std::uint16_t actual_bits, std::uint16_t gate_bits,
                          std::uint16_t value_bits, float alpha) {
@@ -86,7 +92,7 @@ TEST(SwiGLU, BFloat16TailsAliasingAndSpecialValues) {
     } else {
       EXPECT_NEAR(
           actual, expected,
-          std::max(std::abs(expected) * 2e-2f, cpu_compute::detail::Bfloat16BitsToFloat(1)));
+          std::max(std::abs(expected) * 2e-2f, ml_cpu_compute::detail::Bfloat16BitsToFloat(1)));
     }
   };
 
@@ -100,17 +106,17 @@ TEST(SwiGLU, BFloat16TailsAliasingAndSpecialValues) {
         gate[index + 1] = encode(gates[index % gates.size()]);
         value[index + 1] = encode(values[index % values.size()]);
       }
-      cpu_compute::SwiGLUBFloat16(gate.data() + 1, value.data() + 1, output.data() + 1, count,
-                                  alpha);
+      ml_cpu_compute::SwiGLUBFloat16(gate.data() + 1, value.data() + 1, output.data() + 1, count,
+                                     alpha);
       for (std::size_t index = 0; index < count; ++index) {
         check(output[index + 1], gate[index + 1], value[index + 1], alpha);
       }
       auto aliased_gate = gate;
-      cpu_compute::SwiGLUBFloat16(aliased_gate.data() + 1, value.data() + 1,
-                                  aliased_gate.data() + 1, count, alpha);
+      ml_cpu_compute::SwiGLUBFloat16(aliased_gate.data() + 1, value.data() + 1,
+                                     aliased_gate.data() + 1, count, alpha);
       auto aliased_value = value;
-      cpu_compute::SwiGLUBFloat16(gate.data() + 1, aliased_value.data() + 1,
-                                  aliased_value.data() + 1, count, alpha);
+      ml_cpu_compute::SwiGLUBFloat16(gate.data() + 1, aliased_value.data() + 1,
+                                     aliased_value.data() + 1, count, alpha);
       for (std::size_t index = 0; index < count; ++index) {
         check(aliased_gate[index + 1], gate[index + 1], value[index + 1], alpha);
         check(aliased_value[index + 1], gate[index + 1], value[index + 1], alpha);

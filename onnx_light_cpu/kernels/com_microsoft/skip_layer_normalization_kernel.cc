@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/normalization.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/normalization.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -63,7 +63,7 @@ Normalize(const runtime::Tensor &input, const runtime::Tensor &skip, const runti
 
   auto *output = normalization::MutableData<Type>(result.output);
   auto *sum = output_sum ? normalization::MutableData<Type>(result.input_skip_bias_sum) : nullptr;
-  cpu_compute::ExecuteRanges(
+  ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
       [&](std::int64_t begin, std::int64_t end) {
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
@@ -141,17 +141,17 @@ NormalizeFloat32(const runtime::Tensor &input, const runtime::Tensor &skip,
   auto *sum = output_sum
                   ? normalization::MutableData<runtime::DataType::FLOAT>(result.input_skip_bias_sum)
                   : nullptr;
-  cpu_compute::ExecuteRanges(
+  ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
       [&](std::int64_t begin, std::int64_t end) {
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
              ++row) {
           const std::size_t base = row * dims.width;
           const std::size_t skip_base = (row % dims.skip_rows) * dims.width;
-          cpu_compute::AddNormalizationResidualFloat32(input_data + base, skip_data + skip_base,
-                                                       bias_data, output + base, dims.width);
+          ml_cpu_compute::AddNormalizationResidualFloat32(input_data + base, skip_data + skip_base,
+                                                          bias_data, output + base, dims.width);
           const auto moments =
-              cpu_compute::ComputeNormalizationMomentsFloat32(output + base, dims.width);
+              ml_cpu_compute::ComputeNormalizationMomentsFloat32(output + base, dims.width);
           const float inverse = 1.0F / std::sqrt(moments.variance + epsilon);
           if (sum != nullptr) {
             std::memcpy(sum + base, output + base, dims.width * sizeof(float));
@@ -162,9 +162,9 @@ NormalizeFloat32(const runtime::Tensor &input, const runtime::Tensor &skip,
           if (output_inv_std_var) {
             result.inv_std_var.AsFloat()[row] = inverse;
           }
-          cpu_compute::ApplyNormalizationAffineFloat32(output + base, gamma_data, beta_data,
-                                                       output + base, dims.width, moments.mean,
-                                                       inverse);
+          ml_cpu_compute::ApplyNormalizationAffineFloat32(output + base, gamma_data, beta_data,
+                                                          output + base, dims.width, moments.mean,
+                                                          inverse);
         }
       });
   return result;

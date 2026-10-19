@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/rms_normalization.h"
+#include "ml_cpu_compute/math/rms_normalization.h"
 
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -17,13 +17,13 @@
 
 namespace {
 
-using cpu_compute::RmsNormalizationBFloat16;
-using cpu_compute::RmsNormalizationFloat16;
-using cpu_compute::RmsNormalizationFloat32;
-using cpu_compute::detail::Bfloat16BitsToFloat;
-using cpu_compute::detail::Float16BitsToFloat;
-using cpu_compute::detail::FloatToBFloat16Bits;
-using cpu_compute::detail::FloatToFloat16Bits;
+using ml_cpu_compute::RmsNormalizationBFloat16;
+using ml_cpu_compute::RmsNormalizationFloat16;
+using ml_cpu_compute::RmsNormalizationFloat32;
+using ml_cpu_compute::detail::Bfloat16BitsToFloat;
+using ml_cpu_compute::detail::Float16BitsToFloat;
+using ml_cpu_compute::detail::FloatToBFloat16Bits;
+using ml_cpu_compute::detail::FloatToFloat16Bits;
 
 float ReferenceRmsNormalize(const std::vector<float> &row, const std::vector<float> &scale,
                             std::size_t column, float epsilon) {
@@ -47,8 +47,8 @@ TEST(RmsNormalizationKernel, Float32MatchesReferenceAcrossWidths) {
       scale[i] = 1.0f + 0.01f * static_cast<float>(i % 5);
     }
     std::vector<float> output(width);
-    cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), 1, width,
-                                         1e-6f);
+    ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), 1, width,
+                                            1e-6f);
     for (std::size_t column = 0; column < width; ++column) {
       EXPECT_NEAR(output[column], ReferenceRmsNormalize(input, scale, column, 1e-6f), 1e-4f)
           << "width=" << width << " column=" << column;
@@ -73,8 +73,8 @@ TEST(RmsNormalizationKernel, Float16MatchesReferenceAcrossWidths) {
     }
 
     std::vector<std::uint16_t> output(width);
-    cpu_compute::RmsNormalizationFloat16(input.data(), scale.data(), output.data(), 1, width,
-                                         1e-6f);
+    ml_cpu_compute::RmsNormalizationFloat16(input.data(), scale.data(), output.data(), 1, width,
+                                            1e-6f);
     for (std::size_t column = 0; column < width; ++column) {
       const float actual = Float16BitsToFloat(output[column]);
       const float expected = ReferenceRmsNormalize(reference_input, reference_scale, column, 1e-6f);
@@ -93,12 +93,12 @@ TEST(RmsNormalizationKernel, OptionalInverseRmsPreservesOutput) {
     }
     std::vector<float> expected(input.size()), actual(input.size()), without_inverse(input.size());
     std::vector<float> inverse(rows + 2, -1.0F);
-    cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), expected.data(), rows, width,
-                                         0.0F);
-    cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), actual.data(), rows, width,
-                                         0.0F, inverse.data() + 1);
-    cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), without_inverse.data(), rows,
-                                         width, 0.0F, nullptr);
+    ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), expected.data(), rows,
+                                            width, 0.0F);
+    ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), actual.data(), rows, width,
+                                            0.0F, inverse.data() + 1);
+    ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), without_inverse.data(),
+                                            rows, width, 0.0F, nullptr);
     EXPECT_EQ(actual, expected);
     EXPECT_EQ(without_inverse, expected);
     EXPECT_EQ(inverse.front(), -1.0F);
@@ -108,7 +108,7 @@ TEST(RmsNormalizationKernel, OptionalInverseRmsPreservesOutput) {
     }
   }
   float inverse = -1.0F;
-  cpu_compute::RmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 8, 1.0e-6F, &inverse);
+  ml_cpu_compute::RmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 8, 1.0e-6F, &inverse);
   EXPECT_EQ(inverse, -1.0F);
 }
 
@@ -128,8 +128,8 @@ TEST(RmsNormalizationKernel, BFloat16MatchesReferenceAcrossWidths) {
       reference_scale[i] = Bfloat16BitsToFloat(scale[i]);
     }
     std::vector<std::uint16_t> output(width);
-    cpu_compute::RmsNormalizationBFloat16(input.data(), scale.data(), output.data(), 1, width,
-                                          1e-6f);
+    ml_cpu_compute::RmsNormalizationBFloat16(input.data(), scale.data(), output.data(), 1, width,
+                                             1e-6f);
     for (std::size_t column = 0; column < width; ++column) {
       const float actual = Bfloat16BitsToFloat(output[column]);
       const float expected = ReferenceRmsNormalize(reference_input, reference_scale, column, 1e-6f);
@@ -147,8 +147,8 @@ TEST(RmsNormalizationKernel, MultipleRowsAreIndependent) {
     input[i] = static_cast<float>(i % 7) - 3.0f;
   }
   std::vector<float> output(rows * width);
-  cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), rows, width,
-                                       1e-6f);
+  ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), rows, width,
+                                          1e-6f);
   for (std::size_t row = 0; row < rows; ++row) {
     const std::vector<float> row_input(input.begin() + static_cast<std::ptrdiff_t>(row * width),
                                        input.begin() +
@@ -161,8 +161,8 @@ TEST(RmsNormalizationKernel, MultipleRowsAreIndependent) {
   }
 }
 
-#if defined(CPU_COMPUTE_HAVE_RMS_F16C)
-using cpu_compute::RmsNormalizationFloat16_F16C;
+#if defined(ML_CPU_COMPUTE_HAVE_RMS_F16C)
+using ml_cpu_compute::RmsNormalizationFloat16_F16C;
 
 TEST(RmsNormalizationKernel, Float16F16CDirectPathMatchesReferenceAcrossWidths) {
   // Widths crossing the 4-way-unrolled reduction's 8/32-wide boundaries.
@@ -181,8 +181,8 @@ TEST(RmsNormalizationKernel, Float16F16CDirectPathMatchesReferenceAcrossWidths) 
       reference_scale[i] = Float16BitsToFloat(scale[i]);
     }
     std::vector<std::uint16_t> output(width);
-    cpu_compute::RmsNormalizationFloat16_F16C(input.data(), scale.data(), output.data(), 0, 1,
-                                              width, 1e-6f);
+    ml_cpu_compute::RmsNormalizationFloat16_F16C(input.data(), scale.data(), output.data(), 0, 1,
+                                                 width, 1e-6f);
     for (std::size_t column = 0; column < width; ++column) {
       const float actual = Float16BitsToFloat(output[column]);
       const float expected = ReferenceRmsNormalize(reference_input, reference_scale, column, 1e-6f);
@@ -201,8 +201,8 @@ TEST(RmsNormalizationKernel, Float16F16CPreservesSpecialValues) {
   }
   input[3] = FloatToFloat16Bits(std::numeric_limits<float>::infinity());
   std::vector<std::uint16_t> output(width);
-  cpu_compute::RmsNormalizationFloat16_F16C(input.data(), scale.data(), output.data(), 0, 1, width,
-                                            1e-6f);
+  ml_cpu_compute::RmsNormalizationFloat16_F16C(input.data(), scale.data(), output.data(), 0, 1,
+                                               width, 1e-6f);
   // An infinite value drives the mean square (and thus the inverse RMS) to
   // zero; only the infinite lane itself produces 0 * inf = NaN, every other
   // lane normalizes to zero.

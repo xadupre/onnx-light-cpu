@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/math/binary/binary_broadcast_plan.h"
+#include "ml_cpu_compute/math/binary/binary_broadcast_plan.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -42,12 +42,14 @@ public:
                   const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &right,
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
-  const cpu_compute::BinaryOperationDescriptor &descriptor() const noexcept { return descriptor_; }
+  const ml_cpu_compute::BinaryOperationDescriptor &descriptor() const noexcept {
+    return descriptor_;
+  }
 
 private:
-  cpu_compute::BinaryOperationDescriptor descriptor_;
-  cpu_compute::BinaryExecutionTuning tuning_;
-  mutable cpu_compute::BinaryBroadcastPlanCache plan_cache_;
+  ml_cpu_compute::BinaryOperationDescriptor descriptor_;
+  ml_cpu_compute::BinaryExecutionTuning tuning_;
+  mutable ml_cpu_compute::BinaryBroadcastPlanCache plan_cache_;
 };
 
 void RegisterBinaryKernels();

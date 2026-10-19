@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/kernels/math/reduce_sum_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -137,7 +137,7 @@ Tensor ReduceSumKernel::Compute(const Tensor &data, const Tensor *axes, bool kee
 
   const int64_t *input = data.AsInt64();
   uint8_t *output_bytes_ptr = output.mutable_bytes();
-  cpu_compute::ExecuteRanges(
+  ml_cpu_compute::ExecuteRanges(
       output_count, static_cast<double>(reduction_count), [&](int64_t begin, int64_t end) {
         for (int64_t output_index = begin; output_index < end; ++output_index) {
           int64_t remaining_output = output_index;

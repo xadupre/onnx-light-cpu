@@ -15,7 +15,7 @@ Execution flow
    example, elements for unary operations, output tiles for matrix
    multiplication, or rows for attention.
 #. The kernel calls ``ExecuteRanges`` or ``ExecuteCostedRanges`` from
-   `execution.h <https://github.com/xadupre/onnx-light-cpu/blob/main/cpu_compute/include/cpu_compute/execution.h>`_.
+   `execution.h <https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/execution.h>`_.
    Its schedule supplies minimum work and block sizes, a participant limit,
    and, where useful, a preferred participant count. Costed calls additionally
    describe bytes read, bytes written, and estimated compute cycles.
@@ -42,7 +42,7 @@ optional cost planner. The adapter is implemented in
 It preserves an already installed explicit executor and restores the previous
 view when the call returns, including when validation throws.
 
-The independent ``cpu_compute`` library knows only this generic
+The independent ``ml_cpu_compute`` library knows only this generic
 executor view. ``CurrentExecutionExecutor()`` reads the installed view without
 discovering ONNX runtime state. A direct low-level caller can install its own
 ``ExecutionExecutorScope``; without one, execution is serial even if an ONNX

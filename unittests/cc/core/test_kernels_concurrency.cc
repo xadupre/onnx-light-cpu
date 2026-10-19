@@ -8,8 +8,8 @@
 // are checked against the single-threaded reference. This guards against data
 // races when kernels run concurrently.
 
-#include "cpu_compute/logical/logical.h"
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/logical/logical.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <gtest/gtest.h>
 
@@ -52,7 +52,7 @@ TEST(KernelsConcurrency, AbsChunksMatchSingleThread) {
   }
 
   std::vector<float> got(x.size());
-  RunChunksConcurrently(&cpu_compute::AbsFloat32, x, got, 4);
+  RunChunksConcurrently(&ml_cpu_compute::AbsFloat32, x, got, 4);
 
   for (std::size_t i = 0; i < x.size(); ++i) {
     EXPECT_FLOAT_EQ(got[i], std::fabs(x[i])) << "at index " << i;
@@ -68,7 +68,7 @@ TEST(KernelsConcurrency, ExpChunksMatchSingleThread) {
   }
 
   std::vector<float> got(x.size());
-  RunChunksConcurrently(&cpu_compute::ExpFloat32, x, got, 4);
+  RunChunksConcurrently(&ml_cpu_compute::ExpFloat32, x, got, 4);
 
   for (std::size_t i = 0; i < x.size(); ++i) {
     EXPECT_NEAR(got[i], std::exp(x[i]), std::fabs(std::exp(x[i])) * 1e-4f + 1e-5f)
@@ -85,7 +85,7 @@ TEST(KernelsConcurrency, LogChunksMatchSingleThread) {
   }
 
   std::vector<float> got(x.size());
-  RunChunksConcurrently(&cpu_compute::LogFloat32, x, got, 4);
+  RunChunksConcurrently(&ml_cpu_compute::LogFloat32, x, got, 4);
 
   for (std::size_t i = 0; i < x.size(); ++i) {
     EXPECT_NEAR(got[i], std::log(x[i]), std::fabs(std::log(x[i])) * 1e-4f + 1e-5f)
@@ -102,7 +102,7 @@ TEST(KernelsConcurrency, NotChunksMatchSingleThread) {
   }
 
   std::vector<std::uint8_t> got(x.size());
-  RunChunksConcurrently(&cpu_compute::NotBool, x, got, 4);
+  RunChunksConcurrently(&ml_cpu_compute::NotBool, x, got, 4);
 
   for (std::size_t i = 0; i < x.size(); ++i) {
     EXPECT_EQ(got[i], x[i] ? 0u : 1u) << "at index " << i;
@@ -124,7 +124,7 @@ TEST(KernelsConcurrency, ManyThreadsSameInput) {
   threads.reserve(kThreads);
   for (int t = 0; t < kThreads; ++t) {
     threads.emplace_back(
-        [&x, &out = outputs[t]]() { cpu_compute::AbsFloat32(x.data(), out.data(), x.size()); });
+        [&x, &out = outputs[t]]() { ml_cpu_compute::AbsFloat32(x.data(), out.data(), x.size()); });
   }
   for (auto &t : threads) {
     t.join();

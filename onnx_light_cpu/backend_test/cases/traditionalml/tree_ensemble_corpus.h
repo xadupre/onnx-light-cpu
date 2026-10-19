@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/traditionalml/tree_ensemble.h"
+#include "ml_cpu_compute/traditionalml/tree_ensemble.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,7 +19,7 @@ struct TreeEnsembleCorpusCase {
   std::string domain = "ai.onnx.ml";
   std::string op_type = "TreeEnsemble";
   std::int64_t opset = 5;
-  cpu_compute::TreeEnsembleAttributes attributes;
+  ml_cpu_compute::TreeEnsembleAttributes attributes;
   std::vector<double> input;
   std::size_t rows = 0;
   std::vector<double> expected;

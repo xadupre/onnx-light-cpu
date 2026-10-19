@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/com_microsoft/cdist.h"
+#include "ml_cpu_compute/com_microsoft/cdist.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -32,7 +32,7 @@ namespace onnx_light_cpu {
 /// metric name accepted by the ONNX Runtime contract is rejected since
 /// onnx-light-cpu only implements these two. The computation is delegated to
 /// the cache-friendly ``CDist*`` kernels declared in
-/// ``cpu_compute/com_microsoft/cdist.h``, scheduled row-by-row and
+/// ``ml_cpu_compute/com_microsoft/cdist.h``, scheduled row-by-row and
 /// runtime-dispatched to AVX2/FMA or AVX-512 when available.
 class CDistKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
@@ -71,7 +71,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  cpu_compute::CDistExecutionTuning tuning_ = cpu_compute::kDefaultCDistFloat32ExecutionTuning;
+  ml_cpu_compute::CDistExecutionTuning tuning_ =
+      ml_cpu_compute::kDefaultCDistFloat32ExecutionTuning;
   bool tuning_configured_ = false;
 };
 

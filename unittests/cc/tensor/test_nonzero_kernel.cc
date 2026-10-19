@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/tensor/nonzero.h"
+#include "ml_cpu_compute/tensor/nonzero.h"
 
 #include <gtest/gtest.h>
 
@@ -14,12 +14,12 @@ namespace {
 void CheckIndices(const std::vector<uint8_t> &input, const std::vector<int64_t> &shape,
                   int64_t count, const std::vector<int64_t> &expected) {
   const auto total = static_cast<int64_t>(input.size());
-  ASSERT_EQ(cpu_compute::CountNonZeroBool(input.data(), total), count);
+  ASSERT_EQ(ml_cpu_compute::CountNonZeroBool(input.data(), total), count);
   const auto rank = static_cast<int64_t>(shape.size());
   ASSERT_EQ(expected.size(), static_cast<std::size_t>(rank * count));
   std::vector<int64_t> output(expected.size() + 2, -1);
-  cpu_compute::WriteNonZeroBoolIndices(input.data(), total, shape.data(), rank, count,
-                                       output.data() + 1);
+  ml_cpu_compute::WriteNonZeroBoolIndices(input.data(), total, shape.data(), rank, count,
+                                          output.data() + 1);
   EXPECT_EQ(output.front(), -1);
   EXPECT_EQ(output.back(), -1);
   EXPECT_EQ(std::vector<int64_t>(output.begin() + 1, output.end() - 1), expected);
@@ -45,9 +45,9 @@ TEST(NonZeroKernel, ScalarsAndEmptyDimensions) {
   CheckIndices({}, {0, 3}, 0, {});
   CheckIndices({}, {2, 0, 4}, 0, {});
   CheckIndices({}, {2, 3, 0}, 0, {});
-  EXPECT_EQ(cpu_compute::CountNonZeroBool(nullptr, 0), 0);
-  cpu_compute::WriteNonZeroBoolIndices(nullptr, 0, nullptr, 3, 0, nullptr);
-  cpu_compute::WriteNonZeroBoolIndices(nullptr, 1, nullptr, 0, 1, nullptr);
+  EXPECT_EQ(ml_cpu_compute::CountNonZeroBool(nullptr, 0), 0);
+  ml_cpu_compute::WriteNonZeroBoolIndices(nullptr, 0, nullptr, 3, 0, nullptr);
+  ml_cpu_compute::WriteNonZeroBoolIndices(nullptr, 1, nullptr, 0, 1, nullptr);
 }
 
 } // namespace

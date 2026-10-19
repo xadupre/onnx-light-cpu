@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/execution.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -56,7 +56,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -92,8 +92,8 @@ TEST(OnnxLightNotKernel, RegistersAndAppliesValidatedTuning) {
   const rt_ns::Tensor x =
       rt_ns::Tensor::FromBool("x", {count}, std::vector<std::uint8_t>(count, 0));
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
   const rt_ns::Tensor serial = kernel(x);
   EXPECT_EQ(executor.dispatches, 0);

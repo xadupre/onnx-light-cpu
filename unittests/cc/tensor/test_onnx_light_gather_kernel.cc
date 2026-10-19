@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
 
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/execution.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
@@ -243,7 +243,7 @@ struct InlineExecutor {
   bool run_nested = false;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -251,7 +251,7 @@ struct InlineExecutor {
     self.maximum_depth = std::max(self.maximum_depth, self.depth);
     for (int64_t i = 0; i < count; ++i) {
       if (self.run_nested) {
-        cpu_compute::detail::ExecutionRegionScope region;
+        ml_cpu_compute::detail::ExecutionRegionScope region;
         Compare(Payload(DataType::FLOAT, {16, 32768}),
                 Tensor::From<int32_t>("indices", {16}, std::vector<int32_t>(16, -1)), 0);
       }
@@ -288,8 +288,8 @@ TEST(OnnxLightGatherKernel, CacheSizedLayoutsUseBoundedTeamsAndPreservePayloads)
                      << "axis=" << test.axis << " indices=" << test.count
                      << " type=" << static_cast<int>(type) << " threads=" << threads);
         InlineExecutor executor;
-        cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
-        cpu_compute::ExecutionExecutorScope scope(&view);
+        ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+        ml_cpu_compute::ExecutionExecutorScope scope(&view);
         Compare(data, Tensor::From<int32_t>("indices", {test.count}, indices32), test.axis);
         Compare(data, Tensor::From<int64_t>("indices", {test.count}, indices64), test.axis);
         if (bytes < 192 * 1024) {
@@ -317,8 +317,8 @@ TEST(OnnxLightGatherKernel, ParallelThresholdAndUnalignedBlockTails) {
     const auto indices = Tensor::From<int32_t>("indices", {count}, values);
     for (const int64_t threads : {1, 3, 32}) {
       InlineExecutor executor;
-      cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
-      cpu_compute::ExecutionExecutorScope scope(&view);
+      ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
       Compare(data, indices, 0);
       if (count < 49152 || threads == 1) {
         EXPECT_EQ(executor.dispatches, 0);
@@ -327,7 +327,7 @@ TEST(OnnxLightGatherKernel, ParallelThresholdAndUnalignedBlockTails) {
         EXPECT_LE(executor.blocks, std::min<int64_t>(threads, 8));
       }
       const int64_t calls = executor.dispatches;
-      cpu_compute::detail::ExecutionRegionScope region;
+      ml_cpu_compute::detail::ExecutionRegionScope region;
       Compare(data, indices, 0);
       EXPECT_EQ(executor.dispatches, calls);
     }
@@ -336,8 +336,8 @@ TEST(OnnxLightGatherKernel, ParallelThresholdAndUnalignedBlockTails) {
 
 TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {3, 4}), Tensor::From<int32_t>("indices", {2}, {2, 0}), 0);
   EXPECT_EQ(executor.dispatches, 0);
   executor.run_nested = true;
@@ -363,7 +363,7 @@ TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
   EXPECT_GT(executor.blocks, 1);
   const int64_t calls = executor.dispatches;
   {
-    cpu_compute::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     Compare(Payload(DataType::FLOAT, {16, 32768}),
             Tensor::From<int32_t>("indices", {16}, std::vector<int32_t>(16, -1)), 0);
   }
@@ -372,8 +372,8 @@ TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
 
 TEST(OnnxLightGatherKernel, LargeSlicesUseCacheSizedByteBlocks) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT16, {4, 1048576}), Tensor::From<int64_t>("indices", {2}, {0, -4}),
           0);
   EXPECT_EQ(executor.dispatches, 2);

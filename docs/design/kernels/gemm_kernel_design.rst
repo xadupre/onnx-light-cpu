@@ -3,8 +3,8 @@ Gemm Kernel Design
 
 This page documents the internal design of the ``Gemm`` (general matrix
 multiplication) CPU kernel implemented in
-``cpu_compute/src/math/gemm.cc`` and
-``cpu_compute/src/math/gemm/avx512/gemm_avx512.cc``: how it picks a
+``ml_cpu_compute/src/math/gemm.cc`` and
+``ml_cpu_compute/src/math/gemm/avx512/gemm_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk. Delivery order,
 performance gates, and remaining work are tracked in the
@@ -23,11 +23,11 @@ probe)::
 
     SelectGemmImplementation<T>()
     │
-    ├─ Is this a non-x86 build (CPU_COMPUTE_X86 == 0)?
+    ├─ Is this a non-x86 build (ML_CPU_COMPUTE_X86 == 0)?
     │  └─ yes → ARM (or portable) path:
-    │           ├─ NEON compiled in (CPU_COMPUTE_HAVE_NEON) and, once probed
+    │           ├─ NEON compiled in (ML_CPU_COMPUTE_HAVE_NEON) and, once probed
     │           │  by DetectArmGemmProfile():
-    │           │  ├─ profile == kSve  (CPU_COMPUTE_HAVE_SVE, scalable
+    │           │  ├─ profile == kSve  (ML_CPU_COMPUTE_HAVE_SVE, scalable
     │           │  │                    vectors) → GemmImplementation::kSve
     │           │  └─ profile == kNeon (128-bit Advanced SIMD)
     │           │                       → GemmImplementation::kNeon
@@ -37,7 +37,7 @@ probe)::
     └─ x86 build: read the *runtime* SIMD level once (DetectSimdLevel(), cached)
        │
        ├─ Was gemm_kernel_avx512.cc compiled in?
-       │  (CPU_COMPUTE_HAVE_AVX512 defined, i.e. the compiler accepted
+       │  (ML_CPU_COMPUTE_HAVE_AVX512 defined, i.e. the compiler accepted
        │  -mavx512f -- see the CheckCXXCompilerFlag probe in CMakeLists.txt)
        │  │
        │  ├─ yes AND runtime level >= SimdLevel::kAVX512
@@ -49,7 +49,7 @@ probe)::
        │  └─ no, or runtime level < kAVX512 → fall through
        │
        ├─ Was gemm_kernel_avx2_fma.cc compiled in
-       │  (CPU_COMPUTE_HAVE_AVX2_FMA) AND runtime level >= SimdLevel::kAVX2
+       │  (ML_CPU_COMPUTE_HAVE_AVX2_FMA) AND runtime level >= SimdLevel::kAVX2
        │  AND CpuSupportsFma()?
        │  └─ yes → GemmImplementation::kAVX2FMA
        │           (fused multiply-add AVX2 kernel: 256-bit vectors with a
@@ -87,7 +87,7 @@ separately from the shape -- see :ref:`the strategy-zones figure
 
 Two independent axes are worth calling out:
 
-* **Compile-time gate** (``CPU_COMPUTE_HAVE_AVX512``): decided once, at
+* **Compile-time gate** (``ML_CPU_COMPUTE_HAVE_AVX512``): decided once, at
   build time, by whether the toolchain accepts ``-mavx512f`` /
   ``/arch:AVX512``. If it does not (e.g. an older compiler, or a
   cross-compilation target), ``gemm_kernel_avx512.cc`` is excluded from the
@@ -220,7 +220,7 @@ partition work with their existing scheduler without hidden workers.
 Prepared execution interfaces
 -----------------------------
 
-``cpu_compute/include/cpu_compute/math/gemm/gemm_plan.h`` defines reusable typed plans for
+``ml_cpu_compute/include/ml_cpu_compute/math/gemm/gemm_plan.h`` defines reusable typed plans for
 ``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
 scaling attributes, current cache/register blocking, useful parallelism, and
 the typed kernel entry point. It can also own a constant B matrix so its
@@ -287,8 +287,8 @@ x86_64
 Every vectorized micro-kernel (AVX-512/AVX/SSE2) is x86-specific: it is
 written directly against ``<immintrin.h>`` intrinsics and gated behind
 ``#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) ||
-defined(_M_IX86)`` (``CPU_COMPUTE_X86``). ``DetectSimdLevel()``
-(``cpu_compute/src/simd_level.cc``) is likewise x86-only: it uses CPUID
+defined(_M_IX86)`` (``ML_CPU_COMPUTE_X86``). ``DetectSimdLevel()``
+(``ml_cpu_compute/src/simd_level.cc``) is likewise x86-only: it uses CPUID
 and XGETBV. On any x86_64 platform (Intel or AMD, Linux, Windows, or macOS)
 this gate evaluates true and the kernel gets full SIMD acceleration.
 
@@ -520,7 +520,7 @@ gains.
        ``GemmFloat32`` for the reduction, and rounds ``Y`` back down (see
        ``onnx_light_cpu/kernels/math/gemm_kernel.cc``) -- mirroring the
        approach ``Abs``/``Exp``/``Log`` already use for these types (see
-       ``cpu_compute/src/math/exp_log.cc``). This is correct and
+       ``ml_cpu_compute/src/math/exp_log.cc``). This is correct and
        reuses the full float32 SIMD path for the matmul itself, but the
        widen/round-trip is pure per-element overhead with no vectorization of
        its own (see ``plot_gemm_dtype_benchmark.py`` in the benchmark gallery

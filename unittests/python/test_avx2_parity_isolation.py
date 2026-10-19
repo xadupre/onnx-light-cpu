@@ -369,17 +369,17 @@ def test_shared_library_snapshot_includes_real_compute_library():
     assert _cpukernels.has_cpu_kernels()
     libraries = worker.shared_library_snapshot()
     assert libraries is not None
-    assert any(Path(path).name.startswith("libcpu_compute") for path in libraries), libraries
+    assert any(Path(path).name.startswith("libml_cpu_compute") for path in libraries), libraries
 
 
 def test_shared_library_mismatch_is_not_hidden_by_unchanged_extensions(monkeypatch):
-    expected = {"/runtime/libcpu_compute.so": "original-kernel"}
+    expected = {"/runtime/libml_cpu_compute.so": "original-kernel"}
     monkeypatch.setattr(worker, "shared_library_snapshot", lambda: dict(expected))
     worker.verify_shared_libraries(expected)
     monkeypatch.setattr(
         worker,
         "shared_library_snapshot",
-        lambda: {"/runtime/libcpu_compute.so": "rebuilt-kernel"},
+        lambda: {"/runtime/libml_cpu_compute.so": "rebuilt-kernel"},
     )
     expect_error(lambda: worker.verify_shared_libraries(expected), "shared libraries differ")
     monkeypatch.setattr(worker, "shared_library_snapshot", lambda: None)

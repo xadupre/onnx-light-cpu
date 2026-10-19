@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/half_conversion.h"
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <gtest/gtest.h>
 
@@ -21,16 +21,16 @@ using FloatKernel = void (*)(const float *, float *, std::size_t);
 using HalfKernel = void (*)(const std::uint16_t *, std::uint16_t *, std::size_t);
 
 std::vector<FloatKernel> FloatKernels() {
-  std::vector<FloatKernel> kernels{cpu_compute::TanhFloat32, cpu_compute::TanhFloat32_Scalar};
-#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
-      cpu_compute::CpuSupportsFma()) {
-    kernels.push_back(cpu_compute::TanhFloat32_AVX2_FMA);
+  std::vector<FloatKernel> kernels{ml_cpu_compute::TanhFloat32, ml_cpu_compute::TanhFloat32_Scalar};
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2 &&
+      ml_cpu_compute::CpuSupportsFma()) {
+    kernels.push_back(ml_cpu_compute::TanhFloat32_AVX2_FMA);
   }
 #endif
-#ifdef CPU_COMPUTE_HAVE_AVX512
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512) {
-    kernels.push_back(cpu_compute::TanhFloat32_AVX512);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX512) {
+    kernels.push_back(ml_cpu_compute::TanhFloat32_AVX512);
   }
 #endif
   return kernels;
@@ -91,8 +91,8 @@ TEST(TanhKernel, EmptyNullBuffers) {
   for (const auto kernel : FloatKernels()) {
     kernel(nullptr, nullptr, 0);
   }
-  cpu_compute::TanhFloat16(nullptr, nullptr, 0);
-  cpu_compute::TanhBFloat16(nullptr, nullptr, 0);
+  ml_cpu_compute::TanhFloat16(nullptr, nullptr, 0);
+  ml_cpu_compute::TanhBFloat16(nullptr, nullptr, 0);
 }
 
 TEST(TanhKernel, Float32SizesTailsUnalignedInPlaceAndSpecialValues) {
@@ -187,13 +187,13 @@ TEST(TanhKernel, Float32CancellationAndExponentBoundaries) {
 }
 
 float HalfToFloat(std::uint16_t bits, bool bfloat16) {
-  return bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(bits)
-                  : cpu_compute::detail::Float16BitsToFloat(bits);
+  return bfloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(bits)
+                  : ml_cpu_compute::detail::Float16BitsToFloat(bits);
 }
 
 std::uint16_t FloatToHalf(float value, bool bfloat16) {
-  return bfloat16 ? cpu_compute::detail::FloatToBFloat16Bits(value)
-                  : cpu_compute::detail::FloatToFloat16Bits(value);
+  return bfloat16 ? ml_cpu_compute::detail::FloatToBFloat16Bits(value)
+                  : ml_cpu_compute::detail::FloatToFloat16Bits(value);
 }
 
 void ExpectHalf(std::uint16_t input, std::uint16_t actual, bool bfloat16) {
@@ -214,7 +214,7 @@ void ExpectHalf(std::uint16_t input, std::uint16_t actual, bool bfloat16) {
 
 TEST(TanhKernel, ExhaustiveFloat16AndBFloat16) {
   for (const bool bfloat16 : {false, true}) {
-    const HalfKernel kernel = bfloat16 ? cpu_compute::TanhBFloat16 : cpu_compute::TanhFloat16;
+    const HalfKernel kernel = bfloat16 ? ml_cpu_compute::TanhBFloat16 : ml_cpu_compute::TanhFloat16;
     for (const bool in_place : {false, true}) {
       std::vector<std::uint16_t> input(65538, 42), output(input.size(), 42);
       for (std::uint32_t bits = 0; bits < 65536; ++bits) {
@@ -241,7 +241,7 @@ TEST(TanhKernel, HalfSizesTailsAndConversionBlockBoundaries) {
   }
   const auto corpus = Corpus();
   for (const bool bfloat16 : {false, true}) {
-    const HalfKernel kernel = bfloat16 ? cpu_compute::TanhBFloat16 : cpu_compute::TanhFloat16;
+    const HalfKernel kernel = bfloat16 ? ml_cpu_compute::TanhBFloat16 : ml_cpu_compute::TanhFloat16;
     for (const auto count : sizes) {
       for (const bool in_place : {false, true}) {
         std::vector<std::uint16_t> input(count + 2, 42), output(input.size(), 42);
@@ -268,7 +268,7 @@ struct InlineExecutor {
   bool concurrent = false;
 
   static void Run(void *context, std::int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -291,23 +291,24 @@ TEST(TanhKernel, ExecutorSmallLargeAndNestedRanges) {
   for (const std::size_t count : {202048, 1048579}) {
     SCOPED_TRACE(count);
     InlineExecutor executor;
-    const cpu_compute::ExecutionExecutorView view{&executor, 4, InlineExecutor::Run};
-    const cpu_compute::ExecutionExecutorScope scope(&view);
+    const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, InlineExecutor::Run};
+    const ml_cpu_compute::ExecutionExecutorScope scope(&view);
     std::vector<float> input(count), output(count, 42.0f);
     for (std::size_t i = 0; i < count; ++i) {
       input[i] = static_cast<float>(i % 101) / 13.0f - 4.0f;
     }
-    cpu_compute::TanhFloat32(input.data(), output.data(), 1024);
+    ml_cpu_compute::TanhFloat32(input.data(), output.data(), 1024);
     EXPECT_EQ(executor.dispatches, 0);
     executor.concurrent = count >= 512 * 1024;
-    cpu_compute::TanhFloat32(input.data(), output.data(), count);
+    ml_cpu_compute::TanhFloat32(input.data(), output.data(), count);
     EXPECT_EQ(executor.dispatches, 1);
     EXPECT_GT(executor.blocks, 1);
     for (std::size_t i = 0; i < count; ++i) {
       ExpectTanh(input[i], output[i]);
     }
     for (const bool bfloat16 : {false, true}) {
-      const HalfKernel kernel = bfloat16 ? cpu_compute::TanhBFloat16 : cpu_compute::TanhFloat16;
+      const HalfKernel kernel =
+          bfloat16 ? ml_cpu_compute::TanhBFloat16 : ml_cpu_compute::TanhFloat16;
       std::vector<std::uint16_t> half_input(count), half_output(count, 42);
       for (std::size_t i = 0; i < count; ++i) {
         half_input[i] = FloatToHalf(input[i], bfloat16);
@@ -322,31 +323,31 @@ TEST(TanhKernel, ExecutorSmallLargeAndNestedRanges) {
         ExpectHalf(half_input[i], half_output[i], bfloat16);
       }
       const auto nested_before = executor.dispatches;
-      cpu_compute::ExecuteRanges(2, cpu_compute::ExecutionSchedule{1, 1, 2}, 1,
-                                 [&](std::int64_t, std::int64_t) {
-                                   EXPECT_TRUE(cpu_compute::ExecutionInParallelRegion());
-                                   cpu_compute::TanhFloat32(input.data(), output.data(), count);
-                                   kernel(half_input.data(), half_output.data(), count);
-                                 });
+      ml_cpu_compute::ExecuteRanges(
+          2, ml_cpu_compute::ExecutionSchedule{1, 1, 2}, 1, [&](std::int64_t, std::int64_t) {
+            EXPECT_TRUE(ml_cpu_compute::ExecutionInParallelRegion());
+            ml_cpu_compute::TanhFloat32(input.data(), output.data(), count);
+            kernel(half_input.data(), half_output.data(), count);
+          });
       EXPECT_EQ(executor.dispatches, nested_before + 1);
     }
   }
 }
 
 TEST(TanhKernel, Float32DispatchesAtCacheSizedBoundary) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is unavailable";
   }
   InlineExecutor executor;
-  const cpu_compute::ExecutionExecutorView view{&executor, 8, InlineExecutor::Run};
-  const cpu_compute::ExecutionExecutorScope scope(&view);
+  const ml_cpu_compute::ExecutionExecutorView view{&executor, 8, InlineExecutor::Run};
+  const ml_cpu_compute::ExecutionExecutorScope scope(&view);
   std::vector<float> input(65535, 0.5f), output(input.size());
-  cpu_compute::TanhFloat32(input.data(), output.data(), 32767);
+  ml_cpu_compute::TanhFloat32(input.data(), output.data(), 32767);
   EXPECT_EQ(executor.dispatches, 0);
-  cpu_compute::TanhFloat32(input.data(), output.data(), 32768);
+  ml_cpu_compute::TanhFloat32(input.data(), output.data(), 32768);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 2);
-  cpu_compute::TanhFloat32(input.data(), output.data(), input.size());
+  ml_cpu_compute::TanhFloat32(input.data(), output.data(), input.size());
   EXPECT_EQ(executor.dispatches, 2);
   EXPECT_GT(executor.blocks, 1);
   EXPECT_LE(executor.blocks, 4);

@@ -24,7 +24,7 @@ downloads/
 eggs/
 .eggs/
 include/
-!cpu_compute/include/
+!ml_cpu_compute/include/
 lib/
 lib64/
 parts/

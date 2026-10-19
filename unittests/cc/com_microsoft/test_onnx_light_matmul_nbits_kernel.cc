@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/com_microsoft/matmul_nbits.h"
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/com_microsoft/matmul_nbits.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -41,7 +41,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -104,8 +104,8 @@ float ReadValue(const rt_ns::Tensor &tensor, std::size_t index) {
   }
   const auto value = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
   return tensor.data_type == static_cast<std::int32_t>(rt_ns::DataType::FLOAT16)
-             ? cpu_compute::detail::Float16BitsToFloat(value)
-             : cpu_compute::detail::Bfloat16BitsToFloat(value);
+             ? ml_cpu_compute::detail::Float16BitsToFloat(value)
+             : ml_cpu_compute::detail::Bfloat16BitsToFloat(value);
 }
 
 ONNX_LIGHT_NAMESPACE::EncodedValueProto
@@ -321,7 +321,7 @@ TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {
 }
 
 TEST(MatMulNBitsKernel, Accuracy4DynamicPlanMatchesBlockQuantizationAndRefreshesWeights) {
-  if (!cpu_compute::MatMulNBitsAccuracy4Float32Available()) {
+  if (!ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
   constexpr std::size_t rows = 9;
@@ -391,7 +391,7 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
       node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
 
   EXPECT_EQ(kernel.HasPreparations({"B", "scales"}),
-            cpu_compute::MatMulNBitsAccuracy4Float32Available());
+            ml_cpu_compute::MatMulNBitsAccuracy4Float32Available());
   EXPECT_FALSE(kernel.HasPreparations({"B"}));
   EXPECT_FALSE(kernel.HasPreparations({"scales"}));
 
@@ -404,7 +404,7 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
                                   std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
   kernel.Prepare(rt, {"B", "scales"});
   EXPECT_EQ(rt.value_store().prepared_bytes(),
-            cpu_compute::MatMulNBitsAccuracy4Float32Available() ? 768U : 0U);
+            ml_cpu_compute::MatMulNBitsAccuracy4Float32Available() ? 768U : 0U);
 
   const rt_ns::Tensor a =
       rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(static_cast<std::size_t>(k), 0.5f));
@@ -420,7 +420,7 @@ TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidenc
   const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, 8);
   onnx_light_cpu::MatMulNBitsKernel kernel{
       node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
-  const bool available = cpu_compute::MatMulNBitsInt8Float32Available();
+  const bool available = ml_cpu_compute::MatMulNBitsInt8Float32Available();
   EXPECT_EQ(kernel.HasPreparations({"B", "scales"}), available);
   EXPECT_FALSE(kernel.HasPreparations({"B"}));
   EXPECT_FALSE(kernel.HasPreparations({"scales"}));
@@ -467,7 +467,7 @@ TEST(MatMulNBitsKernel, PreparedInt8HonorsOutputTuning) {
   const auto node = MakeNode(k, n, 8);
   onnx_light_cpu::MatMulNBitsKernel kernel{
       node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
-  if (!cpu_compute::MatMulNBitsInt8Float32Available()) {
+  if (!ml_cpu_compute::MatMulNBitsInt8Float32Available()) {
     GTEST_SKIP() << "The prepared INT8 kernel is unavailable.";
   }
   onnx_light_cpu::MatMulNBitsKernel::RegisterTuningSchemas();
@@ -483,8 +483,8 @@ TEST(MatMulNBitsKernel, PreparedInt8HonorsOutputTuning) {
   kernel.Prepare(rt, {"B", "scales"});
   const auto a = rt_ns::Tensor::FromFloat("A", {rows, k}, std::vector<float>(rows * k, 0.5f));
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto check = [&] {
     const auto y = kernel(a, rt.Get("B"), rt.Get("scales"));
     for (std::size_t i = 0; i < y.element_count(); ++i) {
@@ -506,7 +506,7 @@ TEST(MatMulNBitsKernel, PreparedInt8HonorsOutputTuning) {
 }
 
 TEST(MatMulNBitsKernel, Accuracy4DynamicPlanSupportsHalfPrecisionInputsAndOutputs) {
-  if (!cpu_compute::MatMulNBitsAccuracy4Float32Available()) {
+  if (!ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
   constexpr std::size_t rows = 9;
@@ -709,7 +709,7 @@ TEST(MatMulNBitsKernel, LowLevelRejectsUnsupportedBlockSize) {
   float value = 0.0f;
   const std::uint8_t packed = 0x88;
   EXPECT_THROW(
-      cpu_compute::MatMulNBitsFloat32(&value, &packed, &value, nullptr, &value, 1, 1, 1, 24),
+      ml_cpu_compute::MatMulNBitsFloat32(&value, &packed, &value, nullptr, &value, 1, 1, 1, 24),
       std::invalid_argument);
 }
 
@@ -888,23 +888,23 @@ TEST(MatMulNBitsKernel, UsesRuntimeSchedulingAndSuppressesNestedParallelism) {
   const std::vector<float> scales(512, 1.0f);
   std::vector<float> output(512);
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
-  cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr, output.data(), 1,
-                                  32, 2, 32);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr, output.data(),
+                                     1, 32, 2, 32);
   EXPECT_EQ(executor.dispatches, 0);
 
-  cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr, output.data(), 1,
-                                  32, 512, 32);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr, output.data(),
+                                     1, 32, 512, 32);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
 
   executor = {};
   {
-    cpu_compute::detail::ExecutionRegionScope region;
-    cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr, output.data(),
-                                    1, 32, 512, 32);
+    ml_cpu_compute::detail::ExecutionRegionScope region;
+    ml_cpu_compute::MatMulNBitsFloat32(a.data(), packed.data(), scales.data(), nullptr,
+                                       output.data(), 1, 32, 512, 32);
   }
   EXPECT_EQ(executor.dispatches, 0);
 }

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -51,10 +51,10 @@ public:
     case rt_ns::DataType::DOUBLE:
       return static_cast<float>(static_cast<const double *>(data_)[index]);
     case rt_ns::DataType::FLOAT16:
-      return cpu_compute::detail::Float16BitsToFloat(
+      return ml_cpu_compute::detail::Float16BitsToFloat(
           static_cast<const std::uint16_t *>(data_)[index]);
     case rt_ns::DataType::BFLOAT16:
-      return cpu_compute::detail::Bfloat16BitsToFloat(
+      return ml_cpu_compute::detail::Bfloat16BitsToFloat(
           static_cast<const std::uint16_t *>(data_)[index]);
     default:
       return 0.0F;
@@ -89,10 +89,12 @@ public:
       static_cast<double *>(data_)[index] = static_cast<double>(value);
       return;
     case rt_ns::DataType::FLOAT16:
-      static_cast<std::uint16_t *>(data_)[index] = cpu_compute::detail::FloatToFloat16Bits(value);
+      static_cast<std::uint16_t *>(data_)[index] =
+          ml_cpu_compute::detail::FloatToFloat16Bits(value);
       return;
     case rt_ns::DataType::BFLOAT16:
-      static_cast<std::uint16_t *>(data_)[index] = cpu_compute::detail::FloatToBFloat16Bits(value);
+      static_cast<std::uint16_t *>(data_)[index] =
+          ml_cpu_compute::detail::FloatToBFloat16Bits(value);
       return;
     default:
       throw std::invalid_argument("normalization output has an unsupported data type.");
@@ -135,10 +137,10 @@ template <> struct TypeTraits<rt_ns::DataType::FLOAT16> {
   using Accumulator = float;
 
   static float Load(const std::uint16_t *data, std::size_t index) noexcept {
-    return cpu_compute::detail::Float16BitsToFloat(data[index]);
+    return ml_cpu_compute::detail::Float16BitsToFloat(data[index]);
   }
   static void Store(std::uint16_t *data, std::size_t index, float value) noexcept {
-    data[index] = cpu_compute::detail::FloatToFloat16Bits(value);
+    data[index] = ml_cpu_compute::detail::FloatToFloat16Bits(value);
   }
 };
 
@@ -147,10 +149,10 @@ template <> struct TypeTraits<rt_ns::DataType::BFLOAT16> {
   using Accumulator = float;
 
   static float Load(const std::uint16_t *data, std::size_t index) noexcept {
-    return cpu_compute::detail::Bfloat16BitsToFloat(data[index]);
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(data[index]);
   }
   static void Store(std::uint16_t *data, std::size_t index, float value) noexcept {
-    data[index] = cpu_compute::detail::FloatToBFloat16Bits(value);
+    data[index] = ml_cpu_compute::detail::FloatToBFloat16Bits(value);
   }
 };
 
@@ -162,10 +164,11 @@ inline AccumulatorType<Type> RoundFloatToType(float value) noexcept {
   if constexpr (Type == rt_ns::DataType::DOUBLE) {
     return static_cast<double>(value);
   } else if constexpr (Type == rt_ns::DataType::FLOAT16) {
-    return cpu_compute::detail::Float16BitsToFloat(cpu_compute::detail::FloatToFloat16Bits(value));
+    return ml_cpu_compute::detail::Float16BitsToFloat(
+        ml_cpu_compute::detail::FloatToFloat16Bits(value));
   } else if constexpr (Type == rt_ns::DataType::BFLOAT16) {
-    return cpu_compute::detail::Bfloat16BitsToFloat(
-        cpu_compute::detail::FloatToBFloat16Bits(value));
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(
+        ml_cpu_compute::detail::FloatToBFloat16Bits(value));
   } else {
     return value;
   }

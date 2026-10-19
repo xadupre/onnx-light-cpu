@@ -180,7 +180,7 @@ def measure(func, repeat, warmup, max_duration):
 # -----------------------------------------------
 #
 # ``kGemmTileM == 64``, ``kGemmTileN == 256`` and ``kGemmTileK == 256`` (see
-# ``cpu_compute/src/math/gemm.cc``); every shape below is picked to
+# ``ml_cpu_compute/src/math/gemm.cc``); every shape below is picked to
 # sit clearly on one side of those thresholds.
 
 SHAPES = (

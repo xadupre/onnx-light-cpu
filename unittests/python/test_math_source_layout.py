@@ -7,7 +7,7 @@
 import re
 from pathlib import Path
 
-_COMPUTE = Path(__file__).resolve().parents[2] / "cpu_compute"
+_COMPUTE = Path(__file__).resolve().parents[2] / "ml_cpu_compute"
 _MATH = _COMPUTE / "src" / "math"
 
 

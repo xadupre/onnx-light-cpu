@@ -5,9 +5,9 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/checked_arithmetic.h"
-#include "cpu_compute/math/gemm/gemm_plan.h"
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -111,32 +111,32 @@ struct GemmKernel::GemmPlanCache {
   std::size_t m = 0;
   std::size_t n = 0;
   std::size_t k = 0;
-  std::unique_ptr<cpu_compute::GemmPlan<float>> plan_f32;
-  std::unique_ptr<cpu_compute::GemmPlan<double>> plan_f64;
-  std::unique_ptr<cpu_compute::GemmHalfPlan> plan_half;
+  std::unique_ptr<ml_cpu_compute::GemmPlan<float>> plan_f32;
+  std::unique_ptr<ml_cpu_compute::GemmPlan<double>> plan_f64;
+  std::unique_ptr<ml_cpu_compute::GemmHalfPlan> plan_half;
 
   template <typename T>
-  const cpu_compute::GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows,
-                                             std::size_t cols, std::size_t depth, T scale,
-                                             const Tuning &tuning) {
-    std::unique_ptr<cpu_compute::GemmPlan<T>> &slot = Slot<T>();
+  const ml_cpu_compute::GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows,
+                                                std::size_t cols, std::size_t depth, T scale,
+                                                const Tuning &tuning) {
+    std::unique_ptr<ml_cpu_compute::GemmPlan<T>> &slot = Slot<T>();
     // Compare ``alpha`` against the cached plan's own ``T`` value so the
     // change-detection stays in the input precision instead of widening to
     // ``double`` (which could mask or fabricate differences for ``float``).
     const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
                        n == cols && k == depth && slot != nullptr && slot->alpha() == scale;
     if (!match) {
-      slot = std::make_unique<cpu_compute::GemmPlan<T>>(
-          cpu_compute::GemmPlanOptions<T>{ta,
-                                          tb,
-                                          rows,
-                                          cols,
-                                          depth,
-                                          scale,
-                                          T(0),
-                                          {},
-                                          {tuning.mc, tuning.nc, tuning.kc, 0, 0},
-                                          tuning.maximum_participants});
+      slot = std::make_unique<ml_cpu_compute::GemmPlan<T>>(
+          ml_cpu_compute::GemmPlanOptions<T>{ta,
+                                             tb,
+                                             rows,
+                                             cols,
+                                             depth,
+                                             scale,
+                                             T(0),
+                                             {},
+                                             {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                             tuning.maximum_participants});
       has_key = true;
       data_type = dt;
       trans_a = ta;
@@ -150,25 +150,26 @@ struct GemmKernel::GemmPlanCache {
 
   // FP16/BF16 counterpart of :cpp:func:`GetOrBuild`. ``is_bfloat16`` selects the
   // decode; ``dt`` (FLOAT16 vs BFLOAT16) keeps the key distinct across types.
-  const cpu_compute::GemmHalfPlan &GetOrBuildHalf(bool is_bfloat16, int dt, bool ta, bool tb,
-                                                  std::size_t rows, std::size_t cols,
-                                                  std::size_t depth, float scale,
-                                                  const Tuning &tuning) {
+  const ml_cpu_compute::GemmHalfPlan &GetOrBuildHalf(bool is_bfloat16, int dt, bool ta, bool tb,
+                                                     std::size_t rows, std::size_t cols,
+                                                     std::size_t depth, float scale,
+                                                     const Tuning &tuning) {
     const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
                        n == cols && k == depth && plan_half != nullptr &&
                        plan_half->alpha() == scale;
     if (!match) {
-      plan_half = std::make_unique<cpu_compute::GemmHalfPlan>(cpu_compute::GemmHalfPlanOptions{
-          is_bfloat16,
-          ta,
-          tb,
-          rows,
-          cols,
-          depth,
-          scale,
-          {tuning.mc, tuning.nc, tuning.kc, 0, 0},
-          {tuning.compact_mc, tuning.compact_nc, tuning.compact_kc, 0, 0},
-          tuning.maximum_participants});
+      plan_half =
+          std::make_unique<ml_cpu_compute::GemmHalfPlan>(ml_cpu_compute::GemmHalfPlanOptions{
+              is_bfloat16,
+              ta,
+              tb,
+              rows,
+              cols,
+              depth,
+              scale,
+              {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+              {tuning.compact_mc, tuning.compact_nc, tuning.compact_kc, 0, 0},
+              tuning.maximum_participants});
       has_key = true;
       data_type = dt;
       trans_a = ta;
@@ -181,7 +182,7 @@ struct GemmKernel::GemmPlanCache {
   }
 
 private:
-  template <typename T> std::unique_ptr<cpu_compute::GemmPlan<T>> &Slot() {
+  template <typename T> std::unique_ptr<ml_cpu_compute::GemmPlan<T>> &Slot() {
     if constexpr (std::is_same_v<T, float>) {
       return plan_f32;
     } else {
@@ -242,12 +243,12 @@ void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t
     throw std::invalid_argument(std::string("onnx_light_cpu::GemmKernel: input ") + name +
                                 " must be a 2-D matrix.");
   }
-  rows = cpu_compute::CheckedDimension(t.shape[0], "GemmKernel", name);
-  cols = cpu_compute::CheckedDimension(t.shape[1], "GemmKernel", name);
+  rows = ml_cpu_compute::CheckedDimension(t.shape[0], "GemmKernel", name);
+  cols = ml_cpu_compute::CheckedDimension(t.shape[1], "GemmKernel", name);
 }
 
 // Resolves ONNX unidirectional broadcasting without materializing C.
-cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
+ml_cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
   const std::size_t rank = c.shape.size();
   std::size_t c_rows = 1;
   std::size_t c_cols = 1;
@@ -264,15 +265,15 @@ cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std
         "onnx_light_cpu::GemmKernel: bias C is not broadcastable to the output shape.");
   }
   if (c_rows == 1 && c_cols == 1) {
-    return cpu_compute::GemmBroadcast::kScalar;
+    return ml_cpu_compute::GemmBroadcast::kScalar;
   }
   if (c_rows == 1) {
-    return cpu_compute::GemmBroadcast::kRow;
+    return ml_cpu_compute::GemmBroadcast::kRow;
   }
   if (c_cols == 1) {
-    return cpu_compute::GemmBroadcast::kColumn;
+    return ml_cpu_compute::GemmBroadcast::kColumn;
   }
-  return cpu_compute::GemmBroadcast::kMatrix;
+  return ml_cpu_compute::GemmBroadcast::kMatrix;
 }
 
 } // namespace
@@ -307,69 +308,70 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
 
   const Shape out_shape{static_cast<std::int64_t>(M), static_cast<std::int64_t>(N)};
   const std::size_t output_elements =
-      cpu_compute::CheckedMultiply(M, N, "GemmKernel", "output element count");
+      ml_cpu_compute::CheckedMultiply(M, N, "GemmKernel", "output element count");
   const bool has_bias = c != nullptr && beta != 0.0f;
 
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT: {
-    std::optional<cpu_compute::GemmPlan<float>> transient;
-    const cpu_compute::GemmPlan<float> *plan = nullptr;
+    std::optional<ml_cpu_compute::GemmPlan<float>> transient;
+    const ml_cpu_compute::GemmPlan<float> *plan = nullptr;
     if (cache != nullptr) {
       plan = &cache->GetOrBuild<float>(a.data_type, trans_a, trans_b, M, N, K, alpha, tuning);
     } else {
-      transient.emplace(cpu_compute::GemmPlanOptions<float>{trans_a,
-                                                            trans_b,
-                                                            M,
-                                                            N,
-                                                            K,
-                                                            alpha,
-                                                            0.0f,
-                                                            {},
-                                                            {tuning.mc, tuning.nc, tuning.kc, 0, 0},
-                                                            tuning.maximum_participants});
+      transient.emplace(
+          ml_cpu_compute::GemmPlanOptions<float>{trans_a,
+                                                 trans_b,
+                                                 M,
+                                                 N,
+                                                 K,
+                                                 alpha,
+                                                 0.0f,
+                                                 {},
+                                                 {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                                 tuning.maximum_participants});
       plan = &*transient;
     }
-    cpu_compute::GemmEpilogue<float> epilogue;
+    ml_cpu_compute::GemmEpilogue<float> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsFloat();
       epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
       epilogue.beta = beta;
     }
-    const std::size_t n_bytes = cpu_compute::CheckedByteSize(output_elements, sizeof(float),
-                                                             "GemmKernel", "output byte size");
+    const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(output_elements, sizeof(float),
+                                                                "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsFloat(), b.AsFloat(), epilogue, y.AsFloat());
     return y;
   }
   case DataType::DOUBLE: {
-    std::optional<cpu_compute::GemmPlan<double>> transient;
-    const cpu_compute::GemmPlan<double> *plan = nullptr;
+    std::optional<ml_cpu_compute::GemmPlan<double>> transient;
+    const ml_cpu_compute::GemmPlan<double> *plan = nullptr;
     if (cache != nullptr) {
       plan = &cache->GetOrBuild<double>(a.data_type, trans_a, trans_b, M, N, K,
                                         static_cast<double>(alpha), tuning);
     } else {
       transient.emplace(
-          cpu_compute::GemmPlanOptions<double>{trans_a,
-                                               trans_b,
-                                               M,
-                                               N,
-                                               K,
-                                               static_cast<double>(alpha),
-                                               0.0,
-                                               {},
-                                               {tuning.mc, tuning.nc, tuning.kc, 0, 0},
-                                               tuning.maximum_participants});
+          ml_cpu_compute::GemmPlanOptions<double>{trans_a,
+                                                  trans_b,
+                                                  M,
+                                                  N,
+                                                  K,
+                                                  static_cast<double>(alpha),
+                                                  0.0,
+                                                  {},
+                                                  {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                                  tuning.maximum_participants});
       plan = &*transient;
     }
-    cpu_compute::GemmEpilogue<double> epilogue;
+    ml_cpu_compute::GemmEpilogue<double> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsDouble();
       epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
       epilogue.beta = static_cast<double>(beta);
     }
-    const std::size_t n_bytes = cpu_compute::CheckedByteSize(output_elements, sizeof(double),
-                                                             "GemmKernel", "output byte size");
+    const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(output_elements, sizeof(double),
+                                                                "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsDouble(), b.AsDouble(), epilogue, y.AsDouble());
@@ -388,13 +390,13 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
     const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
 
-    std::optional<cpu_compute::GemmHalfPlan> transient;
-    const cpu_compute::GemmHalfPlan *plan = nullptr;
+    std::optional<ml_cpu_compute::GemmHalfPlan> transient;
+    const ml_cpu_compute::GemmHalfPlan *plan = nullptr;
     if (cache != nullptr) {
       plan = &cache->GetOrBuildHalf(is_bfloat16, a.data_type, trans_a, trans_b, M, N, K, alpha,
                                     tuning);
     } else {
-      transient.emplace(cpu_compute::GemmHalfPlanOptions{
+      transient.emplace(ml_cpu_compute::GemmHalfPlanOptions{
           is_bfloat16,
           trans_a,
           trans_b,
@@ -408,27 +410,27 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       plan = &*transient;
     }
 
-    cpu_compute::GemmEpilogue<float> epilogue;
-    cpu_compute::GemmBroadcast bias_layout = cpu_compute::GemmBroadcast::kNone;
+    ml_cpu_compute::GemmEpilogue<float> epilogue;
+    ml_cpu_compute::GemmBroadcast bias_layout = ml_cpu_compute::GemmBroadcast::kNone;
     if (has_bias) {
       bias_layout = ResolveBiasLayout(*c, M, N);
     }
 
-    const std::size_t n_bytes = cpu_compute::CheckedByteSize(output_elements, sizeof(std::uint16_t),
-                                                             "GemmKernel", "output byte size");
+    const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(
+        output_elements, sizeof(std::uint16_t), "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
-    epilogue.output_conversion = has_bias
-                                     ? cpu_compute::GemmOutputConversion::kNone
-                                     : (is_bfloat16 ? cpu_compute::GemmOutputConversion::kBFloat16
-                                                    : cpu_compute::GemmOutputConversion::kFloat16);
+    epilogue.output_conversion =
+        has_bias ? ml_cpu_compute::GemmOutputConversion::kNone
+                 : (is_bfloat16 ? ml_cpu_compute::GemmOutputConversion::kBFloat16
+                                : ml_cpu_compute::GemmOutputConversion::kFloat16);
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     rt_ns::detail::TemporaryTypedBuffer<float> y_f32(
         output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
         "Gemm FP32 workspace");
     plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
     if (has_bias) {
-      cpu_compute::GemmAddHalfBiasConvertFloat32(
+      ml_cpu_compute::GemmAddHalfBiasConvertFloat32(
           y_f32.data(), reinterpret_cast<const std::uint16_t *>(c->bytes()),
           reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), M, N, beta, bias_layout,
           is_bfloat16);

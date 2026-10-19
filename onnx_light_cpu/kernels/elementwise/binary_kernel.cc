@@ -69,15 +69,15 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(std::string_view op_type, int32
   return {MakeTuningKey(op_type, element_type),
           {{kBulkThresholdBytes,
             static_cast<int64_t>(
-                cpu_compute::kDefaultBinaryExecutionTuning.bulk_parallel_threshold_bytes)},
+                ml_cpu_compute::kDefaultBinaryExecutionTuning.bulk_parallel_threshold_bytes)},
            {kBlockThresholdBytes,
             static_cast<int64_t>(
-                cpu_compute::kDefaultBinaryExecutionTuning.block_parallel_threshold_bytes)},
+                ml_cpu_compute::kDefaultBinaryExecutionTuning.block_parallel_threshold_bytes)},
            {kScalarThresholdBytes,
             static_cast<int64_t>(
-                cpu_compute::kDefaultBinaryExecutionTuning.scalar_parallel_threshold_bytes)},
+                ml_cpu_compute::kDefaultBinaryExecutionTuning.scalar_parallel_threshold_bytes)},
            {kTargetBlockBytes,
-            static_cast<int64_t>(cpu_compute::kDefaultBinaryExecutionTuning.target_block_bytes)},
+            static_cast<int64_t>(ml_cpu_compute::kDefaultBinaryExecutionTuning.target_block_bytes)},
            {kMaxParticipants, int64_t{0}}}};
 }
 
@@ -182,23 +182,23 @@ rt_ns::Tensor MakeCalibrationTensor(int32_t element_type, const rt_ns::Shape &sh
   }
 }
 
-ONNX_LIGHT_NAMESPACE::NodeProto MakeCalibrationNode(const cpu_compute::BinaryManifestEntry &entry,
-                                                    int32_t element_type) {
+ONNX_LIGHT_NAMESPACE::NodeProto
+MakeCalibrationNode(const ml_cpu_compute::BinaryManifestEntry &entry, int32_t element_type) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type(std::string(entry.op_type));
   node.add_input("left");
   node.add_input("right");
   node.add_output("output");
-  if (entry.op == cpu_compute::BinaryOperator::kMod) {
-    const auto type = static_cast<cpu_compute::DataType>(element_type);
+  if (entry.op == ml_cpu_compute::BinaryOperator::kMod) {
+    const auto type = static_cast<ml_cpu_compute::DataType>(element_type);
     const bool floating =
-        type == cpu_compute::DataType::FLOAT || type == cpu_compute::DataType::DOUBLE ||
-        type == cpu_compute::DataType::FLOAT16 || type == cpu_compute::DataType::BFLOAT16;
+        type == ml_cpu_compute::DataType::FLOAT || type == ml_cpu_compute::DataType::DOUBLE ||
+        type == ml_cpu_compute::DataType::FLOAT16 || type == ml_cpu_compute::DataType::BFLOAT16;
     auto *attribute = node.add_attribute();
     attribute->set_name("fmod");
     attribute->set_i(floating ? 1 : 0);
     attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT);
-  } else if (entry.op == cpu_compute::BinaryOperator::kBitShift) {
+  } else if (entry.op == ml_cpu_compute::BinaryOperator::kBitShift) {
     auto *attribute = node.add_attribute();
     attribute->set_name("direction");
     attribute->set_s("LEFT");
@@ -230,42 +230,42 @@ struct BinaryCalibrationCaseData {
 
 struct BinaryCalibrationCaseSpec {
   std::string name;
-  cpu_compute::DataType left_type;
-  cpu_compute::DataType right_type;
-  cpu_compute::DataType output_type;
+  ml_cpu_compute::DataType left_type;
+  ml_cpu_compute::DataType right_type;
+  ml_cpu_compute::DataType output_type;
   rt_ns::Shape left_shape;
   rt_ns::Shape right_shape;
   uint64_t output_elements;
 };
 
-std::size_t CalibrationElementSize(cpu_compute::DataType type) {
+std::size_t CalibrationElementSize(ml_cpu_compute::DataType type) {
   switch (type) {
-  case cpu_compute::DataType::BOOL:
-  case cpu_compute::DataType::INT8:
-  case cpu_compute::DataType::UINT8:
+  case ml_cpu_compute::DataType::BOOL:
+  case ml_cpu_compute::DataType::INT8:
+  case ml_cpu_compute::DataType::UINT8:
     return 1;
-  case cpu_compute::DataType::FLOAT16:
-  case cpu_compute::DataType::BFLOAT16:
-  case cpu_compute::DataType::INT16:
-  case cpu_compute::DataType::UINT16:
+  case ml_cpu_compute::DataType::FLOAT16:
+  case ml_cpu_compute::DataType::BFLOAT16:
+  case ml_cpu_compute::DataType::INT16:
+  case ml_cpu_compute::DataType::UINT16:
     return 2;
-  case cpu_compute::DataType::FLOAT:
-  case cpu_compute::DataType::INT32:
-  case cpu_compute::DataType::UINT32:
+  case ml_cpu_compute::DataType::FLOAT:
+  case ml_cpu_compute::DataType::INT32:
+  case ml_cpu_compute::DataType::UINT32:
     return 4;
-  case cpu_compute::DataType::DOUBLE:
-  case cpu_compute::DataType::INT64:
-  case cpu_compute::DataType::UINT64:
+  case ml_cpu_compute::DataType::DOUBLE:
+  case ml_cpu_compute::DataType::INT64:
+  case ml_cpu_compute::DataType::UINT64:
     return 8;
   default:
     throw std::invalid_argument("Binary calibration received an unsupported element type.");
   }
 }
 
-uint64_t CalibrationConstructionBytes(cpu_compute::DataType type, const rt_ns::Shape &shape) {
+uint64_t CalibrationConstructionBytes(ml_cpu_compute::DataType type, const rt_ns::Shape &shape) {
   const uint64_t elements = static_cast<uint64_t>(shape.product());
   const uint64_t temporary_size =
-      type == cpu_compute::DataType::FLOAT16 || type == cpu_compute::DataType::BFLOAT16
+      type == ml_cpu_compute::DataType::FLOAT16 || type == ml_cpu_compute::DataType::BFLOAT16
           ? sizeof(float)
           : CalibrationElementSize(type);
   return elements * temporary_size;
@@ -284,14 +284,15 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
     reporter.FinalizeCandidateDiagnostics();
     return MakeTuningDefaults(key.kernel, key.element_type);
   };
-  const cpu_compute::BinaryManifestEntry &entry = cpu_compute::GetBinaryManifestEntry(key.kernel);
+  const ml_cpu_compute::BinaryManifestEntry &entry =
+      ml_cpu_compute::GetBinaryManifestEntry(key.kernel);
   const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeCalibrationNode(entry, key.element_type);
   const rt_ns::KernelContext context(rt_ns::OpsetId(std::string(), entry.since_version));
   BinaryElementwiseKernel reference(node, context);
   BinaryElementwiseKernel candidate(node, context);
   reference.Configure(CalibrationParameters(key, kBinaryCalibrationProfiles[1]));
 
-  const auto input_type = static_cast<cpu_compute::DataType>(key.element_type);
+  const auto input_type = static_cast<ml_cpu_compute::DataType>(key.element_type);
   const auto same_type_signature = std::find_if(
       entry.signatures.begin(), entry.signatures.end(), [input_type](const auto &candidate) {
         return candidate.left == input_type && candidate.right == input_type;
@@ -310,8 +311,8 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
        {1, 4, 1, 64},
        1048576},
   };
-  if (entry.op == cpu_compute::BinaryOperator::kPow) {
-    for (const cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
+  if (entry.op == ml_cpu_compute::BinaryOperator::kPow) {
+    for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
       if (signature.left == input_type && signature.right != input_type) {
         specs.push_back({"mixed_" + std::to_string(static_cast<int32_t>(signature.right)),
                          signature.left,
@@ -328,7 +329,8 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
   if (memory_budget < (uint64_t{2} << 20)) {
     return keep_portable("memory budget is too small");
   }
-  if (execution.effective_threads != static_cast<uint32_t>(cpu_compute::ExecutionThreadCount())) {
+  if (execution.effective_threads !=
+      static_cast<uint32_t>(ml_cpu_compute::ExecutionThreadCount())) {
     throw std::invalid_argument(
         "Binary calibration execution descriptor does not match the active executor.");
   }
@@ -356,8 +358,8 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
     rt_ns::Tensor left =
         MakeCalibrationTensor(static_cast<int32_t>(spec.left_type), spec.left_shape, 17 + index);
     const bool integral_pow_exponents =
-        key.kernel == "Pow" && (spec.left_type == cpu_compute::DataType::INT32 ||
-                                spec.left_type == cpu_compute::DataType::INT64);
+        key.kernel == "Pow" && (spec.left_type == ml_cpu_compute::DataType::INT32 ||
+                                spec.left_type == ml_cpu_compute::DataType::INT64);
     rt_ns::Tensor right =
         MakeCalibrationTensor(static_cast<int32_t>(spec.right_type), spec.right_shape, 29 + index,
                               integral_pow_exponents);
@@ -465,28 +467,28 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
   return CalibrationParameters(key, *best);
 }
 
-bool SupportsElementType(const cpu_compute::BinaryManifestEntry &entry, int32_t element_type) {
+bool SupportsElementType(const ml_cpu_compute::BinaryManifestEntry &entry, int32_t element_type) {
   return std::any_of(entry.signatures.begin(), entry.signatures.end(),
-                     [element_type](const cpu_compute::BinaryTypeSignature &signature) {
+                     [element_type](const ml_cpu_compute::BinaryTypeSignature &signature) {
                        return static_cast<int32_t>(signature.left) == element_type;
                      });
 }
 
-bool SupportsTuning(const cpu_compute::BinaryManifestEntry &entry, int32_t element_type) {
+bool SupportsTuning(const ml_cpu_compute::BinaryManifestEntry &entry, int32_t element_type) {
   return static_cast<rt_ns::DataType>(element_type) != rt_ns::DataType::STRING &&
          SupportsElementType(entry, element_type);
 }
 
-cpu_compute::BinaryOperationDescriptor::Attributes
+ml_cpu_compute::BinaryOperationDescriptor::Attributes
 ParseBinaryAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
-  cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
   if (node.op_type() == "Mod") {
     attributes.mod_fmod = rt_ns::GetAttributeIntOrDefault(node, "fmod", 0);
   } else if (node.op_type() == "BitShift") {
     const std::string direction = rt_ns::GetRequiredAttributeString(node, "direction");
     if (direction == "RIGHT") {
       attributes.bitshift_direction =
-          cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight;
+          ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight;
     } else if (direction != "LEFT") {
       throw std::invalid_argument(
           "onnx_light_cpu::BinaryElementwiseKernel: invalid BitShift direction.");
@@ -507,9 +509,9 @@ BinaryElementwiseKernel::BinaryElementwiseKernel(const ONNX_LIGHT_NAMESPACE::Nod
 void BinaryElementwiseKernel::RegisterTuningSchemas() {
   static std::once_flag once;
   std::call_once(once, [] {
-    for (const cpu_compute::BinaryManifestEntry &entry : cpu_compute::GetBinaryManifest()) {
+    for (const ml_cpu_compute::BinaryManifestEntry &entry : ml_cpu_compute::GetBinaryManifest()) {
       std::set<int32_t> registered_types;
-      for (const cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
+      for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
         const int32_t element_type = static_cast<int32_t>(signature.left);
         if (SupportsTuning(entry, element_type) && registered_types.insert(element_type).second) {
           const rt_ns::KernelTuningKey key = MakeTuningKey(entry.op_type, element_type);
@@ -552,12 +554,12 @@ rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
   tensor_validation::ValidateBufferCapacity(right, KernelName(descriptor_.op_type()),
                                             "right input");
   const auto output_type = static_cast<rt_ns::DataType>(
-      descriptor_.ResolveOutputType(static_cast<cpu_compute::DataType>(left.data_type),
-                                    static_cast<cpu_compute::DataType>(right.data_type)));
-  const std::shared_ptr<const cpu_compute::BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
-      descriptor_, static_cast<cpu_compute::DataType>(left.data_type),
-      static_cast<cpu_compute::DataType>(right.data_type),
-      static_cast<cpu_compute::DataType>(output_type), left.shape, right.shape);
+      descriptor_.ResolveOutputType(static_cast<ml_cpu_compute::DataType>(left.data_type),
+                                    static_cast<ml_cpu_compute::DataType>(right.data_type)));
+  const std::shared_ptr<const ml_cpu_compute::BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
+      descriptor_, static_cast<ml_cpu_compute::DataType>(left.data_type),
+      static_cast<ml_cpu_compute::DataType>(right.data_type),
+      static_cast<ml_cpu_compute::DataType>(output_type), left.shape, right.shape);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan->output_shape().begin(), plan->output_shape().end()));
   const std::size_t out_bytes =
@@ -580,12 +582,12 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
   tensor_validation::ValidateBufferCapacity(left, kernel_name, "left input");
   tensor_validation::ValidateBufferCapacity(right, kernel_name, "right input");
   const auto output_type = static_cast<rt_ns::DataType>(
-      descriptor_.ResolveOutputType(static_cast<cpu_compute::DataType>(left.data_type),
-                                    static_cast<cpu_compute::DataType>(right.data_type)));
-  const std::shared_ptr<const cpu_compute::BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
-      descriptor_, static_cast<cpu_compute::DataType>(left.data_type),
-      static_cast<cpu_compute::DataType>(right.data_type),
-      static_cast<cpu_compute::DataType>(output_type), left.shape, right.shape);
+      descriptor_.ResolveOutputType(static_cast<ml_cpu_compute::DataType>(left.data_type),
+                                    static_cast<ml_cpu_compute::DataType>(right.data_type)));
+  const std::shared_ptr<const ml_cpu_compute::BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
+      descriptor_, static_cast<ml_cpu_compute::DataType>(left.data_type),
+      static_cast<ml_cpu_compute::DataType>(right.data_type),
+      static_cast<ml_cpu_compute::DataType>(output_type), left.shape, right.shape);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan->output_shape().begin(), plan->output_shape().end()));
   if (output.data_type != static_cast<int32_t>(output_type) || output.shape != output_shape) {
@@ -617,9 +619,9 @@ void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
 
 void RegisterBinaryKernels() {
   BinaryElementwiseKernel::RegisterTuningSchemas();
-  for (const cpu_compute::BinaryManifestEntry &entry : cpu_compute::GetBinaryManifest()) {
+  for (const ml_cpu_compute::BinaryManifestEntry &entry : ml_cpu_compute::GetBinaryManifest()) {
     std::vector<std::int64_t> version_starts = {entry.minimum_version};
-    for (const cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
+    for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
       if (signature.minimum_version > entry.minimum_version &&
           std::find(version_starts.begin(), version_starts.end(), signature.minimum_version) ==
               version_starts.end()) {
@@ -634,7 +636,7 @@ void RegisterBinaryKernels() {
       info.op_type = std::string(entry.op_type);
       info.device = sym_ns::Device::kCPU;
       info.kernel_name = KernelName(entry.op_type);
-      for (const cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
+      for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
         const std::int64_t signature_version =
             signature.minimum_version == 0 ? entry.minimum_version : signature.minimum_version;
         const auto type = static_cast<rt_ns::DataType>(signature.left);

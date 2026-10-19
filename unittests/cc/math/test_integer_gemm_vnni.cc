@@ -7,24 +7,24 @@
 // portable scalar path, then directly checks each native implementation
 // available on the running CPU against an independent reference.
 
-#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "ml_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 
-#include "cpu_compute/execution.h"
+#include "ml_cpu_compute/execution.h"
 
-#if defined(CPU_COMPUTE_HAVE_AVX2_INTEGER) || defined(CPU_COMPUTE_HAVE_AVXVNNI) ||                 \
-    defined(CPU_COMPUTE_HAVE_AVX512VNNI)
-#include "cpu_compute/simd_level.h"
+#if defined(ML_CPU_COMPUTE_HAVE_AVX2_INTEGER) || defined(ML_CPU_COMPUTE_HAVE_AVXVNNI) ||           \
+    defined(ML_CPU_COMPUTE_HAVE_AVX512VNNI)
+#include "ml_cpu_compute/simd_level.h"
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AMX_INT8
-#include "cpu_compute/math/gemm/amx/gemm_amx_int8.h"
-#include "cpu_compute/math/gemm/amx/gemm_amx_tile.h"
-#include "cpu_compute/simd_level.h"
+#ifdef ML_CPU_COMPUTE_HAVE_AMX_INT8
+#include "ml_cpu_compute/math/gemm/amx/gemm_amx_int8.h"
+#include "ml_cpu_compute/math/gemm/amx/gemm_amx_tile.h"
+#include "ml_cpu_compute/simd_level.h"
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_NEON_DOTPROD
-#include "cpu_compute/arm_simd_level.h"
-#include "cpu_compute/math/gemm/arm/gemm_arm.h"
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+#include "ml_cpu_compute/arm_simd_level.h"
+#include "ml_cpu_compute/math/gemm/arm/gemm_arm.h"
 #endif
 
 #include <gtest/gtest.h>
@@ -72,72 +72,73 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
       Reference(a, a_signed, b, b_signed, rows, cols, depth, azp, bzp);
 
   std::vector<std::int32_t> dispatched(expected.size(), 0);
-  cpu_compute::IntegerMatMul2D(a.data(), a_signed, b.data(), b_signed, dispatched.data(), rows,
-                               cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
-                               bzp.data(), static_cast<std::int64_t>(bzp.size()));
+  ml_cpu_compute::IntegerMatMul2D(a.data(), a_signed, b.data(), b_signed, dispatched.data(), rows,
+                                  cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
+                                  bzp.data(), static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(dispatched, expected);
 
   std::vector<std::int32_t> scalar(expected.size(), 0);
-  cpu_compute::detail::IntegerMatMul2DWithDot(
-      &cpu_compute::detail::IntegerDotU8S8Scalar, a.data(), a_signed, b.data(), b_signed,
+  ml_cpu_compute::detail::IntegerMatMul2DWithDot(
+      &ml_cpu_compute::detail::IntegerDotU8S8Scalar, a.data(), a_signed, b.data(), b_signed,
       scalar.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
       bzp.data(), static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(scalar, expected);
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8Avx2, a.data(), a_signed, b.data(), b_signed,
+    ml_cpu_compute::detail::IntegerMatMul2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8Avx2, a.data(), a_signed, b.data(), b_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
     if (rows == 1) {
       std::fill(native.begin(), native.end(), 0);
-      cpu_compute::detail::IntegerMatMulSkinnyMAvx2(a.data(), a_signed, b.data(), b_signed,
-                                                    native.data(), cols, depth, azp[0], bzp.data(),
-                                                    static_cast<std::int64_t>(bzp.size()));
+      ml_cpu_compute::detail::IntegerMatMulSkinnyMAvx2(
+          a.data(), a_signed, b.data(), b_signed, native.data(), cols, depth, azp[0], bzp.data(),
+          static_cast<std::int64_t>(bzp.size()));
       EXPECT_EQ(native, expected);
     }
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVXVNNI
-  if (cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8AvxVnni, a.data(), a_signed, b.data(), b_signed,
+    ml_cpu_compute::detail::IntegerMatMul2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8AvxVnni, a.data(), a_signed, b.data(), b_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVX512VNNI
-  if (cpu_compute::IntegerMatMul2DUsesVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8Avx512Vnni, a.data(), a_signed, b.data(), b_signed,
+    ml_cpu_compute::detail::IntegerMatMul2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8Avx512Vnni, a.data(), a_signed, b.data(), b_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#if defined(CPU_COMPUTE_HAVE_AVX512VNNI) && defined(CPU_COMPUTE_HAVE_AVX512BW)
-  if (rows == 1 && cpu_compute::CpuSupportsAvx512Vnni() && cpu_compute::CpuSupportsAvx512BW()) {
+#if defined(ML_CPU_COMPUTE_HAVE_AVX512VNNI) && defined(ML_CPU_COMPUTE_HAVE_AVX512BW)
+  if (rows == 1 && ml_cpu_compute::CpuSupportsAvx512Vnni() &&
+      ml_cpu_compute::CpuSupportsAvx512BW()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMulSkinnyMAvx512(a.data(), a_signed, b.data(), b_signed,
-                                                    native.data(), cols, depth, azp[0], bzp.data(),
-                                                    static_cast<std::int64_t>(bzp.size()));
+    ml_cpu_compute::detail::IntegerMatMulSkinnyMAvx512(
+        a.data(), a_signed, b.data(), b_signed, native.data(), cols, depth, azp[0], bzp.data(),
+        static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_NEON_DOTPROD
-  if (cpu_compute::CpuSupportsNeonDotProd()) {
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+  if (ml_cpu_compute::CpuSupportsNeonDotProd()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::GemmMatMulIntegerNeonDotProd(
+    ml_cpu_compute::GemmMatMulIntegerNeonDotProd(
         a.data(), a_signed, b.data(), b_signed, native.data(), static_cast<std::size_t>(rows),
         static_cast<std::size_t>(cols), static_cast<std::size_t>(depth), azp.data(), azp.size(),
         bzp.data(), bzp.size());
@@ -145,10 +146,10 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AMX_INT8
-  if (cpu_compute::AmxTileStateAvailable() && cpu_compute::CpuSupportsAmxInt8()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AMX_INT8
+  if (ml_cpu_compute::AmxTileStateAvailable() && ml_cpu_compute::CpuSupportsAmxInt8()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::GemmMatMulIntegerAmxInt8(
+    ml_cpu_compute::GemmMatMulIntegerAmxInt8(
         a.data(), a_signed, b.data(), b_signed, native.data(), static_cast<std::size_t>(rows),
         static_cast<std::size_t>(cols), static_cast<std::size_t>(depth), azp.data(), azp.size(),
         bzp.data(), bzp.size());
@@ -221,57 +222,57 @@ void Check4BitAllPaths(bool a_signed, bool b_signed, std::int64_t rows, std::int
   const std::vector<std::int32_t> expected = Reference4Bit(a, b, rows, cols, depth, azp, bzp);
 
   std::vector<std::int32_t> dispatched(expected.size(), 0);
-  cpu_compute::IntegerMatMul4Bit2D(packed_a.data(), a_signed, packed_b.data(), b_signed,
-                                   dispatched.data(), rows, cols, depth, azp.data(),
-                                   static_cast<std::int64_t>(azp.size()), bzp.data(),
-                                   static_cast<std::int64_t>(bzp.size()));
+  ml_cpu_compute::IntegerMatMul4Bit2D(packed_a.data(), a_signed, packed_b.data(), b_signed,
+                                      dispatched.data(), rows, cols, depth, azp.data(),
+                                      static_cast<std::int64_t>(azp.size()), bzp.data(),
+                                      static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(dispatched, expected);
 
   std::vector<std::int32_t> scalar(expected.size(), 0);
-  cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
-      &cpu_compute::detail::IntegerDotU8S8Scalar, packed_a.data(), a_signed, packed_b.data(),
+  ml_cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
+      &ml_cpu_compute::detail::IntegerDotU8S8Scalar, packed_a.data(), a_signed, packed_b.data(),
       b_signed, scalar.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
       bzp.data(), static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(scalar, expected);
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8Avx2, packed_a.data(), a_signed, packed_b.data(),
+    ml_cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8Avx2, packed_a.data(), a_signed, packed_b.data(),
         b_signed, native.data(), rows, cols, depth, azp.data(),
         static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVXVNNI
-  if (cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8AvxVnni, packed_a.data(), a_signed, packed_b.data(),
+    ml_cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8AvxVnni, packed_a.data(), a_signed, packed_b.data(),
         b_signed, native.data(), rows, cols, depth, azp.data(),
         static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVX512VNNI
-  if (cpu_compute::IntegerMatMul2DUsesVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
-        &cpu_compute::detail::IntegerDotU8S8Avx512Vnni, packed_a.data(), a_signed, packed_b.data(),
-        b_signed, native.data(), rows, cols, depth, azp.data(),
+    ml_cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
+        &ml_cpu_compute::detail::IntegerDotU8S8Avx512Vnni, packed_a.data(), a_signed,
+        packed_b.data(), b_signed, native.data(), rows, cols, depth, azp.data(),
         static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_NEON_DOTPROD
-  if (cpu_compute::CpuSupportsNeonDotProd()) {
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+  if (ml_cpu_compute::CpuSupportsNeonDotProd()) {
     std::vector<std::int32_t> native(expected.size(), 0);
-    cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
-        &cpu_compute::detail::IntegerDot4BitU8S8NeonDotProd, packed_a.data(), a_signed,
+    ml_cpu_compute::detail::IntegerMatMul4Bit2DWithDot(
+        &ml_cpu_compute::detail::IntegerDot4BitU8S8NeonDotProd, packed_a.data(), a_signed,
         packed_b.data(), b_signed, native.data(), rows, cols, depth, azp.data(),
         static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
@@ -331,61 +332,64 @@ TEST(IntegerVnniKernel, AccumulationWrapsModuloInt32) {
   const std::vector<std::int32_t> zero = {0};
 
   std::vector<std::int32_t> out(1, 0);
-  cpu_compute::IntegerMatMul2D(a.data(), /*a_signed=*/false, b.data(), /*b_signed=*/false,
-                               out.data(), 1, 1, depth, zero.data(), 1, zero.data(), 1);
+  ml_cpu_compute::IntegerMatMul2D(a.data(), /*a_signed=*/false, b.data(), /*b_signed=*/false,
+                                  out.data(), 1, 1, depth, zero.data(), 1, zero.data(), 1);
 
   const std::uint32_t wrapped = static_cast<std::uint32_t>(65025ULL * depth);
   EXPECT_EQ(std::bit_cast<std::uint32_t>(out[0]), wrapped);
-#ifdef CPU_COMPUTE_HAVE_AVXVNNI
-  if (cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
     const std::vector<std::int8_t> signed_b(static_cast<std::size_t>(depth), 127);
     const std::uint32_t dot_expected = static_cast<std::uint32_t>(255ULL * 127 * depth);
     EXPECT_EQ(std::bit_cast<std::uint32_t>(
-                  cpu_compute::detail::IntegerDotU8S8AvxVnni(a.data(), signed_b.data(), depth)),
+                  ml_cpu_compute::detail::IntegerDotU8S8AvxVnni(a.data(), signed_b.data(), depth)),
               dot_expected);
   }
 #endif
 }
 
 TEST(IntegerVnniKernel, AvxVnniAvailabilityIsHostAndBuildGated) {
-#ifdef CPU_COMPUTE_HAVE_AVXVNNI
-  EXPECT_EQ(cpu_compute::IntegerMatMul2DUsesAvxVnni(), cpu_compute::CpuSupportsAvxVnni());
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  EXPECT_EQ(ml_cpu_compute::IntegerMatMul2DUsesAvxVnni(), ml_cpu_compute::CpuSupportsAvxVnni());
 #else
-  EXPECT_FALSE(cpu_compute::IntegerMatMul2DUsesAvxVnni());
+  EXPECT_FALSE(ml_cpu_compute::IntegerMatMul2DUsesAvxVnni());
 #endif
 }
 
 TEST(IntegerVnniKernel, SkinnyPlannerPreservesPackedBoundary) {
-  using namespace cpu_compute;
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(3, 4096, 4096),
-            cpu_compute::IntegerMatMulPlan::kPacked);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(2, 31, 128),
-            cpu_compute::IntegerMatMulPlan::kPacked);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(2, 32, 3),
-            cpu_compute::IntegerMatMulPlan::kPacked);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(0, 32, 4),
-            cpu_compute::IntegerMatMulPlan::kPacked);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(2, 0, 4), cpu_compute::IntegerMatMulPlan::kPacked);
-  auto expected = cpu_compute::IntegerMatMulPlan::kPacked;
-#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
-    expected = cpu_compute::IntegerMatMulPlan::kNoPackAvx2;
+  using namespace ml_cpu_compute;
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(3, 4096, 4096),
+            ml_cpu_compute::IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(2, 31, 128),
+            ml_cpu_compute::IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(2, 32, 3),
+            ml_cpu_compute::IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(0, 32, 4),
+            ml_cpu_compute::IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(2, 0, 4),
+            ml_cpu_compute::IntegerMatMulPlan::kPacked);
+  auto expected = ml_cpu_compute::IntegerMatMulPlan::kPacked;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+    expected = ml_cpu_compute::IntegerMatMulPlan::kNoPackAvx2;
   }
 #endif
-#if defined(CPU_COMPUTE_HAVE_AVX512VNNI) && defined(CPU_COMPUTE_HAVE_AVX512BW)
-  if (cpu_compute::CpuSupportsAvx512Vnni() && cpu_compute::CpuSupportsAvx512BW()) {
-    expected = cpu_compute::IntegerMatMulPlan::kNoPackVnni;
+#if defined(ML_CPU_COMPUTE_HAVE_AVX512VNNI) && defined(ML_CPU_COMPUTE_HAVE_AVX512BW)
+  if (ml_cpu_compute::CpuSupportsAvx512Vnni() && ml_cpu_compute::CpuSupportsAvx512BW()) {
+    expected = ml_cpu_compute::IntegerMatMulPlan::kNoPackVnni;
   }
 #endif
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(1, 4096, 4096), expected);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(2, 32, 4), expected);
-  EXPECT_EQ(cpu_compute::SelectIntegerMatMulPlan(2, 4096, 4096), expected);
-  EXPECT_STREQ(cpu_compute::IntegerMatMulPlanName(cpu_compute::IntegerMatMulPlan::kPacked),
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(1, 4096, 4096), expected);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(2, 32, 4), expected);
+  EXPECT_EQ(ml_cpu_compute::SelectIntegerMatMulPlan(2, 4096, 4096), expected);
+  EXPECT_STREQ(ml_cpu_compute::IntegerMatMulPlanName(ml_cpu_compute::IntegerMatMulPlan::kPacked),
                "packed");
-  EXPECT_STREQ(cpu_compute::IntegerMatMulPlanName(cpu_compute::IntegerMatMulPlan::kNoPackAvx2),
-               "no-pack-avx2");
-  EXPECT_STREQ(cpu_compute::IntegerMatMulPlanName(cpu_compute::IntegerMatMulPlan::kNoPackVnni),
-               "no-pack-vnni");
+  EXPECT_STREQ(
+      ml_cpu_compute::IntegerMatMulPlanName(ml_cpu_compute::IntegerMatMulPlan::kNoPackAvx2),
+      "no-pack-avx2");
+  EXPECT_STREQ(
+      ml_cpu_compute::IntegerMatMulPlanName(ml_cpu_compute::IntegerMatMulPlan::kNoPackVnni),
+      "no-pack-vnni");
 }
 
 TEST(IntegerVnniKernel, SkinnySignednessZeroPointsAndEveryColumnTail) {
@@ -433,7 +437,7 @@ TEST(IntegerVnniKernel, SkinnyVectorAccumulatorsWrap) {
 // pool in this differential test binary.
 struct InlineBlockExecutor {
   static void Run(void *, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     for (std::int64_t block = num_blocks; block > 0; --block) {
       task(task_context, block - 1);
     }
@@ -445,7 +449,7 @@ struct SkinnyBlockExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<SkinnyBlockExecutor *>(context);
     ++self.calls;
     self.blocks += num_blocks;
@@ -457,19 +461,20 @@ struct SkinnyBlockExecutor {
 };
 
 TEST(IntegerVnniKernel, SkinnySchedulingIsDisjointAndDoesNotNest) {
-  using namespace cpu_compute;
-  if (cpu_compute::SelectIntegerMatMulPlan(2, 1025, 1025) ==
-      cpu_compute::IntegerMatMulPlan::kPacked) {
+  using namespace ml_cpu_compute;
+  if (ml_cpu_compute::SelectIntegerMatMulPlan(2, 1025, 1025) ==
+      ml_cpu_compute::IntegerMatMulPlan::kPacked) {
     GTEST_SKIP() << "No streaming ISA compiled or available";
   }
   SkinnyBlockExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &SkinnyBlockExecutor::Run, nullptr};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &SkinnyBlockExecutor::Run, nullptr};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const std::vector<std::uint8_t> a(2 * 1025, 253), b(1025 * 1025, 129);
   std::vector<std::int32_t> c(2 * 1025, 0);
   const std::int32_t az[] = {0, 255}, bz = -128;
   const auto run = [&](std::int64_t n, std::int64_t k) {
-    cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), 2, n, k, az, 2, &bz, 1);
+    ml_cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), 2, n, k, az, 2, &bz,
+                                    1);
   };
   run(32, 4);
   EXPECT_EQ(executor.calls, 0);
@@ -479,15 +484,15 @@ TEST(IntegerVnniKernel, SkinnySchedulingIsDisjointAndDoesNotNest) {
   EXPECT_EQ(c, Reference(a, false, b, true, 2, 1025, 1025, {0, 255}, {-128}));
   const auto calls = executor.calls;
   {
-    cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
     run(1025, 1025);
   }
   EXPECT_EQ(executor.calls, calls);
 }
 
 TEST(IntegerVnniKernel, ParallelExecutionMatchesSerialReferenceAcrossShapes) {
-  cpu_compute::ExecutionExecutorView view{nullptr, 8, &InlineBlockExecutor::Run, nullptr};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{nullptr, 8, &InlineBlockExecutor::Run, nullptr};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
   std::mt19937 rng(4242);
   std::uniform_int_distribution<int> byte(0, 255);
@@ -516,14 +521,14 @@ TEST(IntegerVnniKernel, ParallelExecutionMatchesSerialReferenceAcrossShapes) {
 TEST(IntegerVnniKernel, HandlesZeroDepth) {
   const std::vector<std::int32_t> zero = {0};
   std::int32_t output = 1;
-  cpu_compute::IntegerMatMul2D(nullptr, true, nullptr, true, &output, 1, 1, 0, zero.data(), 1,
-                               zero.data(), 1);
+  ml_cpu_compute::IntegerMatMul2D(nullptr, true, nullptr, true, &output, 1, 1, 0, zero.data(), 1,
+                                  zero.data(), 1);
   EXPECT_EQ(output, 0);
 }
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
 TEST(IntegerVnniKernel, Avx2DotAvoidsPairwiseSaturation) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is not available on this CPU";
   }
   // 15 and below never reach the 128-bit remainder step; 16 through 31 cover
@@ -540,15 +545,15 @@ TEST(IntegerVnniKernel, Avx2DotAvoidsPairwiseSaturation) {
       b[static_cast<std::size_t>(index)] = index % 2 == 0 ? std::int8_t{127} : std::int8_t{-128};
     }
     const std::int32_t expected =
-        cpu_compute::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth);
-    EXPECT_EQ(cpu_compute::detail::IntegerDotU8S8Avx2(a.data(), b.data(), depth), expected);
-    EXPECT_EQ(cpu_compute::detail::IntegerDotU8S8Avx2ShortTail(a.data(), b.data(), depth),
+        ml_cpu_compute::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth);
+    EXPECT_EQ(ml_cpu_compute::detail::IntegerDotU8S8Avx2(a.data(), b.data(), depth), expected);
+    EXPECT_EQ(ml_cpu_compute::detail::IntegerDotU8S8Avx2ShortTail(a.data(), b.data(), depth),
               expected);
   }
 }
 
 TEST(IntegerVnniKernel, Avx2BlockedKernelHandlesOutputAndDepthTails) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is not available on this CPU";
   }
   constexpr std::int64_t rows = 3;
@@ -585,24 +590,24 @@ TEST(IntegerPacked4Bit, IgnoresUnusedFinalHighNibble) {
   a.back() = static_cast<std::uint8_t>((a.back() & 0x0f) | 0xf0);
   b.back() = static_cast<std::uint8_t>((b.back() & 0x0f) | 0x80);
   std::int32_t output = 0;
-  cpu_compute::IntegerMatMul4Bit2D(a.data(), false, b.data(), false, &output, 1, 1, 3, zero.data(),
-                                   1, zero.data(), 1);
+  ml_cpu_compute::IntegerMatMul4Bit2D(a.data(), false, b.data(), false, &output, 1, 1, 3,
+                                      zero.data(), 1, zero.data(), 1);
   EXPECT_EQ(output, 2 * 5 + 3 * 6 + 4 * 7);
 }
 
 TEST(IntegerPacked4Bit, HandlesZeroDepthAndModuloInt32Correction) {
   const std::vector<std::int32_t> zero = {0};
   std::int32_t output = 1;
-  cpu_compute::IntegerMatMul4Bit2D(nullptr, true, nullptr, true, &output, 1, 1, 0, zero.data(), 1,
-                                   zero.data(), 1);
+  ml_cpu_compute::IntegerMatMul4Bit2D(nullptr, true, nullptr, true, &output, 1, 1, 0, zero.data(),
+                                      1, zero.data(), 1);
   EXPECT_EQ(output, 0);
 
   const std::vector<std::uint8_t> packed = Pack4Bit({0});
   const std::vector<std::int32_t> large_negative_zero_point = {-2000000000};
   const std::uint32_t expected = static_cast<std::uint32_t>(2000000000LL * 2000000000LL);
-  cpu_compute::IntegerMatMul4Bit2D(packed.data(), false, packed.data(), false, &output, 1, 1, 1,
-                                   large_negative_zero_point.data(), 1,
-                                   large_negative_zero_point.data(), 1);
+  ml_cpu_compute::IntegerMatMul4Bit2D(packed.data(), false, packed.data(), false, &output, 1, 1, 1,
+                                      large_negative_zero_point.data(), 1,
+                                      large_negative_zero_point.data(), 1);
   EXPECT_EQ(std::bit_cast<std::uint32_t>(output), expected);
 }
 

@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/checked_arithmetic.h"
-#include "cpu_compute/logical/logical.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/logical/logical.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -67,7 +67,7 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults() {
-  const cpu_compute::NotExecutionTuning defaults;
+  const ml_cpu_compute::NotExecutionTuning defaults;
   return {MakeTuningKey(),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
@@ -79,7 +79,7 @@ rt_ns::KernelTuningParameters MakeTuningDefaults() {
 } // namespace
 
 struct NotKernel::Tuning {
-  cpu_compute::NotExecutionTuning value;
+  ml_cpu_compute::NotExecutionTuning value;
 };
 
 NotKernel::NotKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
@@ -117,7 +117,7 @@ void NotKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 
 Tensor NotKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
   const RuntimeExecutionScope execution_scope;
-  const std::size_t y_n_bytes = cpu_compute::CheckedByteSize(
+  const std::size_t y_n_bytes = ml_cpu_compute::CheckedByteSize(
       static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Not input")), x.element_size(),
       "Not", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
@@ -144,10 +144,10 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::int64_t n = x.element_count();
   const std::uint8_t *px = x.AsBool();
   std::uint8_t *py = output.AsBool();
-  const cpu_compute::NotExecutionTuning default_tuning;
-  const cpu_compute::NotExecutionTuning &tuning =
+  const ml_cpu_compute::NotExecutionTuning default_tuning;
+  const ml_cpu_compute::NotExecutionTuning &tuning =
       tuning_ != nullptr ? tuning_->value : default_tuning;
-  cpu_compute::NotBoolWithTuning(px, py, static_cast<std::size_t>(n), tuning);
+  ml_cpu_compute::NotBoolWithTuning(px, py, static_cast<std::size_t>(n), tuning);
 }
 
 void NotKernel::Run(RuntimeContext &rt) {

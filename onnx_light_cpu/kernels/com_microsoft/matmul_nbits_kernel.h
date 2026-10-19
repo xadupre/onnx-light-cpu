@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpu_compute/com_microsoft/matmul_nbits.h"
+#include "ml_cpu_compute/com_microsoft/matmul_nbits.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -84,7 +84,8 @@ private:
               ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt) const;
 
   MatMulNBitsAttributes attributes_;
-  cpu_compute::MatMulNBitsExecutionTuning tuning_ = cpu_compute::kDefaultMatMulNBitsExecutionTuning;
+  ml_cpu_compute::MatMulNBitsExecutionTuning tuning_ =
+      ml_cpu_compute::kDefaultMatMulNBitsExecutionTuning;
   std::unique_ptr<const PreparedInt4State> prepared_int4_;
   std::unique_ptr<const PreparedInt4State> prepared_int8_;
   std::unique_ptr<const PreparedEncodedState> prepared_encoded_;

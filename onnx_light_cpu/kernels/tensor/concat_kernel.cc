@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/tensor/concat.h"
+#include "ml_cpu_compute/tensor/concat.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -72,7 +72,7 @@ struct ConcatPlan {
   int64_t outer = 0;
   std::size_t row_bytes = 0;
   std::size_t bytes = 0;
-  std::vector<cpu_compute::ConcatInput> inputs;
+  std::vector<ml_cpu_compute::ConcatInput> inputs;
 };
 
 template <typename GetInput>
@@ -142,7 +142,7 @@ void Copy(const ConcatPlan &plan, Tensor &output) {
       Invalid("output must not overlap any input.");
     }
   }
-  cpu_compute::ConcatCopy(plan.inputs, output.mutable_bytes(), plan.outer, plan.row_bytes);
+  ml_cpu_compute::ConcatCopy(plan.inputs, output.mutable_bytes(), plan.outer, plan.row_bytes);
 }
 
 Tensor Allocate(const ConcatPlan &plan, rt_ns::RuntimeContext *rt,

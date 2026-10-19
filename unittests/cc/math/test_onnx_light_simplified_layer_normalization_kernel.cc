@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/normalization.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/normalization.h"
 #include "onnx_light_cpu/backend_test/cases/math/simplified_layer_normalization_reference.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
@@ -246,11 +246,11 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, RecordsSelectedPathAndBroadcas
       kernel(x, scale, axis, 1.0e-6F, 1, false, &context);
       const auto paths = context.GetKernelUsage();
       ASSERT_EQ(paths.size(), 1);
-      const std::string path = type == DataType::FLOAT     ? "float32/normalization"
-                               : type == DataType::FLOAT16 ? cpu_compute::NormalizationFloat16Path()
-                               : type == DataType::DOUBLE
-                                   ? cpu_compute::NormalizationFloat64Path()
-                                   : cpu_compute::NormalizationBFloat16Path();
+      const std::string path =
+          type == DataType::FLOAT     ? "float32/normalization"
+          : type == DataType::FLOAT16 ? ml_cpu_compute::NormalizationFloat16Path()
+          : type == DataType::DOUBLE  ? ml_cpu_compute::NormalizationFloat64Path()
+                                      : ml_cpu_compute::NormalizationBFloat16Path();
       EXPECT_EQ(paths[0], std::string(SimplifiedLayerNormalizationKernel::kName) + "/" + path +
                               (axis == -1 ? "/row-scale" : "/broadcast-blocks"));
       context.ClearKernelUsage();
@@ -283,7 +283,7 @@ struct InlineExecutor {
   std::int64_t calls = 0;
   std::int64_t blocks = 0;
   static void Run(void *context, std::int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.calls;
     self.blocks = count;
@@ -295,8 +295,8 @@ struct InlineExecutor {
 
 TEST(OnnxLightSimplifiedLayerNormalizationKernel, RuntimeOwnedSchedulingAndNestedSuppression) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {1, 128}), Payload(DataType::FLOAT, {128}));
   EXPECT_EQ(executor.calls, 0);
   Compare(Payload(DataType::FLOAT, {256, 1024}), Payload(DataType::FLOAT, {1024}));
@@ -305,7 +305,7 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, RuntimeOwnedSchedulingAndNeste
   EXPECT_LE(executor.blocks, 256);
   const auto previous = executor.calls;
   {
-    cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
     Compare(Payload(DataType::FLOAT, {256, 1024}), Payload(DataType::FLOAT, {1024}));
   }
   EXPECT_EQ(executor.calls, previous);
@@ -317,7 +317,7 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, RuntimeOwnedSchedulingAndNeste
     Compare(Payload(type, {4, 64, 1025}), Payload(type, {4, 1, 1025}));
     EXPECT_GT(executor.calls, calls);
     const auto parallel_calls = executor.calls;
-    cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
     Compare(Payload(type, {4, 64, 1025}), Payload(type, {4, 1, 1025}));
     EXPECT_EQ(executor.calls, parallel_calls);
   }

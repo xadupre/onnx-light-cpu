@@ -684,7 +684,7 @@ require measurements on dedicated hardware.
    * - P1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
        ``GroupedGemm`` interfaces in
-       ``cpu_compute/include/cpu_compute/math/gemm/gemm_plan.h``.
+       ``ml_cpu_compute/include/ml_cpu_compute/math/gemm/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
      - P0.
@@ -1094,7 +1094,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - PR07.4, PR07.5
      - Implemented. A dedicated ``gemm/amx/gemm_amx_bf16`` translation unit
        compiled with ``-mamx-tile -mamx-bf16`` (guarded by
-       ``CPU_COMPUTE_HAVE_AMX_BF16``) adds ``GemmMicroTile_AMXBF16``, a
+       ``ML_CPU_COMPUTE_HAVE_AMX_BF16``) adds ``GemmMicroTile_AMXBF16``, a
        native member of the BFLOAT16 micro-kernel family sharing the
        ``GemmBf16MicroTile`` signature so the PR07.4
        ``GemmBf16NativeGeneral`` driver, BFLOAT16 ``A`` packing (including
@@ -1123,7 +1123,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        -- a baseline zero-extend (``vmovl_u16``) and 16-bit left shift
        (``vshlq_n_u32``) -- and, when the ``vld1q_f16`` / ``vcvt_f32_f16``
        (``FCVTL``) intrinsics compile (probed as
-       ``CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmConvertFloat16ToFloat32_NEON``.
+       ``ML_CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmConvertFloat16ToFloat32_NEON``.
        Both widen eight contiguous half-precision patterns per iteration with an
        exact scalar tail that reuses ``Bfloat16BitsToFloat`` /
        ``Float16BitsToFloat`` so the vectorized result is bit-identical to the
@@ -1145,7 +1145,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Implemented. The NEON translation unit (``gemm/arm/gemm_kernel_neon``)
        adds ``GemmMicroTile_NEON_BF16`` (always, baseline NEON) and, when the
        FP16 vector load/convert intrinsics compile
-       (``CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmMicroTile_NEON_FP16`` -- new
+       (``ML_CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmMicroTile_NEON_FP16`` -- new
        members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
        ``GemmBf16MicroTile`` / ``GemmFp16MicroTile`` signatures so the PR07.4
        / PR07.3 ``GemmBf16NativeGeneral`` / ``GemmFp16NativeGeneral`` drivers,

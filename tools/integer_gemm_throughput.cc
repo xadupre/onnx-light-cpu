@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
-#include "cpu_compute/simd_level.h"
+#include "ml_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <array>
@@ -71,24 +71,24 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "Dimensions must be in [1, 8192].\n");
     return 1;
   }
-  using namespace cpu_compute;
-  cpu_compute::detail::IntegerVnniDotFn dot = &cpu_compute::detail::IntegerDotU8S8Scalar;
+  using namespace ml_cpu_compute;
+  ml_cpu_compute::detail::IntegerVnniDotFn dot = &ml_cpu_compute::detail::IntegerDotU8S8Scalar;
   const char *isa = "scalar";
-#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
-    dot = &cpu_compute::detail::IntegerDotU8S8Avx2;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+    dot = &ml_cpu_compute::detail::IntegerDotU8S8Avx2;
     isa = "avx2";
   }
 #endif
-#ifdef CPU_COMPUTE_HAVE_AVXVNNI
-  if (cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
-    dot = &cpu_compute::detail::IntegerDotU8S8AvxVnni;
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+    dot = &ml_cpu_compute::detail::IntegerDotU8S8AvxVnni;
     isa = "avxvnni";
   }
 #endif
-#ifdef CPU_COMPUTE_HAVE_AVX512VNNI
-  if (cpu_compute::IntegerMatMul2DUsesVnni()) {
-    dot = &cpu_compute::detail::IntegerDotU8S8Avx512Vnni;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+  if (ml_cpu_compute::IntegerMatMul2DUsesVnni()) {
+    dot = &ml_cpu_compute::detail::IntegerDotU8S8Avx512Vnni;
     isa = "avx512vnni";
   }
 #endif
@@ -106,16 +106,16 @@ int main(int argc, char **argv) {
     return 1;
   }
   const auto pack = [&] {
-    cpu_compute::detail::PackS8ColRange(b.data(), true, 0, k, n, packed_b.data(), sums.data(), 0,
-                                        n);
+    ml_cpu_compute::detail::PackS8ColRange(b.data(), true, 0, k, n, packed_b.data(), sums.data(), 0,
+                                           n);
   };
   const auto packed = [&] {
-    cpu_compute::detail::IntegerMatMul2DWithDot(dot, a.data(), false, b.data(), true,
-                                                expected.data(), m, n, k, &az, 1, &bz, 1);
+    ml_cpu_compute::detail::IntegerMatMul2DWithDot(dot, a.data(), false, b.data(), true,
+                                                   expected.data(), m, n, k, &az, 1, &bz, 1);
   };
   const auto dispatched = [&] {
-    cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), m, n, k, &az, 1, &bz,
-                                 1);
+    ml_cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), m, n, k, &az, 1, &bz,
+                                    1);
   };
   packed();
   dispatched();
@@ -123,20 +123,20 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "Dispatched output differs from packed output.\n");
     return 1;
   }
-#if defined(CPU_COMPUTE_HAVE_AVX2_INTEGER) && defined(CPU_COMPUTE_HAVE_AVXVNNI)
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
-      cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
-    const cpu_compute::detail::IntegerVnniDotFn avx2_dot =
-        k % 32 == 0 ? &cpu_compute::detail::IntegerDotU8S8Avx2
-                    : &cpu_compute::detail::IntegerDotU8S8Avx2ShortTail;
+#if defined(ML_CPU_COMPUTE_HAVE_AVX2_INTEGER) && defined(ML_CPU_COMPUTE_HAVE_AVXVNNI)
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2 &&
+      ml_cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+    const ml_cpu_compute::detail::IntegerVnniDotFn avx2_dot =
+        k % 32 == 0 ? &ml_cpu_compute::detail::IntegerDotU8S8Avx2
+                    : &ml_cpu_compute::detail::IntegerDotU8S8Avx2ShortTail;
     const auto avx2 = [&] {
-      cpu_compute::detail::IntegerMatMul2DWithDot(avx2_dot, a.data(), false, b.data(), true,
-                                                  c.data(), m, n, k, &az, 1, &bz, 1);
+      ml_cpu_compute::detail::IntegerMatMul2DWithDot(avx2_dot, a.data(), false, b.data(), true,
+                                                     c.data(), m, n, k, &az, 1, &bz, 1);
     };
     const auto avxvnni = [&] {
-      cpu_compute::detail::IntegerMatMul2DWithDot(&cpu_compute::detail::IntegerDotU8S8AvxVnni,
-                                                  a.data(), false, b.data(), true, c.data(), m, n,
-                                                  k, &az, 1, &bz, 1);
+      ml_cpu_compute::detail::IntegerMatMul2DWithDot(&ml_cpu_compute::detail::IntegerDotU8S8AvxVnni,
+                                                     a.data(), false, b.data(), true, c.data(), m,
+                                                     n, k, &az, 1, &bz, 1);
     };
     avx2();
     if (c != expected) {
@@ -166,12 +166,13 @@ int main(int argc, char **argv) {
   std::printf("M=%lld N=%lld K=%lld dtype=u8s8 az=%d bz=%d threads=1 dot_isa=%s\n",
               static_cast<long long>(m), static_cast<long long>(n), static_cast<long long>(k), az,
               bz, isa);
-  std::printf("plan=%s packed_b_bytes=%lld\n",
-              cpu_compute::IntegerMatMulPlanName(cpu_compute::SelectIntegerMatMulPlan(m, n, k)),
-              static_cast<long long>(cpu_compute::SelectIntegerMatMulPlan(m, n, k) ==
-                                             cpu_compute::IntegerMatMulPlan::kPacked
-                                         ? n * k
-                                         : 0));
+  std::printf(
+      "plan=%s packed_b_bytes=%lld\n",
+      ml_cpu_compute::IntegerMatMulPlanName(ml_cpu_compute::SelectIntegerMatMulPlan(m, n, k)),
+      static_cast<long long>(ml_cpu_compute::SelectIntegerMatMulPlan(m, n, k) ==
+                                     ml_cpu_compute::IntegerMatMulPlan::kPacked
+                                 ? n * k
+                                 : 0));
   std::printf("pack_b_seconds=%.9f dot_seconds=%.9f packed_total_seconds=%.9f "
               "dispatched_seconds=%.9f\n",
               pack_seconds, dot_seconds, packed_seconds, dispatched_seconds);

@@ -6,9 +6,9 @@
 
 Exposes :func:`benchmark_processor_performance`, which measures effective
 memory bandwidth/latency (see
-``cpu_compute/memory_traffic_profile.h``)
+``ml_cpu_compute/memory_traffic_profile.h``)
 and register-resident arithmetic throughput (see
-``cpu_compute/compute_arithmetic_profile.h``) and returns one
+``ml_cpu_compute/compute_arithmetic_profile.h``) and returns one
 immutable, versioned :class:`ProcessorPerformanceProfile`.
 
 This module never runs a benchmark on import: the expensive measurement only

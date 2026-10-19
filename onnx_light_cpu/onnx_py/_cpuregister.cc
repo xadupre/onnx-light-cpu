@@ -9,7 +9,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "ml_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -85,8 +85,8 @@ NB_MODULE(_cpuregister, m) {
   m.def(
       "integer_matmul_plan",
       [](std::int64_t rows, std::int64_t cols, std::int64_t depth) {
-        return cpu_compute::IntegerMatMulPlanName(
-            cpu_compute::SelectIntegerMatMulPlan(rows, cols, depth));
+        return ml_cpu_compute::IntegerMatMulPlanName(
+            ml_cpu_compute::SelectIntegerMatMulPlan(rows, cols, depth));
       },
       nb::arg("rows"), nb::arg("cols"), nb::arg("depth"),
       "Returns the byte MatMulInteger packed/no-pack plan for this build and CPU.");

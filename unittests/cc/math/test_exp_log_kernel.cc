@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <gtest/gtest.h>
 
@@ -23,7 +23,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -39,7 +39,7 @@ struct ThreadedExecutor {
   std::atomic<std::int64_t> callbacks{0};
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadedExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -58,33 +58,33 @@ struct ThreadedExecutor {
 };
 
 struct PlanningExecutor {
-  cpu_compute::ExecutionWorkCost observed_cost{};
+  ml_cpu_compute::ExecutionWorkCost observed_cost{};
   std::int64_t plans = 0;
 
-  static cpu_compute::ExecutionParallelPlan Plan(void *context, std::int64_t,
-                                                 const cpu_compute::ExecutionWorkCost &cost,
-                                                 std::int64_t, std::int64_t) {
+  static ml_cpu_compute::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                    const ml_cpu_compute::ExecutionWorkCost &cost,
+                                                    std::int64_t, std::int64_t) {
     auto &self = *static_cast<PlanningExecutor *>(context);
     self.observed_cost = cost;
     ++self.plans;
     return {1, 1};
   }
 
-  static void Run(void *, std::int64_t, void *, cpu_compute::ExecutionBlockFn) {}
+  static void Run(void *, std::int64_t, void *, ml_cpu_compute::ExecutionBlockFn) {}
 };
 
 std::size_t SelectedExpLogFloat32Lanes() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-  const auto level = cpu_compute::DetectSimdLevel();
-#ifdef CPU_COMPUTE_HAVE_AVX512
-  if (level >= cpu_compute::SimdLevel::kAVX512) {
+  const auto level = ml_cpu_compute::DetectSimdLevel();
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+  if (level >= ml_cpu_compute::SimdLevel::kAVX512) {
     return 16;
   }
 #endif
-  if (level >= cpu_compute::SimdLevel::kAVX2) {
+  if (level >= ml_cpu_compute::SimdLevel::kAVX2) {
     return 8;
   }
-  if (level >= cpu_compute::SimdLevel::kSSE2) {
+  if (level >= ml_cpu_compute::SimdLevel::kSSE2) {
     return 4;
   }
 #endif
@@ -179,12 +179,12 @@ std::uint16_t FloatToBFloat16(float value) {
 
 TEST(ExpFloat32, EmptyInput) {
   float dummy = 1.0f;
-  cpu_compute::ExpFloat32(&dummy, &dummy, 0);
+  ml_cpu_compute::ExpFloat32(&dummy, &dummy, 0);
 }
 
-#ifdef CPU_COMPUTE_HAVE_AVX512
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
 TEST(SigmoidFloat32AVX512, TailsUnalignedInPlaceAndSpecialValues) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is unavailable";
   }
   const float inf = std::numeric_limits<float>::infinity();
@@ -206,7 +206,7 @@ TEST(SigmoidFloat32AVX512, TailsUnalignedInPlaceAndSpecialValues) {
         input[i + 1] = corpus[i % corpus.size()];
       }
       float *result = in_place ? input.data() + 1 : output.data() + 1;
-      cpu_compute::SigmoidFloat32_AVX512(input.data() + 1, result, count);
+      ml_cpu_compute::SigmoidFloat32_AVX512(input.data() + 1, result, count);
       for (std::size_t i = 0; i < count; ++i) {
         const double x = corpus[i % corpus.size()];
         const float expected = static_cast<float>(1.0 / (1.0 + std::exp(-x)));
@@ -238,7 +238,7 @@ void ExpectPowResult(float actual, float expected) {
 }
 
 TEST(PowFloat32AVX512, IntegerMixedAndExceptionalLanesWithAliasing) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is unavailable";
   }
   const float inf = std::numeric_limits<float>::infinity();
@@ -262,7 +262,7 @@ TEST(PowFloat32AVX512, IntegerMixedAndExceptionalLanesWithAliasing) {
                          : alias == 2 ? exponent.data()
                                       : output.data()) +
                         1;
-        cpu_compute::PowFloat32_AVX512(base.data() + 1, exponent.data() + 1, result, count);
+        ml_cpu_compute::PowFloat32_AVX512(base.data() + 1, exponent.data() + 1, result, count);
         for (std::size_t i = 0; i < count; ++i) {
           SCOPED_TRACE(i);
           ExpectPowResult(result[i], expected[i]);
@@ -278,8 +278,8 @@ TEST(PowFloat32AVX512, IntegerMixedAndExceptionalLanesWithAliasing) {
           exponent[i + 1] = exponents[i % (integers_only ? 6 : exponents.size())];
           expected[i] = std::pow(base, exponent[i + 1]);
         }
-        cpu_compute::PowFloat32LeftScalar_AVX512(base, exponent.data() + 1, exponent.data() + 1,
-                                                 count);
+        ml_cpu_compute::PowFloat32LeftScalar_AVX512(base, exponent.data() + 1, exponent.data() + 1,
+                                                    count);
         for (std::size_t i = 0; i < count; ++i) {
           SCOPED_TRACE(::testing::Message() << "base=" << base << " count=" << count << " i=" << i);
           ExpectPowResult(exponent[i + 1], expected[i]);
@@ -292,10 +292,10 @@ TEST(PowFloat32AVX512, IntegerMixedAndExceptionalLanesWithAliasing) {
 }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
-      !cpu_compute::CpuSupportsFma()) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2+FMA is unavailable";
   }
   std::vector<float> values = {-10.0f,
@@ -312,7 +312,7 @@ TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
                                std::numeric_limits<float>::quiet_NaN(),
                                -2.5f};
   const std::vector<float> input = values;
-  cpu_compute::SigmoidFloat32_AVX2_FMA(values.data(), values.data(), values.size());
+  ml_cpu_compute::SigmoidFloat32_AVX2_FMA(values.data(), values.data(), values.size());
   for (std::size_t index = 0; index < values.size(); ++index) {
     const float expected = 1.0f / (1.0f + std::exp(-input[index]));
     if (std::isnan(expected)) {
@@ -324,8 +324,8 @@ TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
 }
 
 TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
-      !cpu_compute::CpuSupportsFma()) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2+FMA is unavailable";
   }
   constexpr std::size_t rows = 3;
@@ -335,7 +335,7 @@ TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
     input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.375f;
   }
   std::vector<float> output(input.size());
-  cpu_compute::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), rows, columns);
+  ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), rows, columns);
 
   for (std::size_t row = 0; row < rows; ++row) {
     const float *row_input = input.data() + row * columns;
@@ -360,15 +360,15 @@ TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {
   std::vector<float> input(count, 1.0f);
   std::vector<float> output(count);
   PlanningExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
-                                          &PlanningExecutor::Plan};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
+                                             &PlanningExecutor::Plan};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
-  auto tuning = cpu_compute::kDefaultExpLogExecutionTuning;
+  auto tuning = ml_cpu_compute::kDefaultExpLogExecutionTuning;
   tuning.parallel_threshold_bytes = 1;
-  cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+  ml_cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
   const double exp_cycles = executor.observed_cost.compute_cycles;
-  cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+  ml_cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
   const double log_cycles = executor.observed_cost.compute_cycles;
   const double scale = 8.0 / static_cast<double>(SelectedExpLogFloat32Lanes());
   EXPECT_DOUBLE_EQ(exp_cycles, 1.5 * scale);
@@ -384,7 +384,7 @@ TEST(ExpFloat32, MatchesStdOverRange) {
     for (std::size_t i = 0; i < size; ++i) {
       in[i] = -20.0f + 40.0f * (static_cast<float>(i) / static_cast<float>(size));
     }
-    cpu_compute::ExpFloat32(in.data(), out.data(), size);
+    ml_cpu_compute::ExpFloat32(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       const float ref = std::exp(in[i]);
       EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-7f)
@@ -397,7 +397,7 @@ TEST(ExpFloat32, SpecialValues) {
   const float inf = std::numeric_limits<float>::infinity();
   std::vector<float> in = {0.0f, -0.0f, 1.0f, -1.0f, inf, -inf, std::nanf(""), 200.0f, -200.0f};
   std::vector<float> out(in.size(), -1.0f);
-  cpu_compute::ExpFloat32(in.data(), out.data(), in.size());
+  ml_cpu_compute::ExpFloat32(in.data(), out.data(), in.size());
   EXPECT_FLOAT_EQ(out[0], 1.0f);
   EXPECT_FLOAT_EQ(out[1], 1.0f);
   EXPECT_NEAR(out[2], std::exp(1.0f), 1e-4f);
@@ -486,7 +486,7 @@ TEST(ExpFloat32, TailsUnalignedAndClassification) {
   std::vector<float> storage(values.size() + 2, 0.0f);
   std::copy(values.begin(), values.end(), storage.begin() + 1);
   std::vector<float> output(values.size() + 2, -1.0f);
-  cpu_compute::ExpFloat32(storage.data() + 1, output.data() + 1, values.size());
+  ml_cpu_compute::ExpFloat32(storage.data() + 1, output.data() + 1, values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const float reference = std::exp(values[i]);
     EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
@@ -502,16 +502,16 @@ TEST(ExpFloat32, TailsUnalignedAndClassification) {
 TEST(ExpFloat32, VectorSubnormalRange) {
   const std::vector<float> values = {-90.0f, -95.0f, -100.0f, -103.0f};
   std::vector<float> output(values.size());
-  cpu_compute::ExpFloat32(values.data(), output.data(), values.size());
+  ml_cpu_compute::ExpFloat32(values.data(), output.data(), values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     EXPECT_EQ(Classify(output[i]), Classify(std::exp(values[i])));
   }
 }
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(ExpFloat32, Avx2FmaMatchesStd) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
-      !cpu_compute::CpuSupportsFma()) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2+FMA is unavailable";
   }
   std::vector<float> values = {-std::numeric_limits<float>::infinity(),
@@ -536,9 +536,9 @@ TEST(ExpFloat32, Avx2FmaMatchesStd) {
   std::copy(values.begin(), values.end(), input.begin() + 1);
   std::copy(values.begin(), values.end(), input.begin() + values.size() + 1);
   std::vector<float> output(input.size(), -1.0f);
-  cpu_compute::ExpFloat32_AVX2_FMA(input.data() + 1, output.data() + 1, values.size());
-  cpu_compute::ExpFloat32_AVX2_FMA(input.data() + values.size() + 1,
-                                   output.data() + values.size() + 1, values.size());
+  ml_cpu_compute::ExpFloat32_AVX2_FMA(input.data() + 1, output.data() + 1, values.size());
+  ml_cpu_compute::ExpFloat32_AVX2_FMA(input.data() + values.size() + 1,
+                                      output.data() + values.size() + 1, values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const float reference = std::exp(values[i]);
     EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
@@ -561,7 +561,7 @@ TEST(ExpFloat32, Avx2FmaMatchesStd) {
 
 TEST(LogFloat32, EmptyInput) {
   float dummy = 1.0f;
-  cpu_compute::LogFloat32(&dummy, &dummy, 0);
+  ml_cpu_compute::LogFloat32(&dummy, &dummy, 0);
   SUCCEED();
 }
 
@@ -572,7 +572,7 @@ TEST(LogFloat32, MatchesStdOverRange) {
     for (std::size_t i = 0; i < size; ++i) {
       in[i] = 1e-3f + 1000.0f * (static_cast<float>(i + 1) / static_cast<float>(size));
     }
-    cpu_compute::LogFloat32(in.data(), out.data(), size);
+    ml_cpu_compute::LogFloat32(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       const float ref = std::log(in[i]);
       EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-6f)
@@ -585,7 +585,7 @@ TEST(LogFloat32, SpecialValues) {
   const float inf = std::numeric_limits<float>::infinity();
   std::vector<float> in = {1.0f, 0.0f, -0.0f, -1.0f, inf, std::nanf("")};
   std::vector<float> out(in.size(), -1.0f);
-  cpu_compute::LogFloat32(in.data(), out.data(), in.size());
+  ml_cpu_compute::LogFloat32(in.data(), out.data(), in.size());
   EXPECT_FLOAT_EQ(out[0], 0.0f);
   EXPECT_EQ(out[1], -inf);
   EXPECT_EQ(out[2], -inf);
@@ -600,7 +600,7 @@ TEST(LogFloat32, TailsUnalignedAndClassification) {
   std::vector<float> storage(values.size() + 2, 1.0f);
   std::copy(values.begin(), values.end(), storage.begin() + 1);
   std::vector<float> output(values.size() + 2, 0.0f);
-  cpu_compute::LogFloat32(storage.data() + 1, output.data() + 1, values.size());
+  ml_cpu_compute::LogFloat32(storage.data() + 1, output.data() + 1, values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const float reference = std::log(values[i]);
     EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
@@ -619,30 +619,30 @@ TEST(LogFloat32, PositiveSubnormalCorpus) {
                                      2.0f * std::numeric_limits<float>::denorm_min(),
                                      0x1.fffffep-127f};
   std::vector<float> output(values.size());
-  cpu_compute::LogFloat32(values.data(), output.data(), values.size());
+  ml_cpu_compute::LogFloat32(values.data(), output.data(), values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     EXPECT_NEAR(output[i], std::log(values[i]), 2e-5f * std::fabs(std::log(values[i])) + 1e-6f);
   }
 }
 
-TEST(LogFloat32, DifferentialCorpus) { CheckLogFloat32Differential(&cpu_compute::LogFloat32); }
+TEST(LogFloat32, DifferentialCorpus) { CheckLogFloat32Differential(&ml_cpu_compute::LogFloat32); }
 
-#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(LogFloat32, Avx2FmaDifferentialCorpus) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
-      !cpu_compute::CpuSupportsFma()) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2+FMA is unavailable";
   }
-  CheckLogFloat32Differential(&cpu_compute::LogFloat32_AVX2_FMA);
+  CheckLogFloat32Differential(&ml_cpu_compute::LogFloat32_AVX2_FMA);
 }
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVX512
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
 TEST(LogFloat32, Avx512DifferentialCorpus) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is unavailable";
   }
-  CheckLogFloat32Differential(&cpu_compute::LogFloat32_AVX512);
+  CheckLogFloat32Differential(&ml_cpu_compute::LogFloat32_AVX512);
 }
 #endif
 
@@ -652,8 +652,8 @@ TEST(LogFloat32, Avx512DifferentialCorpus) {
 
 TEST(ExpFloat64, EmptyInput) {
   double dummy = 1.0;
-  cpu_compute::ExpFloat64(&dummy, &dummy, 0);
-  cpu_compute::LogFloat64(&dummy, &dummy, 0);
+  ml_cpu_compute::ExpFloat64(&dummy, &dummy, 0);
+  ml_cpu_compute::LogFloat64(&dummy, &dummy, 0);
   SUCCEED();
 }
 
@@ -664,7 +664,7 @@ TEST(ExpFloat64, MatchesStdOverRange) {
     for (std::size_t i = 0; i < size; ++i) {
       in[i] = -30.0 + 60.0 * (static_cast<double>(i) / static_cast<double>(size));
     }
-    cpu_compute::ExpFloat64(in.data(), out.data(), size);
+    ml_cpu_compute::ExpFloat64(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       const double ref = std::exp(in[i]);
       EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-12 + 1e-300)
@@ -677,7 +677,7 @@ TEST(ExpFloat64, SpecialValues) {
   const double inf = std::numeric_limits<double>::infinity();
   std::vector<double> in = {0.0, -0.0, 1.0, -1.0, inf, -inf, std::nan(""), 1000.0, -1000.0};
   std::vector<double> out(in.size(), -1.0);
-  cpu_compute::ExpFloat64(in.data(), out.data(), in.size());
+  ml_cpu_compute::ExpFloat64(in.data(), out.data(), in.size());
   EXPECT_DOUBLE_EQ(out[0], 1.0);
   EXPECT_DOUBLE_EQ(out[1], 1.0);
   EXPECT_NEAR(out[2], std::exp(1.0), 1e-12);
@@ -696,7 +696,7 @@ TEST(LogFloat64, MatchesStdOverRange) {
     for (std::size_t i = 0; i < size; ++i) {
       in[i] = 1e-6 + 1e6 * (static_cast<double>(i + 1) / static_cast<double>(size));
     }
-    cpu_compute::LogFloat64(in.data(), out.data(), size);
+    ml_cpu_compute::LogFloat64(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       const double ref = std::log(in[i]);
       EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-12 + 1e-12)
@@ -709,7 +709,7 @@ TEST(LogFloat64, SpecialValues) {
   const double inf = std::numeric_limits<double>::infinity();
   std::vector<double> in = {1.0, 0.0, -0.0, -1.0, inf, std::nan("")};
   std::vector<double> out(in.size(), -1.0);
-  cpu_compute::LogFloat64(in.data(), out.data(), in.size());
+  ml_cpu_compute::LogFloat64(in.data(), out.data(), in.size());
   EXPECT_DOUBLE_EQ(out[0], 0.0);
   EXPECT_EQ(out[1], -inf);
   EXPECT_EQ(out[2], -inf);
@@ -724,8 +724,8 @@ TEST(LogFloat64, SpecialValues) {
 
 TEST(ExpFloat16, EmptyInput) {
   std::uint16_t dummy = 0;
-  cpu_compute::ExpFloat16(&dummy, &dummy, 0);
-  cpu_compute::LogFloat16(&dummy, &dummy, 0);
+  ml_cpu_compute::ExpFloat16(&dummy, &dummy, 0);
+  ml_cpu_compute::LogFloat16(&dummy, &dummy, 0);
   SUCCEED();
 }
 
@@ -736,7 +736,7 @@ TEST(ExpFloat16, MatchesReference) {
   for (std::size_t i = 0; i < values.size(); ++i) {
     in[i] = FloatToHalf(values[i]);
   }
-  cpu_compute::ExpFloat16(in.data(), out.data(), in.size());
+  ml_cpu_compute::ExpFloat16(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const std::uint16_t ref = FloatToHalf(std::exp(HalfToFloat(in[i])));
     EXPECT_EQ(out[i], ref) << "at index " << i;
@@ -758,7 +758,7 @@ TEST(ExpBFloat16, VectorTailsAndSpecialValuesMatchReference) {
                                      6.0f,
                                      infinity,
                                      std::numeric_limits<float>::quiet_NaN()};
-  auto tuning = cpu_compute::kDefaultExpLogHalfExecutionTuning;
+  auto tuning = ml_cpu_compute::kDefaultExpLogHalfExecutionTuning;
   tuning.parallel_threshold_bytes = 0;
   for (std::size_t count = 0; count <= 33; ++count) {
     for (const bool in_place : {false, true}) {
@@ -770,7 +770,7 @@ TEST(ExpBFloat16, VectorTailsAndSpecialValuesMatchReference) {
         expected[i] = FloatToBFloat16(std::exp(BFloat16ToFloat(input[i + 1])));
       }
       std::uint16_t *result = in_place ? input.data() + 1 : output.data() + 1;
-      cpu_compute::ExpBFloat16WithTuning(input.data() + 1, result, count, tuning);
+      ml_cpu_compute::ExpBFloat16WithTuning(input.data() + 1, result, count, tuning);
       for (std::size_t i = 0; i < count; ++i) {
         EXPECT_EQ(result[i], expected[i]) << count << "," << i << "," << in_place;
       }
@@ -790,7 +790,7 @@ TEST(LogFloat16, MatchesReference) {
     in[i] = FloatToHalf(values[i]);
   }
 
-  cpu_compute::LogFloat16(in.data(), out.data(), in.size());
+  ml_cpu_compute::LogFloat16(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const std::uint16_t ref = FloatToHalf(std::log(HalfToFloat(in[i])));
     EXPECT_EQ(out[i], ref) << "at index " << i;
@@ -801,7 +801,7 @@ TEST(LogFloat16, SpecialValues) {
   const std::vector<std::uint16_t> input = {FloatToHalf(-1.0f), FloatToHalf(-0.0f),
                                             FloatToHalf(0.0f), 0x7E01u};
   std::vector<std::uint16_t> output(input.size());
-  cpu_compute::LogFloat16(input.data(), output.data(), input.size());
+  ml_cpu_compute::LogFloat16(input.data(), output.data(), input.size());
   EXPECT_TRUE(std::isnan(HalfToFloat(output[0])));
   EXPECT_EQ(output[1], FloatToHalf(-std::numeric_limits<float>::infinity()));
   EXPECT_EQ(output[2], FloatToHalf(-std::numeric_limits<float>::infinity()));
@@ -815,7 +815,7 @@ TEST(LogFloat16, AllBitPatternsMatchReference) {
     input[i] = static_cast<std::uint16_t>(i);
   }
 
-  cpu_compute::LogFloat16(input.data(), output.data(), input.size());
+  ml_cpu_compute::LogFloat16(input.data(), output.data(), input.size());
   for (std::size_t i = 0; i < input.size(); ++i) {
     EXPECT_EQ(output[i], FloatToHalf(std::log(HalfToFloat(input[i])))) << "at bits " << i;
   }
@@ -827,9 +827,9 @@ TEST(LogBFloat16, AllBitPatternsMatchReference) {
   for (std::size_t i = 0; i < input.size(); ++i) {
     input[i] = static_cast<std::uint16_t>(i);
   }
-  auto tuning = cpu_compute::kDefaultLogBFloat16ExecutionTuning;
+  auto tuning = ml_cpu_compute::kDefaultLogBFloat16ExecutionTuning;
   tuning.parallel_threshold_bytes = 0;
-  cpu_compute::LogBFloat16WithTuning(input.data(), output.data(), input.size(), tuning);
+  ml_cpu_compute::LogBFloat16WithTuning(input.data(), output.data(), input.size(), tuning);
   for (std::size_t i = 0; i < input.size(); ++i) {
     const std::uint16_t bits = input[i];
     const std::uint16_t magnitude = bits & 0x7fffu;
@@ -852,7 +852,7 @@ TEST(ExpLogParallel, LargeArrayMatchesStd) {
     in[i] = -8.0f + 16.0f * (static_cast<float>(i) / static_cast<float>(size));
   }
 
-  cpu_compute::ExpFloat32(in.data(), out.data(), size);
+  ml_cpu_compute::ExpFloat32(in.data(), out.data(), size);
   for (std::size_t i = 0; i < size; ++i) {
     const float ref = std::exp(in[i]);
     EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-7f) << "exp at index " << i;
@@ -862,7 +862,7 @@ TEST(ExpLogParallel, LargeArrayMatchesStd) {
   for (std::size_t i = 0; i < size; ++i) {
     pos[i] = 1e-3f + 10.0f * (static_cast<float>(i) / static_cast<float>(size));
   }
-  cpu_compute::LogFloat32(pos.data(), out.data(), size);
+  ml_cpu_compute::LogFloat32(pos.data(), out.data(), size);
   for (std::size_t i = 0; i < size; ++i) {
     const float ref = std::log(pos[i]);
     EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-6f) << "log at index " << i;
@@ -871,29 +871,29 @@ TEST(ExpLogParallel, LargeArrayMatchesStd) {
 
 TEST(ExpLogParallel, ByteBasedParticipantPolicy) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   std::vector<float> input(1048576, 1.0f);
   std::vector<float> output(input.size());
 
-  cpu_compute::ExpFloat32(input.data(), output.data(), 262144);
+  ml_cpu_compute::ExpFloat32(input.data(), output.data(), 262144);
   EXPECT_EQ(executor.dispatches, 0);
-  cpu_compute::ExpFloat32(input.data(), output.data(), 524287);
+  ml_cpu_compute::ExpFloat32(input.data(), output.data(), 524287);
   EXPECT_EQ(executor.dispatches, 0);
-  cpu_compute::ExpFloat32(input.data(), output.data(), 524288);
+  ml_cpu_compute::ExpFloat32(input.data(), output.data(), 524288);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 8);
 
   executor = {};
-  cpu_compute::LogFloat32(input.data(), output.data(), 131071);
+  ml_cpu_compute::LogFloat32(input.data(), output.data(), 131071);
   EXPECT_EQ(executor.dispatches, 0);
-  cpu_compute::LogFloat32(input.data(), output.data(), 131072);
+  ml_cpu_compute::LogFloat32(input.data(), output.data(), 131072);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 4);
 
   executor = {};
-  const cpu_compute::UnaryExecutionTuning tuned{1, 64 * 1024, 3};
-  cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), input.size(), tuned);
+  const ml_cpu_compute::UnaryExecutionTuning tuned{1, 64 * 1024, 3};
+  ml_cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), input.size(), tuned);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 3);
 }
@@ -904,12 +904,12 @@ TEST(LogFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
   for (std::size_t i = 0; i < count; ++i) {
     input[i] = 0.001f + 10.0f * static_cast<float>(i) / static_cast<float>(count);
   }
-  const cpu_compute::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
+  const ml_cpu_compute::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
   ThreadedExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
-  cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+  ml_cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 4);
   EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 4);
@@ -923,8 +923,8 @@ TEST(LogFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
   executor.callbacks.store(0, std::memory_order_relaxed);
   std::fill(output.begin(), output.end(), -1.0f);
   {
-    cpu_compute::detail::ExecutionRegionScope nested;
-    cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
   }
   EXPECT_EQ(executor.dispatches, 0);
   EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 0);
@@ -940,12 +940,12 @@ TEST(ExpFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
   for (std::size_t i = 0; i < count; ++i) {
     input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
   }
-  const cpu_compute::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
+  const ml_cpu_compute::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
   ThreadedExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
-  cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+  ml_cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 4);
   EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 4);
@@ -959,8 +959,8 @@ TEST(ExpFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
   executor.callbacks.store(0, std::memory_order_relaxed);
   std::fill(output.begin(), output.end(), -1.0f);
   {
-    cpu_compute::detail::ExecutionRegionScope nested;
-    cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
   }
   EXPECT_EQ(executor.dispatches, 0);
   EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 0);

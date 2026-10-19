@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 
-#include "cpu_compute/math/half_conversion.h"
-#include "cpu_compute/math/rms_normalization.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/rms_normalization.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -28,11 +28,12 @@ rt_ns::KernelContext MakeContext() {
 
 float RoundFloat(rt_ns::DataType type, float value) {
   if (type == rt_ns::DataType::FLOAT16) {
-    return cpu_compute::detail::Float16BitsToFloat(cpu_compute::detail::FloatToFloat16Bits(value));
+    return ml_cpu_compute::detail::Float16BitsToFloat(
+        ml_cpu_compute::detail::FloatToFloat16Bits(value));
   }
   if (type == rt_ns::DataType::BFLOAT16) {
-    return cpu_compute::detail::Bfloat16BitsToFloat(
-        cpu_compute::detail::FloatToBFloat16Bits(value));
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(
+        ml_cpu_compute::detail::FloatToBFloat16Bits(value));
   }
   return value;
 }
@@ -86,8 +87,8 @@ TEST(OnnxLightRmsNormalizationKernel, SupportsIndependentInputAndScaleTypes) {
   const auto *values = reinterpret_cast<const std::uint16_t *>(y_float16.bytes());
   const float normalized0 = RoundFloat(rt_ns::DataType::FLOAT16, 3.0F * inverse_rms);
   const float normalized1 = RoundFloat(rt_ns::DataType::FLOAT16, 4.0F * inverse_rms);
-  EXPECT_EQ(values[0], cpu_compute::detail::FloatToFloat16Bits(normalized0 * 2.0F));
-  EXPECT_EQ(values[1], cpu_compute::detail::FloatToFloat16Bits(normalized1 * 0.5F));
+  EXPECT_EQ(values[0], ml_cpu_compute::detail::FloatToFloat16Bits(normalized0 * 2.0F));
+  EXPECT_EQ(values[1], ml_cpu_compute::detail::FloatToFloat16Bits(normalized1 * 0.5F));
 }
 
 TEST(OnnxLightRmsNormalizationKernel, RoundsNormalizedValueBeforeScaling) {
@@ -110,14 +111,14 @@ TEST(OnnxLightRmsNormalizationKernel, RoundsNormalizedValueBeforeScaling) {
       const float normalized = inputs[i] * inverse_rms;
       const float expected = RoundFloat(type, RoundFloat(type, normalized) * stored_scale);
       const float actual = type == rt_ns::DataType::FLOAT16
-                               ? cpu_compute::detail::Float16BitsToFloat(values[i])
-                               : cpu_compute::detail::Bfloat16BitsToFloat(values[i]);
+                               ? ml_cpu_compute::detail::Float16BitsToFloat(values[i])
+                               : ml_cpu_compute::detail::Bfloat16BitsToFloat(values[i]);
       EXPECT_FLOAT_EQ(actual, expected);
     }
     const float unrounded = RoundFloat(type, inputs[0] * inverse_rms * stored_scale);
     const float actual = type == rt_ns::DataType::FLOAT16
-                             ? cpu_compute::detail::Float16BitsToFloat(values[0])
-                             : cpu_compute::detail::Bfloat16BitsToFloat(values[0]);
+                             ? ml_cpu_compute::detail::Float16BitsToFloat(values[0])
+                             : ml_cpu_compute::detail::Bfloat16BitsToFloat(values[0]);
     EXPECT_NE(actual, unrounded);
   }
 }
@@ -140,29 +141,30 @@ TEST(OnnxLightRmsNormalizationKernel, Float16FusedPathHandlesVectorTails) {
   std::vector<std::uint16_t> scale(kWidth);
   for (std::size_t index = 0; index < input.size(); ++index) {
     input[index] =
-        cpu_compute::detail::FloatToFloat16Bits(static_cast<float>(index % 17) * 0.125F - 1.0F);
+        ml_cpu_compute::detail::FloatToFloat16Bits(static_cast<float>(index % 17) * 0.125F - 1.0F);
   }
   for (std::size_t column = 0; column < kWidth; ++column) {
     scale[column] =
-        cpu_compute::detail::FloatToFloat16Bits(0.5F + static_cast<float>(column) * 0.03125F);
+        ml_cpu_compute::detail::FloatToFloat16Bits(0.5F + static_cast<float>(column) * 0.03125F);
   }
 
   std::vector<std::uint16_t> output(input.size());
-  cpu_compute::RmsNormalizationFloat16(input.data(), scale.data(), output.data(), kRows, kWidth,
-                                       kEpsilon);
+  ml_cpu_compute::RmsNormalizationFloat16(input.data(), scale.data(), output.data(), kRows, kWidth,
+                                          kEpsilon);
   for (std::size_t row = 0; row < kRows; ++row) {
     float sum_squares = 0.0F;
     for (std::size_t column = 0; column < kWidth; ++column) {
-      const float value = cpu_compute::detail::Float16BitsToFloat(input[row * kWidth + column]);
+      const float value = ml_cpu_compute::detail::Float16BitsToFloat(input[row * kWidth + column]);
       sum_squares += value * value;
     }
     const float inverse_rms = 1.0F / std::sqrt(sum_squares / static_cast<float>(kWidth) + kEpsilon);
     for (std::size_t column = 0; column < kWidth; ++column) {
-      const float value = cpu_compute::detail::Float16BitsToFloat(input[row * kWidth + column]);
-      const float weight = cpu_compute::detail::Float16BitsToFloat(scale[column]);
-      const float normalized = cpu_compute::detail::Float16BitsToFloat(
-          cpu_compute::detail::FloatToFloat16Bits(value * inverse_rms));
-      const std::uint16_t expected = cpu_compute::detail::FloatToFloat16Bits(normalized * weight);
+      const float value = ml_cpu_compute::detail::Float16BitsToFloat(input[row * kWidth + column]);
+      const float weight = ml_cpu_compute::detail::Float16BitsToFloat(scale[column]);
+      const float normalized = ml_cpu_compute::detail::Float16BitsToFloat(
+          ml_cpu_compute::detail::FloatToFloat16Bits(value * inverse_rms));
+      const std::uint16_t expected =
+          ml_cpu_compute::detail::FloatToFloat16Bits(normalized * weight);
       EXPECT_EQ(output[row * kWidth + column], expected) << "row=" << row << ", column=" << column;
     }
   }
@@ -182,8 +184,8 @@ TEST(OnnxLightRmsNormalizationKernel, Float32FusedPathHandlesVectorTails) {
   }
   std::vector<float> output(input.size());
 
-  cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), rows, width,
-                                       epsilon);
+  ml_cpu_compute::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), rows, width,
+                                          epsilon);
 
   for (std::size_t row = 0; row < rows; ++row) {
     float sum_squares = 0.0F;
@@ -215,20 +217,20 @@ TEST(OnnxLightRmsNormalizationKernel, BFloat16BulkPathMatchesFloatReference) {
 
   float sum_squares = 0.0F;
   for (std::size_t index = 0; index < width; ++index) {
-    const float input = cpu_compute::detail::Bfloat16BitsToFloat(
+    const float input = ml_cpu_compute::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(x.bytes())[index]);
     sum_squares += input * input;
   }
   const float inverse_rms = 1.0F / std::sqrt(sum_squares / static_cast<float>(width) + 1.0e-5F);
   const auto *values = reinterpret_cast<const std::uint16_t *>(y.bytes());
   for (std::size_t index = 0; index < width; ++index) {
-    const float input = cpu_compute::detail::Bfloat16BitsToFloat(
+    const float input = ml_cpu_compute::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(x.bytes())[index]);
-    const float weight = cpu_compute::detail::Bfloat16BitsToFloat(
+    const float weight = ml_cpu_compute::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(scale.bytes())[index]);
-    const float normalized = cpu_compute::detail::Bfloat16BitsToFloat(
-        cpu_compute::detail::FloatToBFloat16Bits(input * inverse_rms));
-    EXPECT_EQ(values[index], cpu_compute::detail::FloatToBFloat16Bits(normalized * weight));
+    const float normalized = ml_cpu_compute::detail::Bfloat16BitsToFloat(
+        ml_cpu_compute::detail::FloatToBFloat16Bits(input * inverse_rms));
+    EXPECT_EQ(values[index], ml_cpu_compute::detail::FloatToBFloat16Bits(normalized * weight));
   }
 }
 

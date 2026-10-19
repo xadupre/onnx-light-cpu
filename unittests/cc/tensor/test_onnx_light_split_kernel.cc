@@ -4,9 +4,9 @@
 
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/simd_level.h"
-#include "cpu_compute/tensor/split.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/simd_level.h"
+#include "ml_cpu_compute/tensor/split.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
@@ -107,8 +107,8 @@ TEST(OnnxLightSplitKernel, LowLevelUnalignedRowsAndBoundaryGuards) {
        {std::size_t{1}, std::size_t{2}, std::size_t{4}, std::size_t{8}, std::size_t{13}, stride}) {
     for (std::size_t offset : {std::size_t{0}, stride - width}) {
       std::vector<uint8_t> destination(2 + rows * width, 0xa5);
-      cpu_compute::SplitCopy(source.data() + 1, destination.data() + 1, rows, stride, width,
-                             offset);
+      ml_cpu_compute::SplitCopy(source.data() + 1, destination.data() + 1, rows, stride, width,
+                                offset);
       EXPECT_EQ(destination.front(), 0xa5);
       EXPECT_EQ(destination.back(), 0xa5);
       for (std::size_t row = 0; row < rows; ++row) {
@@ -147,7 +147,7 @@ TEST(OnnxLightSplitKernel, FourWayByteAndEightByteColumnsPreserveTailsAndGuards)
         storage[output].assign(2 + rows * width, 0xa5);
         outputs[output] = storage[output].data() + 1;
       }
-      cpu_compute::SplitCopyOutputs(source.data() + 1, outputs, rows, width * 4, widths);
+      ml_cpu_compute::SplitCopyOutputs(source.data() + 1, outputs, rows, width * 4, widths);
       for (std::size_t output = 0; output < 4; ++output) {
         EXPECT_EQ(storage[output].front(), 0xa5);
         EXPECT_EQ(storage[output].back(), 0xa5);
@@ -209,8 +209,8 @@ TEST(OnnxLightSplitKernel, ZeroDimensionsAndEmptyOutputs) {
   empty.data_type = DataType::FLOAT;
   empty.shape = {std::numeric_limits<int64_t>::max(), 2, 0};
   EXPECT_EQ(kernel(empty, 1, {1, 1}, 0).size(), 2);
-  cpu_compute::SplitCopy(nullptr, nullptr, 0, 0, 1, 0);
-  cpu_compute::SplitCopy(nullptr, nullptr, 3, 0, 0, 0);
+  ml_cpu_compute::SplitCopy(nullptr, nullptr, 0, 0, 1, 0);
+  ml_cpu_compute::SplitCopy(nullptr, nullptr, 3, 0, 0, 0);
 }
 
 TEST(OnnxLightSplitKernel, InvalidShapesTypesAxesSizesAndOverflow) {
@@ -402,7 +402,7 @@ struct InlineExecutor {
   bool concurrent = false;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -415,7 +415,7 @@ struct InlineExecutor {
         task(task_context, i);
       }
       if (self.nested) {
-        cpu_compute::detail::ExecutionRegionScope region;
+        ml_cpu_compute::detail::ExecutionRegionScope region;
         Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
       }
     }
@@ -429,8 +429,8 @@ struct InlineExecutor {
 
 TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {1, 4096}), -1, {2048, 1024, 1024});
   EXPECT_EQ(executor.dispatches, 0);
   Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
@@ -453,7 +453,7 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   EXPECT_GT(executor.dispatches, previous);
   previous = executor.dispatches;
   {
-    cpu_compute::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
   }
   EXPECT_EQ(executor.dispatches, previous);
@@ -472,12 +472,12 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
 }
 
 TEST(OnnxLightSplitKernel, NarrowFourWayUsesFineGrainedSimdRanges) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is unavailable";
   }
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Payload(DataType::FLOAT, {65536, 4}), -1, {1, 1, 1, 1});
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 4);

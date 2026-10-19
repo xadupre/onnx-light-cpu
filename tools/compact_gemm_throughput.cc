@@ -11,12 +11,12 @@
 // machine-specific thresholds. Pass ``--json <path>`` to publish every raw
 // sample alongside hardware, affinity, compiler, and ISA metadata.
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/gemm/gemm_plan.h"
-#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
-#include "cpu_compute/math/half_conversion.h"
-#include "cpu_compute/math/math.h"
-#include "cpu_compute/simd_level.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <atomic>
@@ -70,7 +70,7 @@ struct ThreadExecutor {
   }
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadExecutor *>(context);
     {
       std::lock_guard lock(self.mutex);
@@ -105,7 +105,7 @@ struct ThreadExecutor {
     for (;;) {
       std::int64_t local_num_blocks;
       void *local_task_context;
-      cpu_compute::ExecutionBlockFn local_task;
+      ml_cpu_compute::ExecutionBlockFn local_task;
       {
         std::unique_lock lock(mutex);
         start.wait(lock, [&] { return stopping || generation != observed_generation; });
@@ -147,7 +147,7 @@ struct ThreadExecutor {
   std::int64_t arrived_workers = 0;
   std::int64_t num_blocks = 0;
   void *task_context = nullptr;
-  cpu_compute::ExecutionBlockFn task = nullptr;
+  ml_cpu_compute::ExecutionBlockFn task = nullptr;
   bool stopping = false;
 };
 
@@ -169,8 +169,8 @@ constexpr GemmCase kCases[] = {
 /// from #332). Every field defaults to ``0``, meaning automatic and matching
 /// the untuned behavior.
 struct HalfTuning {
-  cpu_compute::GemmBlocking blocking;
-  cpu_compute::GemmBlocking compact_blocking;
+  ml_cpu_compute::GemmBlocking blocking;
+  ml_cpu_compute::GemmBlocking compact_blocking;
   std::size_t maximum_participants = 0;
 };
 
@@ -220,8 +220,8 @@ std::vector<double> MeasureInt8Seconds(const GemmCase &shape) {
   const std::int32_t a_zero_point = 128;
   const std::int32_t b_zero_point = 0;
   return MeasureSeconds(shape, [&]() {
-    cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), shape.m, shape.n,
-                                 shape.k, &a_zero_point, 1, &b_zero_point, 1);
+    ml_cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), shape.m, shape.n,
+                                    shape.k, &a_zero_point, 1, &b_zero_point, 1);
   });
 }
 
@@ -237,8 +237,8 @@ std::vector<double> MeasureInt4Seconds(const GemmCase &shape) {
   std::generate(b.begin(), b.end(), [&]() { return static_cast<std::uint8_t>(byte(rng)); });
   const std::int32_t zero_point = 0;
   return MeasureSeconds(shape, [&]() {
-    cpu_compute::IntegerMatMul4Bit2D(a.data(), true, b.data(), true, c.data(), shape.m, shape.n,
-                                     shape.k, &zero_point, 1, &zero_point, 1);
+    ml_cpu_compute::IntegerMatMul4Bit2D(a.data(), true, b.data(), true, c.data(), shape.m, shape.n,
+                                        shape.k, &zero_point, 1, &zero_point, 1);
   });
 }
 
@@ -251,14 +251,14 @@ std::vector<double> MeasureHalfSeconds(const GemmCase &shape, bool is_bfloat16,
   std::vector<float> y(static_cast<std::size_t>(shape.m * shape.n));
   const auto narrow = [&](std::uint16_t &bits) {
     const float input = value(rng);
-    bits = is_bfloat16 ? cpu_compute::detail::FloatToBFloat16Bits(input)
-                       : cpu_compute::detail::FloatToFloat16Bits(input);
+    bits = is_bfloat16 ? ml_cpu_compute::detail::FloatToBFloat16Bits(input)
+                       : ml_cpu_compute::detail::FloatToFloat16Bits(input);
   };
   std::for_each(a.begin(), a.end(), narrow);
   std::for_each(b.begin(), b.end(), narrow);
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
 
-  cpu_compute::GemmHalfPlanOptions options;
+  ml_cpu_compute::GemmHalfPlanOptions options;
   options.is_bfloat16 = is_bfloat16;
   options.m = static_cast<std::size_t>(shape.m);
   options.n = static_cast<std::size_t>(shape.n);
@@ -267,13 +267,13 @@ std::vector<double> MeasureHalfSeconds(const GemmCase &shape, bool is_bfloat16,
   options.blocking = tuning.blocking;
   options.compact_blocking = tuning.compact_blocking;
   options.maximum_participants = tuning.maximum_participants;
-  const cpu_compute::GemmHalfPlan plan(options);
+  const ml_cpu_compute::GemmHalfPlan plan(options);
 
   return MeasureSeconds(shape, [&]() { plan.Execute(a.data(), b.data(), epilogue, y.data()); });
 }
 
 std::vector<double> MeasureFloat8Seconds(const GemmCase &shape,
-                                         cpu_compute::GemmFloat8Format format) {
+                                         ml_cpu_compute::GemmFloat8Format format) {
   std::mt19937 rng(0xf8u);
   std::uniform_int_distribution<int> finite_e4m3(0, 0x7e);
   std::vector<std::uint8_t> a(static_cast<std::size_t>(shape.m * shape.k));
@@ -281,25 +281,25 @@ std::vector<double> MeasureFloat8Seconds(const GemmCase &shape,
   std::vector<float> y(static_cast<std::size_t>(shape.m * shape.n));
   std::generate(a.begin(), a.end(), [&]() { return static_cast<std::uint8_t>(finite_e4m3(rng)); });
   std::generate(b.begin(), b.end(), [&]() { return static_cast<std::uint8_t>(finite_e4m3(rng)); });
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   return MeasureSeconds(shape, [&]() {
-    cpu_compute::GemmFloat8WithEpilogue(
+    ml_cpu_compute::GemmFloat8WithEpilogue(
         format, false, false, static_cast<std::size_t>(shape.m), static_cast<std::size_t>(shape.n),
         static_cast<std::size_t>(shape.k), 1.0f, a.data(), b.data(), epilogue, y.data());
   });
 }
 
-std::string SimdLevelName(cpu_compute::SimdLevel level) {
+std::string SimdLevelName(ml_cpu_compute::SimdLevel level) {
   switch (level) {
-  case cpu_compute::SimdLevel::kNone:
+  case ml_cpu_compute::SimdLevel::kNone:
     return "none";
-  case cpu_compute::SimdLevel::kSSE2:
+  case ml_cpu_compute::SimdLevel::kSSE2:
     return "sse2";
-  case cpu_compute::SimdLevel::kAVX:
+  case ml_cpu_compute::SimdLevel::kAVX:
     return "avx";
-  case cpu_compute::SimdLevel::kAVX2:
+  case ml_cpu_compute::SimdLevel::kAVX2:
     return "avx2";
-  case cpu_compute::SimdLevel::kAVX512:
+  case ml_cpu_compute::SimdLevel::kAVX512:
     return "avx512";
   }
   return "unknown";
@@ -418,7 +418,7 @@ std::string JsonSecondsArray(const std::vector<double> &seconds) {
   return out.str();
 }
 
-std::string JsonBlocking(const cpu_compute::GemmBlocking &blocking) {
+std::string JsonBlocking(const ml_cpu_compute::GemmBlocking &blocking) {
   std::ostringstream out;
   out << "{\"mc\": " << blocking.mc << ", \"nc\": " << blocking.nc << ", \"kc\": " << blocking.kc
       << "}";
@@ -503,12 +503,12 @@ int main(int argc, char **argv) {
   const Options options = ParseArgs(argc, argv);
 
   ThreadExecutor executor(options.threads);
-  const cpu_compute::ExecutionExecutorView executor_view{
+  const ml_cpu_compute::ExecutionExecutorView executor_view{
       &executor, static_cast<std::int64_t>(options.threads), &ThreadExecutor::Run};
   // Only install a real executor above one thread: the vnni kernels already
   // bypass ``ExecuteRanges`` entirely when no executor is installed, and
   // single-thread runs should keep exercising that exact no-executor path.
-  std::optional<cpu_compute::ExecutionExecutorScope> executor_scope;
+  std::optional<ml_cpu_compute::ExecutionExecutorScope> executor_scope;
   if (options.threads > 1) {
     executor_scope.emplace(&executor_view);
   }
@@ -526,9 +526,9 @@ int main(int argc, char **argv) {
     const std::vector<double> int8_seconds = MeasureInt8Seconds(shape);
     const std::vector<double> int4_seconds = MeasureInt4Seconds(shape);
     const std::vector<double> e4m3_seconds =
-        MeasureFloat8Seconds(shape, cpu_compute::GemmFloat8Format::kE4M3FN);
+        MeasureFloat8Seconds(shape, ml_cpu_compute::GemmFloat8Format::kE4M3FN);
     const std::vector<double> e5m2_seconds =
-        MeasureFloat8Seconds(shape, cpu_compute::GemmFloat8Format::kE5M2);
+        MeasureFloat8Seconds(shape, ml_cpu_compute::GemmFloat8Format::kE5M2);
     const double int8 = GopsFromMedian(shape, int8_seconds);
     const double int4 = GopsFromMedian(shape, int4_seconds);
     const double e4m3 = GopsFromMedian(shape, e4m3_seconds);
@@ -575,7 +575,7 @@ int main(int argc, char **argv) {
         << "    \"logical_cpus\": " << LogicalCpus() << ",\n"
         << "    \"affinity\": \"" << JsonEscape(AffinityList()) << "\",\n"
         << "    \"compiler\": \"" << JsonEscape(Compiler()) << "\",\n"
-        << "    \"simd_level\": \"" << SimdLevelName(cpu_compute::DetectSimdLevel()) << "\",\n"
+        << "    \"simd_level\": \"" << SimdLevelName(ml_cpu_compute::DetectSimdLevel()) << "\",\n"
         << "    \"requested_participants\": " << options.tuning.maximum_participants << ",\n"
         << "    \"threads\": " << options.threads << ",\n"
         << "    \"blocking\": " << JsonBlocking(options.tuning.blocking) << ",\n"

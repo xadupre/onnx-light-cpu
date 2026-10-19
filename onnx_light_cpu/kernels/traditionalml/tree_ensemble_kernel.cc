@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -81,16 +81,16 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(std::int32_t element_type) {
   return {MakeTuningKey(element_type),
           {{kTreeMajorBatchRows,
             static_cast<std::int64_t>(
-                cpu_compute::kDefaultTreeEnsembleExecutionTuning.tree_major_batch_rows)},
+                ml_cpu_compute::kDefaultTreeEnsembleExecutionTuning.tree_major_batch_rows)},
            {kRowParallelThreshold,
             static_cast<std::int64_t>(
-                cpu_compute::kDefaultTreeEnsembleExecutionTuning.row_parallel_threshold)},
+                ml_cpu_compute::kDefaultTreeEnsembleExecutionTuning.row_parallel_threshold)},
            {kTreeParallelRowLimit,
             static_cast<std::int64_t>(
-                cpu_compute::kDefaultTreeEnsembleExecutionTuning.tree_parallel_row_limit)},
+                ml_cpu_compute::kDefaultTreeEnsembleExecutionTuning.tree_parallel_row_limit)},
            {kMaximumParticipants,
             static_cast<std::int64_t>(
-                cpu_compute::kDefaultTreeEnsembleExecutionTuning.maximum_participants)}}};
+                ml_cpu_compute::kDefaultTreeEnsembleExecutionTuning.maximum_participants)}}};
 }
 
 Tensor GetTensorAttribute(const NodeProto &node, const char *name, bool required) {
@@ -153,7 +153,7 @@ std::vector<double> ReadValueTensor(const NodeProto &node, const char *name, boo
   }
 }
 
-std::vector<cpu_compute::TreeBranchMode> ReadNodeModes(const NodeProto &node) {
+std::vector<ml_cpu_compute::TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   const Tensor tensor = GetTensorAttribute(node, "nodes_modes", true);
   if (static_cast<RuntimeDataType>(tensor.data_type) != RuntimeDataType::UINT8) {
     throw std::invalid_argument(
@@ -161,23 +161,23 @@ std::vector<cpu_compute::TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   }
   const std::size_t size = static_cast<std::size_t>(tensor.element_count());
   const auto *source = reinterpret_cast<const std::uint8_t *>(tensor.bytes());
-  std::vector<cpu_compute::TreeBranchMode> modes;
+  std::vector<ml_cpu_compute::TreeBranchMode> modes;
   modes.reserve(size);
   for (std::size_t index = 0; index < size; ++index) {
-    if (source[index] > static_cast<std::uint8_t>(cpu_compute::TreeBranchMode::kMember)) {
+    if (source[index] > static_cast<std::uint8_t>(ml_cpu_compute::TreeBranchMode::kMember)) {
       throw std::invalid_argument(
           "onnx_light_cpu::TreeEnsemble: 'nodes_modes' contains an invalid mode.");
     }
-    modes.push_back(static_cast<cpu_compute::TreeBranchMode>(source[index]));
+    modes.push_back(static_cast<ml_cpu_compute::TreeBranchMode>(source[index]));
   }
   return modes;
 }
 
-void ValidateValueType(cpu_compute::DataType data_type) {
+void ValidateValueType(ml_cpu_compute::DataType data_type) {
   switch (data_type) {
-  case cpu_compute::DataType::FLOAT:
-  case cpu_compute::DataType::DOUBLE:
-  case cpu_compute::DataType::FLOAT16:
+  case ml_cpu_compute::DataType::FLOAT:
+  case ml_cpu_compute::DataType::DOUBLE:
+  case ml_cpu_compute::DataType::FLOAT16:
     return;
   default:
     throw std::invalid_argument(
@@ -185,16 +185,16 @@ void ValidateValueType(cpu_compute::DataType data_type) {
   }
 }
 
-cpu_compute::TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &input) {
-  cpu_compute::TreeEnsembleAttributes attributes;
-  const auto value_type = static_cast<cpu_compute::DataType>(input.data_type);
+ml_cpu_compute::TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &input) {
+  ml_cpu_compute::TreeEnsembleAttributes attributes;
+  const auto value_type = static_cast<ml_cpu_compute::DataType>(input.data_type);
   ValidateValueType(value_type);
   attributes.n_features = input.shape[1];
   attributes.n_targets = rt_ns::GetAttributeIntOrDefault(node, "n_targets", 1);
   attributes.value_type = value_type;
-  attributes.aggregate = static_cast<cpu_compute::TreeAggregate>(
+  attributes.aggregate = static_cast<ml_cpu_compute::TreeAggregate>(
       rt_ns::GetAttributeIntOrDefault(node, "aggregate_function", 1));
-  attributes.post_transform = static_cast<cpu_compute::TreePostTransform>(
+  attributes.post_transform = static_cast<ml_cpu_compute::TreePostTransform>(
       rt_ns::GetAttributeIntOrDefault(node, "post_transform", 0));
   attributes.tree_roots = rt_ns::GetAttributeIntsOrDefault(node, "tree_roots", {});
   attributes.nodes_featureids = rt_ns::GetAttributeIntsOrDefault(node, "nodes_featureids", {});
@@ -254,10 +254,10 @@ TreeEnsembleKernel::TreeEnsembleKernel(const NodeProto &node, RuntimeContext &rt
   if (input.shape.size() != 2) {
     throw std::invalid_argument("onnx_light_cpu::TreeEnsemble: input must have rank 2.");
   }
-  cpu_compute::TreeEnsembleAttributes attributes = BuildAttributes(node, input);
+  ml_cpu_compute::TreeEnsembleAttributes attributes = BuildAttributes(node, input);
   input_data_type_ = input.data_type;
   feature_count_ = input.shape[1];
-  plan_ = std::make_unique<cpu_compute::TreeEnsemblePlan>(std::move(attributes));
+  plan_ = std::make_unique<ml_cpu_compute::TreeEnsemblePlan>(std::move(attributes));
   plan_->CompactRuntimeStorage();
 }
 
@@ -282,7 +282,7 @@ void TreeEnsembleKernel::Configure(const rt_ns::KernelTuningParameters &paramete
     throw std::invalid_argument("TreeEnsemble tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  const cpu_compute::TreeEnsembleExecutionTuning tuning{
+  const ml_cpu_compute::TreeEnsembleExecutionTuning tuning{
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTreeMajorBatchRows)),
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kRowParallelThreshold)),
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTreeParallelRowLimit)),
@@ -313,12 +313,12 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
 
   const std::int64_t rows = input.shape[0];
   const std::int64_t targets = plan_->attributes().n_targets;
-  const std::size_t output_size = cpu_compute::CheckedProduct(
-      {cpu_compute::CheckedDimension(rows, "TreeEnsemble", "row count"),
-       cpu_compute::CheckedDimension(targets, "TreeEnsemble", "target count")},
+  const std::size_t output_size = ml_cpu_compute::CheckedProduct(
+      {ml_cpu_compute::CheckedDimension(rows, "TreeEnsemble", "row count"),
+       ml_cpu_compute::CheckedDimension(targets, "TreeEnsemble", "target count")},
       "TreeEnsemble", "output element count");
-  const std::size_t output_bytes = cpu_compute::CheckedByteSize(output_size, input.element_size(),
-                                                                "TreeEnsemble", "output byte size");
+  const std::size_t output_bytes = ml_cpu_compute::CheckedByteSize(
+      output_size, input.element_size(), "TreeEnsemble", "output byte size");
   Tensor output = rt.MakeOutputTensor(0, input.data_type, {rows, targets}, output_bytes);
   switch (static_cast<rt_ns::DataType>(input.data_type)) {
   case rt_ns::DataType::FLOAT:

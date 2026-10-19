@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/binary/binary_manifest.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -58,8 +58,8 @@ TEST(OnnxLightBinaryManifest, RecordsIntegerImplementationPaths) {
   }
 }
 
-schema_ns::TensorType ToTensorType(cpu_compute::DataType type) {
-  using DT = cpu_compute::DataType;
+schema_ns::TensorType ToTensorType(ml_cpu_compute::DataType type) {
+  using DT = ml_cpu_compute::DataType;
   using TT = schema_ns::TensorType;
   switch (type) {
   case DT::FLOAT:
@@ -108,7 +108,7 @@ std::vector<schema_ns::LightOpSchema> LoadSchemas(std::string_view op_type) {
 const schema_ns::LightOpSchema &LatestSchema(std::string_view op_type) {
   static const auto cache = [] {
     std::unordered_map<std::string, std::vector<schema_ns::LightOpSchema>> map;
-    for (const auto &entry : cpu_compute::GetBinaryManifest()) {
+    for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
       map.emplace(std::string(entry.op_type), LoadSchemas(entry.op_type));
     }
     return map;
@@ -136,7 +136,7 @@ bool ConstraintAllows(const schema_ns::LightOpSchema &schema, const std::string 
 }
 
 TEST(OnnxLightBinaryManifest, MatchesLatestLightSchemaVersionsAndTypeConstraints) {
-  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
+  for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
     const auto &schema = LatestSchema(entry.op_type);
     EXPECT_EQ(schema.domain(), schema_ns::kOnnxDomain) << entry.op_type;
     EXPECT_EQ(schema.since_version(), entry.since_version) << entry.op_type;
@@ -166,10 +166,10 @@ TEST(OnnxLightBinaryManifest, RegistersValidatedTuningSchemaForEveryOperatorAndI
   EXPECT_NO_THROW(onnx_light_cpu::BinaryElementwiseKernel::RegisterTuningSchemas());
   EXPECT_NO_THROW(onnx_light_cpu::BinaryElementwiseKernel::RegisterTuningSchemas());
 
-  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
+  for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
     std::set<int32_t> element_types;
     for (const auto &signature : entry.signatures) {
-      if (signature.left == cpu_compute::DataType::STRING) {
+      if (signature.left == ml_cpu_compute::DataType::STRING) {
         continue;
       }
       if (!element_types.insert(static_cast<int32_t>(signature.left)).second) {
@@ -249,7 +249,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -290,8 +290,8 @@ TEST(OnnxLightBinaryManifest, CalibrationIsBoundedCorrectnessGatedAndReturnsComp
   EXPECT_GT(published.published_generation, 0u);
 
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   rt_ns::CalibrationOptions options;
   options.maximum_duration_ms = 100;
   options.maximum_memory_bytes = uint64_t{64} << 20;
@@ -392,8 +392,8 @@ TEST(OnnxLightBinaryManifest, CalibratedProfilesPersistAndOldConfigurationsStayI
       rt_ns::Tensor::FromFloat("right", {count}, std::vector<float>(count, 2));
   rt_ns::Tensor output = rt_ns::Tensor::FromFloat("output", {count}, std::vector<float>(count, 0));
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   old_kernel(left, right, output);
   EXPECT_EQ(executor.dispatches, 0);
   new_kernel(left, right, output);
@@ -443,8 +443,8 @@ TEST(OnnxLightBinaryManifest, ConfiguredTuningControlsExecutionAndRejectsInvalid
       rt_ns::Tensor::FromFloat("right", {count}, std::vector<float>(count, 2));
   rt_ns::Tensor output = rt_ns::Tensor::FromFloat("output", {count}, std::vector<float>(count, 0));
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
 
   kernel(left, right, output);
   EXPECT_EQ(executor.dispatches, 0);

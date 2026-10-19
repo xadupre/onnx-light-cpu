@@ -13,7 +13,7 @@
 // This module never runs a benchmark unless ``benchmark_processor_performance``
 // is called explicitly.
 
-#include "cpu_compute/processor_performance_profile.h"
+#include "ml_cpu_compute/processor_performance_profile.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -41,27 +41,27 @@ namespace {
 // ``processor_performance_profile.cc`` so this binding and the C++
 // aggregator always report the same names.
 
-const char *CpuCacheKindName(cpu_compute::CpuCacheKind kind) {
+const char *CpuCacheKindName(ml_cpu_compute::CpuCacheKind kind) {
   switch (kind) {
-  case cpu_compute::CpuCacheKind::kUnknown:
+  case ml_cpu_compute::CpuCacheKind::kUnknown:
     return "unknown";
-  case cpu_compute::CpuCacheKind::kData:
+  case ml_cpu_compute::CpuCacheKind::kData:
     return "data";
-  case cpu_compute::CpuCacheKind::kInstruction:
+  case ml_cpu_compute::CpuCacheKind::kInstruction:
     return "instruction";
-  case cpu_compute::CpuCacheKind::kUnified:
+  case ml_cpu_compute::CpuCacheKind::kUnified:
     return "unified";
   }
   return "unknown";
 }
 
-const char *CpuCacheConfidenceName(cpu_compute::CpuCacheConfidence confidence) {
+const char *CpuCacheConfidenceName(ml_cpu_compute::CpuCacheConfidence confidence) {
   switch (confidence) {
-  case cpu_compute::CpuCacheConfidence::kDetected:
+  case ml_cpu_compute::CpuCacheConfidence::kDetected:
     return "detected";
-  case cpu_compute::CpuCacheConfidence::kInferred:
+  case ml_cpu_compute::CpuCacheConfidence::kInferred:
     return "inferred";
-  case cpu_compute::CpuCacheConfidence::kFallback:
+  case ml_cpu_compute::CpuCacheConfidence::kFallback:
     return "fallback";
   }
   return "unknown";
@@ -93,7 +93,7 @@ using ProfileTuple = std::tuple<MetadataTuple, TopologyTuple, std::vector<Memory
                                 std::vector<ComputeEntryTuple>, std::vector<RooflineEntryTuple>,
                                 std::vector<std::string>>;
 
-BandwidthTuple ToBandwidthTuple(const cpu_compute::MemoryBandwidthResult &result) {
+BandwidthTuple ToBandwidthTuple(const ml_cpu_compute::MemoryBandwidthResult &result) {
   return {result.working_set_bytes,
           result.participant_count,
           result.affinity_pinned,
@@ -104,7 +104,7 @@ BandwidthTuple ToBandwidthTuple(const cpu_compute::MemoryBandwidthResult &result
           result.dispersion_gbps};
 }
 
-LatencyTuple ToLatencyTuple(const cpu_compute::MemoryLatencyResult &result) {
+LatencyTuple ToLatencyTuple(const ml_cpu_compute::MemoryLatencyResult &result) {
   return {result.working_set_bytes,       result.participant_count,
           result.affinity_pinned,         result.timer_name,
           result.raw_ns_per_load_samples, result.median_ns_per_load,
@@ -112,18 +112,19 @@ LatencyTuple ToLatencyTuple(const cpu_compute::MemoryLatencyResult &result) {
 }
 
 std::optional<BandwidthTuple>
-ToOptionalBandwidthTuple(const std::optional<cpu_compute::MemoryBandwidthResult> &result) {
+ToOptionalBandwidthTuple(const std::optional<ml_cpu_compute::MemoryBandwidthResult> &result) {
   if (!result.has_value()) {
     return std::nullopt;
   }
   return ToBandwidthTuple(*result);
 }
 
-ProfileTuple ToProfileTuple(const cpu_compute::ProcessorPerformanceProfile &profile) {
+ProfileTuple ToProfileTuple(const ml_cpu_compute::ProcessorPerformanceProfile &profile) {
   std::vector<std::string> policy_names;
   policy_names.reserve(profile.metadata.options.thread_policies.size());
-  for (const cpu_compute::ProcessorThreadPolicy policy : profile.metadata.options.thread_policies) {
-    policy_names.emplace_back(cpu_compute::ProcessorThreadPolicyName(policy));
+  for (const ml_cpu_compute::ProcessorThreadPolicy policy :
+       profile.metadata.options.thread_policies) {
+    policy_names.emplace_back(ml_cpu_compute::ProcessorThreadPolicyName(policy));
   }
   std::optional<AffinityTuple> options_affinity;
   if (profile.metadata.options.explicit_single_affinity.has_value()) {
@@ -143,7 +144,7 @@ ProfileTuple ToProfileTuple(const cpu_compute::ProcessorPerformanceProfile &prof
 
   std::vector<CacheTuple> caches;
   caches.reserve(profile.topology.caches.size());
-  for (const cpu_compute::CpuCacheDescriptor &cache : profile.topology.caches) {
+  for (const ml_cpu_compute::CpuCacheDescriptor &cache : profile.topology.caches) {
     caches.emplace_back(static_cast<int>(cache.level), CpuCacheKindName(cache.kind),
                         cache.size_bytes, cache.line_size_bytes, cache.sharing_thread_count,
                         CpuCacheConfidenceName(cache.confidence));
@@ -157,17 +158,17 @@ ProfileTuple ToProfileTuple(const cpu_compute::ProcessorPerformanceProfile &prof
 
   std::vector<MemoryEntryTuple> memory;
   memory.reserve(profile.memory.size());
-  for (const cpu_compute::ProcessorProfileMemoryEntry &entry : profile.memory) {
+  for (const ml_cpu_compute::ProcessorProfileMemoryEntry &entry : profile.memory) {
     std::vector<BandwidthTuple> read_scaling;
     read_scaling.reserve(entry.read_scaling.size());
-    for (const cpu_compute::MemoryBandwidthResult &point : entry.read_scaling) {
+    for (const ml_cpu_compute::MemoryBandwidthResult &point : entry.read_scaling) {
       read_scaling.push_back(ToBandwidthTuple(point));
     }
     memory.emplace_back(
-        cpu_compute::MemoryLevelName(entry.level),
-        cpu_compute::ProcessorThreadPolicyName(entry.policy), ToOptionalBandwidthTuple(entry.read),
-        ToOptionalBandwidthTuple(entry.write), ToOptionalBandwidthTuple(entry.copy),
-        ToOptionalBandwidthTuple(entry.read_modify_write),
+        ml_cpu_compute::MemoryLevelName(entry.level),
+        ml_cpu_compute::ProcessorThreadPolicyName(entry.policy),
+        ToOptionalBandwidthTuple(entry.read), ToOptionalBandwidthTuple(entry.write),
+        ToOptionalBandwidthTuple(entry.copy), ToOptionalBandwidthTuple(entry.read_modify_write),
         entry.latency.has_value() ? std::optional<LatencyTuple>(ToLatencyTuple(*entry.latency))
                                   : std::nullopt,
         std::move(read_scaling));
@@ -175,10 +176,10 @@ ProfileTuple ToProfileTuple(const cpu_compute::ProcessorPerformanceProfile &prof
 
   std::vector<ComputeEntryTuple> compute;
   compute.reserve(profile.compute.size());
-  for (const cpu_compute::ProcessorProfileComputeEntry &entry : profile.compute) {
+  for (const ml_cpu_compute::ProcessorProfileComputeEntry &entry : profile.compute) {
     compute.emplace_back(
-        cpu_compute::ComputeElementTypeName(entry.element_type),
-        cpu_compute::ProcessorThreadPolicyName(entry.policy), entry.result.implementation_name,
+        ml_cpu_compute::ComputeElementTypeName(entry.element_type),
+        ml_cpu_compute::ProcessorThreadPolicyName(entry.policy), entry.result.implementation_name,
         entry.result.participant_count, entry.result.affinity_pinned, entry.result.timer_name,
         entry.result.operations_per_pass_per_participant, entry.result.dot_product_length,
         entry.result.raw_gops_samples, entry.result.median_gops, entry.result.dispersion_gops);
@@ -186,10 +187,10 @@ ProfileTuple ToProfileTuple(const cpu_compute::ProcessorPerformanceProfile &prof
 
   std::vector<RooflineEntryTuple> roofline;
   roofline.reserve(profile.roofline.size());
-  for (const cpu_compute::ProcessorProfileRooflineEntry &entry : profile.roofline) {
-    roofline.emplace_back(cpu_compute::ComputeElementTypeName(entry.element_type),
-                          cpu_compute::ProcessorThreadPolicyName(entry.policy),
-                          cpu_compute::MemoryLevelName(entry.level), entry.compute_gops,
+  for (const ml_cpu_compute::ProcessorProfileRooflineEntry &entry : profile.roofline) {
+    roofline.emplace_back(ml_cpu_compute::ComputeElementTypeName(entry.element_type),
+                          ml_cpu_compute::ProcessorThreadPolicyName(entry.policy),
+                          ml_cpu_compute::MemoryLevelName(entry.level), entry.compute_gops,
                           entry.memory_read_gbps, entry.arithmetic_intensity_crossover);
   }
 
@@ -200,11 +201,11 @@ ProfileTuple BenchmarkProcessorPerformanceForPython(
     const std::vector<std::string> &thread_policies, std::size_t repeats,
     double minimum_duration_ms, std::size_t memory_budget_bytes, bool include_latency,
     const std::optional<AffinityTuple> &explicit_single_affinity) {
-  cpu_compute::ProcessorProfileOptions options;
+  ml_cpu_compute::ProcessorProfileOptions options;
   options.thread_policies.clear();
   for (const std::string &name : thread_policies) {
-    cpu_compute::ProcessorThreadPolicy policy = cpu_compute::ProcessorThreadPolicy::kSingle;
-    if (!cpu_compute::ParseProcessorThreadPolicy(name, policy)) {
+    ml_cpu_compute::ProcessorThreadPolicy policy = ml_cpu_compute::ProcessorThreadPolicy::kSingle;
+    if (!ml_cpu_compute::ParseProcessorThreadPolicy(name, policy)) {
       throw std::invalid_argument("unknown thread policy: " + name);
     }
     options.thread_policies.push_back(policy);
@@ -214,11 +215,11 @@ ProfileTuple BenchmarkProcessorPerformanceForPython(
   options.memory_budget_bytes = memory_budget_bytes;
   options.include_latency = include_latency;
   if (explicit_single_affinity.has_value()) {
-    options.explicit_single_affinity = cpu_compute::CpuAffinity{
+    options.explicit_single_affinity = ml_cpu_compute::CpuAffinity{
         std::get<0>(*explicit_single_affinity), std::get<1>(*explicit_single_affinity)};
   }
 
-  return ToProfileTuple(cpu_compute::BenchmarkProcessorPerformance(options));
+  return ToProfileTuple(ml_cpu_compute::BenchmarkProcessorPerformance(options));
 }
 
 } // namespace

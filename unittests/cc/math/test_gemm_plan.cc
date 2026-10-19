@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/gemm/arm/gemm_arm.h"
-#include "cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/gemm/arm/gemm_arm.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
 
 #include <gtest/gtest.h>
 
@@ -20,22 +20,22 @@
 
 namespace {
 
-using cpu_compute::GemmAlgorithm;
-using cpu_compute::GemmHalfPlan;
-using cpu_compute::GemmHalfPlanOptions;
-using cpu_compute::GemmPlan;
-using cpu_compute::GemmPlanOptions;
-using cpu_compute::GroupedGemm;
-using cpu_compute::GroupedGemmProblem;
-using cpu_compute::MatMulPlan;
-using cpu_compute::StridedBatchedGemm;
+using ml_cpu_compute::GemmAlgorithm;
+using ml_cpu_compute::GemmHalfPlan;
+using ml_cpu_compute::GemmHalfPlanOptions;
+using ml_cpu_compute::GemmPlan;
+using ml_cpu_compute::GemmPlanOptions;
+using ml_cpu_compute::GroupedGemm;
+using ml_cpu_compute::GroupedGemmProblem;
+using ml_cpu_compute::MatMulPlan;
+using ml_cpu_compute::StridedBatchedGemm;
 
 struct InlineExecutor {
   std::int64_t maximum_blocks = 0;
   std::int64_t multi_block_dispatches = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
     self.multi_block_dispatches += static_cast<std::int64_t>(num_blocks > 1);
@@ -77,8 +77,8 @@ void ExpectShape(std::span<const std::size_t> actual,
 }
 
 TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
   const std::vector<float> b = {1, 2, 3, 4, 5, 6};
   const std::vector<float> c = {1, 1, 1, 1};
@@ -87,7 +87,7 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
   plan.Execute(a.data(), b.data(), c.data(), y.data());
 
   ExpectValues(y, std::array<float, 4>{13, 16, 26.5f, 34});
-  EXPECT_EQ(plan.algorithm(), cpu_compute::GemmAlgorithm::kDirect);
+  EXPECT_EQ(plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kDirect);
   EXPECT_GE(plan.blocking().mc, plan.blocking().mr);
   EXPECT_GE(plan.blocking().nc, plan.blocking().nr);
   EXPECT_GE(plan.blocking().kc, 64u);
@@ -98,51 +98,51 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
 }
 
 TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
-  const cpu_compute::GemmPlan<float> general(
-      cpu_compute::GemmPlanOptions<float>{false, false, 128, 128, 128});
-  const cpu_compute::GemmPlan<float> skinny_m(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1, 1024, 1024});
-  const cpu_compute::GemmPlan<float> skinny_n(
-      cpu_compute::GemmPlanOptions<float>{false, false, 128, 1, 1024});
-  const cpu_compute::GemmPlan<float> split_k(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 4096});
-  const cpu_compute::GemmPlan<float> large_k(
-      cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 16384});
-  const cpu_compute::GemmPlan<float> shorter_k(
-      cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 4096});
+  const ml_cpu_compute::GemmPlan<float> general(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 128, 128, 128});
+  const ml_cpu_compute::GemmPlan<float> skinny_m(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, 1024, 1024});
+  const ml_cpu_compute::GemmPlan<float> skinny_n(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 128, 1, 1024});
+  const ml_cpu_compute::GemmPlan<float> split_k(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 4096});
+  const ml_cpu_compute::GemmPlan<float> large_k(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 16384});
+  const ml_cpu_compute::GemmPlan<float> shorter_k(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 4096});
 
-  EXPECT_EQ(general.algorithm(), cpu_compute::GemmAlgorithm::kGeneral);
-  EXPECT_EQ(skinny_m.algorithm(), cpu_compute::GemmAlgorithm::kSkinnyM);
-  EXPECT_EQ(skinny_n.algorithm(), cpu_compute::GemmAlgorithm::kSkinnyN);
-  EXPECT_EQ(split_k.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
-  EXPECT_EQ(large_k.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
-  EXPECT_EQ(shorter_k.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
+  EXPECT_EQ(general.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
+  EXPECT_EQ(skinny_m.algorithm(), ml_cpu_compute::GemmAlgorithm::kSkinnyM);
+  EXPECT_EQ(skinny_n.algorithm(), ml_cpu_compute::GemmAlgorithm::kSkinnyN);
+  EXPECT_EQ(split_k.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
+  EXPECT_EQ(large_k.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
+  EXPECT_EQ(shorter_k.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
 }
 
 TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 8;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 16384});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 32, 32, 16384});
 
-  EXPECT_EQ(plan.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
+  EXPECT_EQ(plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
   EXPECT_EQ(plan.useful_threads(), 16u);
 
-  const cpu_compute::GemmPlan<double> double_plan(
-      cpu_compute::GemmPlanOptions<double>{false, false, 32, 32, 4096});
-  EXPECT_EQ(double_plan.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
+  const ml_cpu_compute::GemmPlan<double> double_plan(
+      ml_cpu_compute::GemmPlanOptions<double>{false, false, 32, 32, 4096});
+  EXPECT_EQ(double_plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
   const std::size_t expected_double_reduction_tasks =
       (4096u + double_plan.blocking().kc - 1) / double_plan.blocking().kc;
   EXPECT_EQ(double_plan.useful_threads(), expected_double_reduction_tasks);
 }
 
 TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 128, 3072, 768});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
-  EXPECT_EQ(plan.algorithm(), cpu_compute::GemmAlgorithm::kGeneral);
+  EXPECT_EQ(plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
   EXPECT_EQ(plan.blocking().kc, 768u);
   EXPECT_GT(plan.useful_threads(), 32u);
   EXPECT_LE(plan.useful_threads(), 51u);
@@ -160,21 +160,21 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
   for (std::size_t i = 0; i < bias.size(); ++i) {
     bias[i] = static_cast<float>(i % 7) / 8.0f;
   }
-  cpu_compute::GemmPlanOptions<float> options;
+  ml_cpu_compute::GemmPlanOptions<float> options;
   options.m = m;
   options.n = n;
   options.k = k;
   options.alpha = 0.75f;
   options.beta = 0.5f;
-  const cpu_compute::GemmPlan<float> dynamic(options);
+  const ml_cpu_compute::GemmPlan<float> dynamic(options);
   options.constant_b = b;
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
-  const cpu_compute::GemmPlan<float> prepared(options);
-  EXPECT_EQ(prepared.algorithm(), cpu_compute::GemmAlgorithm::kGeneral);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  const ml_cpu_compute::GemmPlan<float> prepared(options);
+  EXPECT_EQ(prepared.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
   EXPECT_EQ(prepared.has_prepared_b(),
-            cpu_compute::EffectiveGemmSimdLevel() == cpu_compute::SimdLevel::kAVX2);
+            ml_cpu_compute::EffectiveGemmSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2);
   EXPECT_FALSE(dynamic.has_prepared_b());
   std::vector<float> expected(m * n), actual(m * n);
   dynamic.Execute(a.data(), b.data(), bias.data(), expected.data());
@@ -184,9 +184,9 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
     ASSERT_NEAR(actual[i], expected[i], 1e-4f) << i;
   }
 
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kMatrix;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kMatrix;
   epilogue.beta = 0.5f;
   dynamic.Execute(a.data(), b.data(), epilogue, expected.data());
   prepared.Execute(a.data(), epilogue, actual.data());
@@ -207,18 +207,18 @@ TEST(GemmHalfPlan, Bfloat16ProjectionUsesBoundedConversion) {
     b_float[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
     b[i] = EncodeBFloat16(b_float[i]);
   }
-  const cpu_compute::GemmPlan<float> reference(
-      cpu_compute::GemmPlanOptions<float>{false, false, m, n, k});
+  const ml_cpu_compute::GemmPlan<float> reference(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, m, n, k});
   reference.Execute(a_float.data(), b_float.data(), nullptr, expected.data());
-  cpu_compute::GemmHalfPlanOptions options;
+  ml_cpu_compute::GemmHalfPlanOptions options;
   options.is_bfloat16 = true;
   options.m = m;
   options.n = n;
   options.k = k;
-  const cpu_compute::GemmHalfPlan plan(options);
-  EXPECT_EQ(plan.algorithm(), cpu_compute::GemmAlgorithm::kGeneral);
-  cpu_compute::GemmEpilogue<float> epilogue;
-  epilogue.output_conversion = cpu_compute::GemmOutputConversion::kBFloat16;
+  const ml_cpu_compute::GemmHalfPlan plan(options);
+  EXPECT_EQ(plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kBFloat16;
   epilogue.converted_output = converted.data();
   plan.Execute(a.data(), b.data(), epilogue, workspace.data());
   for (std::size_t i = 0; i < converted.size(); ++i) {
@@ -261,10 +261,10 @@ TEST(GemmPlan, BenchmarkShapesPreserveScalesTransposesAndRepeatedExecution) {
     }
     for (std::int64_t threads : {1, 4}) {
       InlineExecutor executor;
-      cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
-      cpu_compute::ExecutionExecutorScope scope(&view);
-      const cpu_compute::GemmPlan<float> plan(
-          cpu_compute::GemmPlanOptions<float>{trans_a, trans_b, m, n, k, 0.75f, -0.5f});
+      ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
+      const ml_cpu_compute::GemmPlan<float> plan(
+          ml_cpu_compute::GemmPlanOptions<float>{trans_a, trans_b, m, n, k, 0.75f, -0.5f});
       for (int repetition = 0; repetition < 2; ++repetition) {
         std::fill(y.begin(), y.end(), std::numeric_limits<float>::quiet_NaN());
         plan.Execute(a.data(), b.data(), c.data(), y.data());
@@ -283,12 +283,12 @@ TEST(GemmPlan, BenchmarkShapesPreserveScalesTransposesAndRepeatedExecution) {
 TEST(MatMulPlan, LargeDepthOverwritesOutputAcrossRepeatedExecution) {
   constexpr std::size_t M = 32, N = 32, K = 8192;
   const std::array<std::size_t, 2> a_shape{M, K}, b_shape{K, N};
-  const cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
+  const ml_cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
   std::vector<float> a(M * K, 0.5f), b(K * N, 0.25f);
   std::vector<float> y(M * N, std::numeric_limits<float>::quiet_NaN());
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   plan.Execute(a.data(), b.data(), y.data());
   EXPECT_GT(executor.maximum_blocks, 1);
   for (float value : y) {
@@ -302,29 +302,29 @@ TEST(MatMulPlan, LargeDepthOverwritesOutputAcrossRepeatedExecution) {
 }
 
 TEST(GemmHalfPlan, Float16SplitReportsSkinnyMParallelism) {
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 8;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmHalfPlan plan(
-      cpu_compute::GemmHalfPlanOptions{false, false, false, 2, 2, 16384});
+  const ml_cpu_compute::GemmHalfPlan plan(
+      ml_cpu_compute::GemmHalfPlanOptions{false, false, false, 2, 2, 16384});
 
-  EXPECT_EQ(plan.algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
-  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
-      cpu_compute::CpuSupportsFma() && cpu_compute::CpuSupportsF16C()) {
+  EXPECT_EQ(plan.algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2 &&
+      ml_cpu_compute::CpuSupportsFma() && ml_cpu_compute::CpuSupportsF16C()) {
     EXPECT_EQ(plan.useful_threads(), 1u);
   }
 }
 
 TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 8;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
-  cpu_compute::GemmPlanOptions<float> options{false, false, 2048, 2048, 512};
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::GemmPlanOptions<float> options{false, false, 2048, 2048, 512};
   options.blocking = {64, 64, 512, 0, 0};
   options.maximum_participants = 2;
 
-  const cpu_compute::GemmPlan<float> plan(options);
+  const ml_cpu_compute::GemmPlan<float> plan(options);
 
   EXPECT_EQ(plan.blocking().mc, 64u);
   EXPECT_EQ(plan.blocking().nc, 64u);
@@ -333,14 +333,14 @@ TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
 }
 
 TEST(GemmPlan, FloatSquaresUseBoundedParallelWork) {
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 32;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmPlan<float> float_plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 256, 256, 256});
-  const cpu_compute::GemmPlan<double> double_plan(
-      cpu_compute::GemmPlanOptions<double>{false, false, 256, 256, 256});
+  const ml_cpu_compute::GemmPlan<float> float_plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 256, 256, 256});
+  const ml_cpu_compute::GemmPlan<double> double_plan(
+      ml_cpu_compute::GemmPlanOptions<double>{false, false, 256, 256, 256});
 
   EXPECT_GT(float_plan.useful_threads(), 1u);
   EXPECT_LE(float_plan.useful_threads(), 32u);
@@ -350,150 +350,163 @@ TEST(GemmPlan, FloatSquaresUseBoundedParallelWork) {
 
 TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
   const std::size_t avx2_rows =
-      cpu_compute::detail::SelectGemmRegisterRows(cpu_compute::SimdLevel::kAVX2, true);
+      ml_cpu_compute::detail::SelectGemmRegisterRows(ml_cpu_compute::SimdLevel::kAVX2, true);
   const bool supported_profile =
-      cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512 ||
-      (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
-       cpu_compute::CpuSupportsFma() &&
-       (avx2_rows == 6 || (avx2_rows == 5 && cpu_compute::detail::DetectGemmMicroarchitecture() ==
-                                                 cpu_compute::GemmMicroarchitecture::kIntelCore)));
+      ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX512 ||
+      (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2 &&
+       ml_cpu_compute::CpuSupportsFma() &&
+       (avx2_rows == 6 ||
+        (avx2_rows == 5 && ml_cpu_compute::detail::DetectGemmMicroarchitecture() ==
+                               ml_cpu_compute::GemmMicroarchitecture::kIntelCore)));
   if (!supported_profile) {
     GTEST_SKIP() << "medium-square row splitting requires a tuned AVX2 or AVX-512 profile";
   }
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 4;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 256, 256, 256});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 256, 256, 256});
   const std::size_t row_tasks = (plan.m() + plan.blocking().mc - 1) / plan.blocking().mc;
 
   EXPECT_EQ(row_tasks, 4u);
   EXPECT_GE(plan.useful_threads(), row_tasks);
-  if (cpu_compute::EffectiveGemmSimdLevel() == cpu_compute::SimdLevel::kAVX2 && avx2_rows == 5) {
+  if (ml_cpu_compute::EffectiveGemmSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+      avx2_rows == 5) {
     EXPECT_EQ(plan.blocking().mr, 6u);
-    const cpu_compute::GemmPlan<float> large(
-        cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
+    const ml_cpu_compute::GemmPlan<float> large(
+        ml_cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
     EXPECT_EQ(large.blocking().mr, 5u);
   }
 }
 
 TEST(GemmPlan, SingleThreadMediumFloatUsesWideRegisterTile) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "wide register tiling is specific to AVX-512";
   }
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 1;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 512, 512, 512});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 512, 512, 512});
 
   EXPECT_EQ(plan.blocking().mr, 24u);
 }
 
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
-  const auto avx2 = cpu_compute::detail::SelectGemmBlocking(sizeof(float), 8, 4);
-  const auto avx512 = cpu_compute::detail::SelectGemmBlocking(sizeof(float), 16, 12);
-  const auto sve384 = cpu_compute::detail::SelectGemmBlocking(sizeof(float), 12, 4);
+  const auto avx2 = ml_cpu_compute::detail::SelectGemmBlocking(sizeof(float), 8, 4);
+  const auto avx512 = ml_cpu_compute::detail::SelectGemmBlocking(sizeof(float), 16, 12);
+  const auto sve384 = ml_cpu_compute::detail::SelectGemmBlocking(sizeof(float), 12, 4);
 
   EXPECT_EQ(avx2.mr, 4u);
   EXPECT_EQ(avx512.mr, 12u);
   EXPECT_EQ(avx2.mc % avx2.mr, 0u);
   EXPECT_EQ(avx512.mc % avx512.mr, 0u);
   EXPECT_EQ(sve384.nc % sve384.nr, 0u);
-  EXPECT_EQ(cpu_compute::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 4),
-            cpu_compute::GemmAlgorithm::kGeneral);
-  EXPECT_EQ(cpu_compute::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 6),
-            cpu_compute::GemmAlgorithm::kSkinnyM);
+  EXPECT_EQ(ml_cpu_compute::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 4),
+            ml_cpu_compute::GemmAlgorithm::kGeneral);
+  EXPECT_EQ(ml_cpu_compute::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 6),
+            ml_cpu_compute::GemmAlgorithm::kSkinnyM);
 }
 
 TEST(GemmPlan, EffectiveIsaMatchesCompiledKernels) {
 #if !defined(__x86_64__) && !defined(_M_X64) && !defined(__i386__) && !defined(_M_IX86)
   GTEST_SKIP() << "GEMM effective ISA selection is x86-specific.";
 #else
-  using cpu_compute::EffectiveGemmSimdLevel;
-  using cpu_compute::SimdLevel;
+  using ml_cpu_compute::EffectiveGemmSimdLevel;
+  using ml_cpu_compute::SimdLevel;
 
-  const cpu_compute::SimdLevel effective_level = cpu_compute::EffectiveGemmSimdLevel();
-  EXPECT_LE(static_cast<int>(effective_level), static_cast<int>(cpu_compute::DetectSimdLevel()));
+  const ml_cpu_compute::SimdLevel effective_level = ml_cpu_compute::EffectiveGemmSimdLevel();
+  EXPECT_LE(static_cast<int>(effective_level), static_cast<int>(ml_cpu_compute::DetectSimdLevel()));
 
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 5, 9, 64});
-  const std::size_t expected_lanes = effective_level == cpu_compute::SimdLevel::kAVX512 ? 16
-                                     : effective_level >= cpu_compute::SimdLevel::kAVX  ? 8
-                                     : effective_level == cpu_compute::SimdLevel::kSSE2 ? 4
-                                                                                        : 1;
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 5, 9, 64});
+  const std::size_t expected_lanes = effective_level == ml_cpu_compute::SimdLevel::kAVX512 ? 16
+                                     : effective_level >= ml_cpu_compute::SimdLevel::kAVX  ? 8
+                                     : effective_level == ml_cpu_compute::SimdLevel::kSSE2 ? 4
+                                                                                           : 1;
   EXPECT_EQ(plan.blocking().nr, 2 * expected_lanes);
 
-  if constexpr (CPU_COMPUTE_MAX_SIMD_LEVEL <= static_cast<int>(cpu_compute::SimdLevel::kAVX2)) {
-    EXPECT_LE(static_cast<int>(effective_level), static_cast<int>(cpu_compute::SimdLevel::kAVX2));
+  if constexpr (ML_CPU_COMPUTE_MAX_SIMD_LEVEL <=
+                static_cast<int>(ml_cpu_compute::SimdLevel::kAVX2)) {
+    EXPECT_LE(static_cast<int>(effective_level),
+              static_cast<int>(ml_cpu_compute::SimdLevel::kAVX2));
     EXPECT_NE(plan.blocking().nr, 32u);
   }
 #endif
 }
 
 TEST(GemmPlan, SelectsRuntimeVectorLengthAwareArmProfile) {
-  using cpu_compute::ArmGemmImplementation;
-  using cpu_compute::ArmSimdLevel;
-  using cpu_compute::SelectArmGemmProfile;
+  using ml_cpu_compute::ArmGemmImplementation;
+  using ml_cpu_compute::ArmSimdLevel;
+  using ml_cpu_compute::SelectArmGemmProfile;
 
-  const auto scalar = cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kNone, 0, true);
-  const auto neon = cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kNeon, 0, true);
-  const auto sve128 = cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kSve, 16, true);
-  const auto sve256 = cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kSve, 32, true);
-  const auto sve2 = cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kSve2, 64, true);
+  const auto scalar =
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kNone, 0, true);
+  const auto neon =
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kNeon, 0, true);
+  const auto sve128 =
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kSve, 16, true);
+  const auto sve256 =
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kSve, 32, true);
+  const auto sve2 =
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kSve2, 64, true);
   const auto no_sve_kernel =
-      cpu_compute::SelectArmGemmProfile(cpu_compute::ArmSimdLevel::kSve2, 64, false);
+      ml_cpu_compute::SelectArmGemmProfile(ml_cpu_compute::ArmSimdLevel::kSve2, 64, false);
 
-  EXPECT_EQ(scalar.kind, cpu_compute::ArmGemmImplementation::kScalar);
-  EXPECT_EQ(neon.kind, cpu_compute::ArmGemmImplementation::kNeon);
+  EXPECT_EQ(scalar.kind, ml_cpu_compute::ArmGemmImplementation::kScalar);
+  EXPECT_EQ(neon.kind, ml_cpu_compute::ArmGemmImplementation::kNeon);
   EXPECT_EQ(neon.vector_bytes, 16u);
-  EXPECT_EQ(neon.register_rows, cpu_compute::kGemmNeonMR);
-  EXPECT_EQ(sve128.kind, cpu_compute::ArmGemmImplementation::kNeon);
-  EXPECT_EQ(sve256.kind, cpu_compute::ArmGemmImplementation::kSve);
+  EXPECT_EQ(neon.register_rows, ml_cpu_compute::kGemmNeonMR);
+  EXPECT_EQ(sve128.kind, ml_cpu_compute::ArmGemmImplementation::kNeon);
+  EXPECT_EQ(sve256.kind, ml_cpu_compute::ArmGemmImplementation::kSve);
   EXPECT_EQ(sve256.vector_bytes, 32u);
-  EXPECT_EQ(sve256.register_rows, cpu_compute::kGemmSveMR);
-  EXPECT_EQ(sve2.kind, cpu_compute::ArmGemmImplementation::kSve);
-  EXPECT_EQ(no_sve_kernel.kind, cpu_compute::ArmGemmImplementation::kNeon);
+  EXPECT_EQ(sve256.register_rows, ml_cpu_compute::kGemmSveMR);
+  EXPECT_EQ(sve2.kind, ml_cpu_compute::ArmGemmImplementation::kSve);
+  EXPECT_EQ(no_sve_kernel.kind, ml_cpu_compute::ArmGemmImplementation::kNeon);
 }
 
 TEST(GemmPlan, SelectsMicroarchitectureRegisterRows) {
-  using cpu_compute::GemmMicroarchitecture;
-  using cpu_compute::SimdLevel;
-  using cpu_compute::detail::SelectGemmRegisterRowsForMicroarchitecture;
+  using ml_cpu_compute::GemmMicroarchitecture;
+  using ml_cpu_compute::SimdLevel;
+  using ml_cpu_compute::detail::SelectGemmRegisterRowsForMicroarchitecture;
 
-  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(
-                cpu_compute::SimdLevel::kAVX2, true, cpu_compute::GemmMicroarchitecture::kGeneric),
-            4u);
   EXPECT_EQ(
-      SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX2, true,
-                                                 cpu_compute::GemmMicroarchitecture::kIntelCore),
-      5u);
-  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX2, true,
-                                                       cpu_compute::GemmMicroarchitecture::kAmdZen),
-            6u);
-  EXPECT_EQ(
-      SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX512, true,
-                                                 cpu_compute::GemmMicroarchitecture::kIntelCore),
-      12u);
-  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX512, true,
-                                                       cpu_compute::GemmMicroarchitecture::kAmdZen),
-            12u);
-  EXPECT_EQ(
-      SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX2, false,
-                                                 cpu_compute::GemmMicroarchitecture::kIntelCore),
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX2, true,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kGeneric),
       4u);
-  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(cpu_compute::SimdLevel::kAVX2, false,
-                                                       cpu_compute::GemmMicroarchitecture::kAmdZen),
-            4u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX2, true,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kIntelCore),
+      5u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX2, true,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kAmdZen),
+      6u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX512, true,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kIntelCore),
+      12u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX512, true,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kAmdZen),
+      12u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX2, false,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kIntelCore),
+      4u);
+  EXPECT_EQ(
+      SelectGemmRegisterRowsForMicroarchitecture(ml_cpu_compute::SimdLevel::kAVX2, false,
+                                                 ml_cpu_compute::GemmMicroarchitecture::kAmdZen),
+      4u);
 }
 
 TEST(GemmPlan, ColumnBlockSlicesPackedPanels) {
-  using cpu_compute::detail::SelectGemmColumnBlock;
-  const cpu_compute::GemmBlocking avx2_f32{240, 1024, 272, 6, 16};
-  const cpu_compute::GemmBlocking avx2_f64{240, 1024, 208, 6, 8};
-  const cpu_compute::GemmBlocking narrow{240, 8, 272, 6, 16};
+  using ml_cpu_compute::detail::SelectGemmColumnBlock;
+  const ml_cpu_compute::GemmBlocking avx2_f32{240, 1024, 272, 6, 16};
+  const ml_cpu_compute::GemmBlocking avx2_f64{240, 1024, 208, 6, 8};
+  const ml_cpu_compute::GemmBlocking narrow{240, 8, 272, 6, 16};
 
   const std::size_t f32_block = SelectGemmColumnBlock(avx2_f32, sizeof(float));
   const std::size_t f64_block = SelectGemmColumnBlock(avx2_f64, sizeof(double));
@@ -512,13 +525,13 @@ TEST(GemmPlan, ColumnBlockSlicesPackedPanels) {
 }
 
 TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
-  const cpu_compute::GemmBlocking initial{256, 1024, 448, 4, 16};
+  const ml_cpu_compute::GemmBlocking initial{256, 1024, 448, 4, 16};
   for (const std::size_t size : {256u, 512u, 1024u}) {
     const auto blocking =
-        cpu_compute::detail::ConstrainGemmBlockingForTasks(initial, size, size, 2048, 6);
+        ml_cpu_compute::detail::ConstrainGemmBlockingForTasks(initial, size, size, 2048, 6);
     const std::size_t row_tasks = (size + blocking.mc - 1) / blocking.mc;
     const std::size_t column_block =
-        cpu_compute::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+        ml_cpu_compute::detail::SelectGemmColumnBlock(blocking, sizeof(float));
     const std::size_t column_tasks = (size + column_block - 1) / column_block;
 
     EXPECT_GE(row_tasks * column_tasks, 6u) << "size=" << size;
@@ -530,12 +543,12 @@ TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
 }
 
 TEST(GemmPlan, BlockingDoesNotFragmentPanelsForIdleParticipants) {
-  const cpu_compute::GemmBlocking initial{256, 1024, 448, 4, 16};
+  const ml_cpu_compute::GemmBlocking initial{256, 1024, 448, 4, 16};
   const auto blocking =
-      cpu_compute::detail::ConstrainGemmBlockingForTasks(initial, 128, 3072, 768, 96);
+      ml_cpu_compute::detail::ConstrainGemmBlockingForTasks(initial, 128, 3072, 768, 96);
   const std::size_t row_tasks = (128 + blocking.mc - 1) / blocking.mc;
   const std::size_t column_block =
-      cpu_compute::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+      ml_cpu_compute::detail::SelectGemmColumnBlock(blocking, sizeof(float));
   const std::size_t column_tasks = (3072 + column_block - 1) / column_block;
 
   EXPECT_GE(row_tasks * column_tasks, 36u);
@@ -544,7 +557,7 @@ TEST(GemmPlan, BlockingDoesNotFragmentPanelsForIdleParticipants) {
 }
 
 TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
-  using cpu_compute::detail::SelectGemmParticipantCount;
+  using ml_cpu_compute::detail::SelectGemmParticipantCount;
 
   EXPECT_EQ(SelectGemmParticipantCount(1, 1024, 1024, 96), 1u);
   EXPECT_EQ(SelectGemmParticipantCount(512, 512, 512, 96), 16u);
@@ -552,20 +565,20 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   EXPECT_EQ(SelectGemmParticipantCount(2, 2, 8'388'608, 96), 4u);
   EXPECT_EQ(SelectGemmParticipantCount(1024, 1024, 0, 96), 32u);
 
-  cpu_compute::ExecutionExecutorView executor;
+  ml_cpu_compute::ExecutionExecutorView executor;
   executor.effective_threads = 96;
-  cpu_compute::ExecutionExecutorScope scope(&executor);
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  const cpu_compute::GemmPlan<float> skinny_m(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1, 1024, 1024});
-  const cpu_compute::GemmPlan<float> skinny_n(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1, 1024});
-  const cpu_compute::GemmPlan<float> square_512(
-      cpu_compute::GemmPlanOptions<float>{false, false, 512, 512, 512});
-  const cpu_compute::GemmPlan<float> square_1024(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
-  const cpu_compute::GemmPlan<float> transformer(
-      cpu_compute::GemmPlanOptions<float>{false, false, 128, 3072, 768});
+  const ml_cpu_compute::GemmPlan<float> skinny_m(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, 1024, 1024});
+  const ml_cpu_compute::GemmPlan<float> skinny_n(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1, 1024});
+  const ml_cpu_compute::GemmPlan<float> square_512(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 512, 512, 512});
+  const ml_cpu_compute::GemmPlan<float> square_1024(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
+  const ml_cpu_compute::GemmPlan<float> transformer(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
   // The skinny-M task count follows the packed column block, whose width tracks
   // the vector length, so scalable SVE widths schedule a different number of
@@ -586,18 +599,18 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
 
 TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   constexpr std::size_t size = 512;
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, size, size, size});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, size, size, size});
   EXPECT_GT(plan.useful_threads(), 1u);
   EXPECT_LE(plan.useful_threads(), 128u);
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 1.0f);
   std::vector<float> y(size * size);
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
 
   {
-    cpu_compute::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     plan.Execute(a.data(), b.data(), nullptr, y.data());
   }
 
@@ -607,16 +620,16 @@ TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
 
 TEST(GemmPlan, SmallTransposedAUsesBoundedParallelism) {
   constexpr std::size_t size = 128;
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{true, false, size, size, size});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{true, false, size, size, size});
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 1.0f);
   std::vector<float> y(size * size);
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
 
   {
-    cpu_compute::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     plan.Execute(a.data(), b.data(), nullptr, y.data());
   }
 
@@ -627,9 +640,9 @@ TEST(GemmPlan, SmallTransposedAUsesBoundedParallelism) {
 
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   const auto check = [](std::size_t m, std::size_t n, std::size_t k,
-                        cpu_compute::GemmAlgorithm expected_algorithm) {
-    const cpu_compute::GemmPlan<float> plan(
-        cpu_compute::GemmPlanOptions<float>{false, false, m, n, k});
+                        ml_cpu_compute::GemmAlgorithm expected_algorithm) {
+    const ml_cpu_compute::GemmPlan<float> plan(
+        ml_cpu_compute::GemmPlanOptions<float>{false, false, m, n, k});
     const std::vector<float> a(m * k, 1.0f);
     const std::vector<float> b(k * n, 1.0f);
     std::vector<float> y(m * n);
@@ -642,36 +655,36 @@ TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
     }
   };
 
-  check(2, 3, 16, cpu_compute::GemmAlgorithm::kDirect);
-  check(2, 257, 64, cpu_compute::GemmAlgorithm::kSkinnyM);
-  check(16, 1, 64, cpu_compute::GemmAlgorithm::kSkinnyN);
-  check(32, 32, 64, cpu_compute::GemmAlgorithm::kGeneral);
-  check(2, 2, 4096, cpu_compute::GemmAlgorithm::kSplitK);
+  check(2, 3, 16, ml_cpu_compute::GemmAlgorithm::kDirect);
+  check(2, 257, 64, ml_cpu_compute::GemmAlgorithm::kSkinnyM);
+  check(16, 1, 64, ml_cpu_compute::GemmAlgorithm::kSkinnyN);
+  check(32, 32, 64, ml_cpu_compute::GemmAlgorithm::kGeneral);
+  check(2, 2, 4096, ml_cpu_compute::GemmAlgorithm::kSplitK);
 }
 
 TEST(GemmPlan, AvoidsSplitKForSingleColumnOutputs) {
-  using cpu_compute::detail::SelectGemmAlgorithm;
+  using ml_cpu_compute::detail::SelectGemmAlgorithm;
 
   // A single output column streams best as a vectorized K reduction that is
   // parallelized over its M rows, so split-K's partition and reduction
   // overhead is never worth paying for it.
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 8, 1, 8192, 8, 4),
-            cpu_compute::GemmAlgorithm::kSkinnyN);
+            ml_cpu_compute::GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 64, 1, 8192, 8, 4),
-            cpu_compute::GemmAlgorithm::kSkinnyN);
+            ml_cpu_compute::GemmAlgorithm::kSkinnyN);
 
   // Two or more columns without enough M/N parallelism still use split-K.
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 8, 2, 8192, 8, 4),
-            cpu_compute::GemmAlgorithm::kSplitK);
+            ml_cpu_compute::GemmAlgorithm::kSplitK);
 
   // When both dimensions are skinny, the narrower output vectorizes over K,
   // while the wider output keeps vectorizing over its columns.
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 4, 1, 256, 8, 4),
-            cpu_compute::GemmAlgorithm::kSkinnyN);
+            ml_cpu_compute::GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 1, 1, 256, 8, 4),
-            cpu_compute::GemmAlgorithm::kSkinnyN);
+            ml_cpu_compute::GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(SelectGemmAlgorithm(false, false, 1, 8, 256, 8, 4),
-            cpu_compute::GemmAlgorithm::kSkinnyM);
+            ml_cpu_compute::GemmAlgorithm::kSkinnyM);
 }
 
 TEST(GemmPlan, VectorizedSkinnyNMatchesReference) {
@@ -709,7 +722,7 @@ TEST(GemmPlan, VectorizedSkinnyNMatchesReference) {
     }
     const bool has_bias = beta != 0.0f;
     std::vector<float> y(M * N, 0.0f);
-    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kSkinnyN>(
+    ml_cpu_compute::detail::GemmFloat32Planned<ml_cpu_compute::GemmAlgorithm::kSkinnyN>(
         trans_a, trans_b, M, N, K, alpha, a.data(), b.data(), beta, has_bias ? c.data() : nullptr,
         y.data());
     const std::vector<float> expected = reference(trans_a, trans_b, M, N, K, alpha, beta, a, b,
@@ -771,7 +784,7 @@ TEST(GemmPlan, VectorizedSkinnyMMatchesReference) {
     }
     const bool has_bias = beta != 0.0f;
     std::vector<float> y(M * N, 0.0f);
-    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kSkinnyM>(
+    ml_cpu_compute::detail::GemmFloat32Planned<ml_cpu_compute::GemmAlgorithm::kSkinnyM>(
         trans_a, trans_b, M, N, K, alpha, a.data(), b.data(), beta, has_bias ? c.data() : nullptr,
         y.data());
     const std::vector<float> expected = reference(trans_a, trans_b, M, N, K, alpha, beta, a, b,
@@ -806,19 +819,20 @@ TEST(GemmPlan, SingleRowColumnRangesRespectExecutorLimits) {
   for (const std::size_t n : {64, 4097}) {
     for (const std::int64_t threads : {1, 4}) {
       InlineExecutor executor;
-      cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
-      cpu_compute::ExecutionExecutorScope scope(&view);
+      ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
       constexpr std::size_t k = 129;
       const std::vector<float> a(k, 1.0f), b(k * n, 2.0f);
       const std::vector<std::uint16_t> ah(k, 0x3c00), bh(k * n, 0x4000);
       std::vector<float> y(n, -1.0f);
-      cpu_compute::GemmPlan<float> plan(cpu_compute::GemmPlanOptions<float>{false, false, 1, n, k});
+      ml_cpu_compute::GemmPlan<float> plan(
+          ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, n, k});
       plan.Execute(a.data(), b.data(), nullptr, y.data());
       for (const float value : y) {
         EXPECT_EQ(value, 2.0f * k);
       }
-      cpu_compute::GemmHalfPlan half(
-          cpu_compute::GemmHalfPlanOptions{false, false, false, 1, n, k});
+      ml_cpu_compute::GemmHalfPlan half(
+          ml_cpu_compute::GemmHalfPlanOptions{false, false, false, 1, n, k});
       half.Execute(ah.data(), bh.data(), {}, y.data());
       for (const float value : y) {
         EXPECT_EQ(value, 2.0f * k);
@@ -838,22 +852,22 @@ TEST(GemmPlan, PlannedAlgorithmsFallbackOutsideSelectionContract) {
   const std::array<float, 6> transposed_a = {1, 4, 2, 5, 3, 6};
   const std::array<float, 6> b = {1, 2, 3, 4, 5, 6};
   std::array<float, 4> direct_y = {};
-  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kDirect>(
+  ml_cpu_compute::detail::GemmFloat32Planned<ml_cpu_compute::GemmAlgorithm::kDirect>(
       true, false, 2, 2, 3, 1.0f, transposed_a.data(), b.data(), 0.0f, nullptr, direct_y.data());
   ExpectValues({direct_y.begin(), direct_y.end()}, std::array<float, 4>{22, 28, 49, 64});
 
   const std::vector<float> a(5 * 3, 1.0f);
   const std::vector<float> skinny_b(3 * 2, 1.0f);
   std::vector<float> skinny_y(5 * 2);
-  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kSkinnyM>(
+  ml_cpu_compute::detail::GemmFloat32Planned<ml_cpu_compute::GemmAlgorithm::kSkinnyM>(
       false, false, 5, 2, 3, 1.0f, a.data(), skinny_b.data(), 0.0f, nullptr, skinny_y.data());
   ExpectValues(skinny_y, std::array<float, 10>{3, 3, 3, 3, 3, 3, 3, 3, 3, 3});
 }
 
 TEST(GemmPlan, OwnsConstantB) {
   std::vector<float> b = {1, 2, 3, 4, 5, 6};
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
   b.assign(b.size(), 0.0f);
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
   std::vector<float> y(4);
@@ -867,18 +881,18 @@ TEST(GemmPlan, OwnsConstantB) {
 TEST(GemmPlan, ExecutesRowBroadcastBiasEpilogue) {
   // alpha applies to the product, the epilogue adds beta * bias broadcast over
   // rows and clamps negatives to zero with a fused ReLU.
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2, 0.5f, 0.0f, {}});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2, 0.5f, 0.0f, {}});
   const std::vector<float> a = {1, 2, 3, 4};
   const std::vector<float> b = {1, 0, 0, 1};
   const std::vector<float> bias = {-10, 1}; // length N, broadcast over the 2 rows
   std::vector<float> y(4);
 
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kRow;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kRow;
   epilogue.beta = 2.0f;
-  epilogue.activation = cpu_compute::GemmActivation::kRelu;
+  epilogue.activation = ml_cpu_compute::GemmActivation::kRelu;
 
   plan.Execute(a.data(), b.data(), epilogue, y.data());
 
@@ -892,16 +906,16 @@ TEST(GemmPlan, ExecutesMatrixBiasEpilogueMatchesFullMatrixExecute) {
   const std::vector<float> b = {1, 2, 3, 4, 5, 6};
   const std::vector<float> c = {1, 1, 1, 1};
 
-  const cpu_compute::GemmPlan<float> fused(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
+  const ml_cpu_compute::GemmPlan<float> fused(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
   std::vector<float> expected(4);
   fused.Execute(a.data(), b.data(), c.data(), expected.data());
 
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 0.0f, {}});
-  cpu_compute::GemmEpilogue<float> epilogue;
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 0.0f, {}});
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = c.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kMatrix;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kMatrix;
   epilogue.beta = 2.0f;
   std::vector<float> y(4);
   plan.Execute(a.data(), b.data(), epilogue, y.data());
@@ -911,16 +925,16 @@ TEST(GemmPlan, ExecutesMatrixBiasEpilogueMatchesFullMatrixExecute) {
 
 TEST(GemmPlan, ExecutesConstantBEpilogue) {
   std::vector<float> b = {1, 2, 3, 4, 5, 6};
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
   b.assign(b.size(), 0.0f);
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
   const std::vector<float> bias = {5};
   std::vector<float> y(4);
 
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kScalar;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kScalar;
   epilogue.beta = 1.0f;
 
   plan.Execute(a.data(), epilogue, y.data());
@@ -929,16 +943,16 @@ TEST(GemmPlan, ExecutesConstantBEpilogue) {
 }
 
 TEST(GemmPlan, ExecutesColumnBroadcastBiasEpilogue) {
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2});
   const std::array<float, 4> a = {1, 2, 3, 4};
   const std::array<float, 4> b = {1, 0, 0, 1};
   const std::array<float, 2> bias = {10, 20};
   std::array<float, 4> y = {};
 
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kColumn;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kColumn;
   epilogue.beta = 0.5f;
 
   plan.Execute(a.data(), b.data(), epilogue, y.data());
@@ -947,16 +961,16 @@ TEST(GemmPlan, ExecutesColumnBroadcastBiasEpilogue) {
 }
 
 TEST(GemmPlan, ExecutesFusedRowBroadcastBiasEpilogue) {
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2});
   const std::array<float, 4> a = {1, 2, 3, 4};
   const std::array<float, 4> b = {1, 0, 0, 1};
   const std::array<float, 2> bias = {10, 20};
   std::array<float, 4> y = {};
 
-  cpu_compute::GemmEpilogue<float> epilogue;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = cpu_compute::GemmBroadcast::kRow;
+  epilogue.bias_layout = ml_cpu_compute::GemmBroadcast::kRow;
   epilogue.beta = 0.5f;
 
   plan.Execute(a.data(), b.data(), epilogue, y.data());
@@ -965,12 +979,12 @@ TEST(GemmPlan, ExecutesFusedRowBroadcastBiasEpilogue) {
 }
 
 TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "direct broadcast bias is specific to medium AVX-512 GEMMs";
   }
   constexpr std::size_t size = 130;
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, size, size, size});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, size, size, size});
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 0.0f);
   for (std::size_t index = 0; index < size; ++index) {
@@ -986,11 +1000,11 @@ TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
   std::vector<float> y(size * size);
 
   for (const auto &[bias, layout] :
-       std::array<std::pair<const float *, cpu_compute::GemmBroadcast>, 3>{
-           std::pair{&scalar_bias, cpu_compute::GemmBroadcast::kScalar},
-           std::pair{row_bias.data(), cpu_compute::GemmBroadcast::kRow},
-           std::pair{column_bias.data(), cpu_compute::GemmBroadcast::kColumn}}) {
-    cpu_compute::GemmEpilogue<float> epilogue;
+       std::array<std::pair<const float *, ml_cpu_compute::GemmBroadcast>, 3>{
+           std::pair{&scalar_bias, ml_cpu_compute::GemmBroadcast::kScalar},
+           std::pair{row_bias.data(), ml_cpu_compute::GemmBroadcast::kRow},
+           std::pair{column_bias.data(), ml_cpu_compute::GemmBroadcast::kColumn}}) {
+    ml_cpu_compute::GemmEpilogue<float> epilogue;
     epilogue.bias = bias;
     epilogue.bias_layout = layout;
     epilogue.beta = 0.5f;
@@ -1000,10 +1014,10 @@ TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
     for (std::size_t row = 0; row < size; ++row) {
       for (std::size_t column = 0; column < size; ++column) {
         const float bias_value =
-            layout == cpu_compute::GemmBroadcast::kScalar
+            layout == ml_cpu_compute::GemmBroadcast::kScalar
                 ? scalar_bias
-                : (layout == cpu_compute::GemmBroadcast::kRow ? row_bias[column]
-                                                              : column_bias[row]);
+                : (layout == ml_cpu_compute::GemmBroadcast::kRow ? row_bias[column]
+                                                                 : column_bias[row]);
         EXPECT_FLOAT_EQ(y[row * size + column], 1.0f + 0.5f * bias_value);
       }
     }
@@ -1011,7 +1025,7 @@ TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
 }
 
 TEST(MatMulPlan, ExecutesRankTwoFoundation) {
-  const cpu_compute::MatMulPlan<double> plan(2, 2, 2);
+  const ml_cpu_compute::MatMulPlan<double> plan(2, 2, 2);
   const std::array<double, 4> a = {1, 2, 3, 4};
   const std::array<double, 4> b = {5, 6, 7, 8};
   std::array<double, 4> y = {};
@@ -1026,7 +1040,7 @@ TEST(MatMulPlan, ExecutesRankTwoFoundation) {
 
 TEST(MatMulPlan, PromotesRankOneInputs) {
   const std::array<std::size_t, 1> vector_shape = {3};
-  const cpu_compute::MatMulPlan<float> dot_plan(vector_shape, vector_shape);
+  const ml_cpu_compute::MatMulPlan<float> dot_plan(vector_shape, vector_shape);
   const std::array<float, 3> a = {1, 2, 3};
   const std::array<float, 3> b = {4, 5, 6};
   float dot = 0;
@@ -1037,7 +1051,7 @@ TEST(MatMulPlan, PromotesRankOneInputs) {
   EXPECT_FLOAT_EQ(dot, 32);
 
   const std::array<std::size_t, 2> matrix_shape = {3, 2};
-  const cpu_compute::MatMulPlan<float> vector_matrix_plan(vector_shape, matrix_shape);
+  const ml_cpu_compute::MatMulPlan<float> vector_matrix_plan(vector_shape, matrix_shape);
   const std::array<float, 6> matrix = {1, 2, 3, 4, 5, 6};
   std::array<float, 2> vector_matrix = {};
   vector_matrix_plan.Execute(a.data(), matrix.data(), vector_matrix.data());
@@ -1046,7 +1060,7 @@ TEST(MatMulPlan, PromotesRankOneInputs) {
   EXPECT_FLOAT_EQ(vector_matrix[1], 28);
 
   const std::array<std::size_t, 2> left_shape = {2, 3};
-  const cpu_compute::MatMulPlan<float> matrix_vector_plan(left_shape, vector_shape);
+  const ml_cpu_compute::MatMulPlan<float> matrix_vector_plan(left_shape, vector_shape);
   std::array<float, 2> matrix_vector = {};
   matrix_vector_plan.Execute(matrix.data(), b.data(), matrix_vector.data());
   ExpectShape(matrix_vector_plan.output_shape(), std::array<std::size_t, 1>{2});
@@ -1057,7 +1071,7 @@ TEST(MatMulPlan, PromotesRankOneInputs) {
 TEST(MatMulPlan, BroadcastsBatchesFromEitherInput) {
   const std::array<std::size_t, 4> a_shape = {2, 1, 2, 2};
   const std::array<std::size_t, 4> b_shape = {1, 3, 2, 1};
-  const cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
+  const ml_cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
   const std::array<float, 8> a = {1, 2, 3, 4, 5, 6, 7, 8};
   const std::array<float, 6> b = {1, 1, 2, 1, 1, 3};
   std::array<float, 12> y = {};
@@ -1073,7 +1087,7 @@ TEST(MatMulPlan, BroadcastsBatchesFromEitherInput) {
 TEST(MatMulPlan, ExecutesBroadcastHalfPlan) {
   const std::array<std::size_t, 4> a_shape = {2, 1, 2, 2};
   const std::array<std::size_t, 4> b_shape = {1, 3, 2, 1};
-  const cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
+  const ml_cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
   const std::array<float, 8> a_values = {1, 2, 3, 4, 5, 6, 7, 8};
   const std::array<float, 6> b_values = {1, 1, 2, 1, 1, 3};
   std::array<std::uint16_t, 8> a;
@@ -1081,12 +1095,12 @@ TEST(MatMulPlan, ExecutesBroadcastHalfPlan) {
   std::transform(a_values.begin(), a_values.end(), a.begin(), EncodeBFloat16);
   std::transform(b_values.begin(), b_values.end(), b.begin(), EncodeBFloat16);
 
-  const cpu_compute::GemmHalfPlan half_plan(
-      cpu_compute::GemmHalfPlanOptions{true, false, false, 2, 1, 2});
+  const ml_cpu_compute::GemmHalfPlan half_plan(
+      ml_cpu_compute::GemmHalfPlanOptions{true, false, false, 2, 1, 2});
   std::array<float, 12> workspace = {};
   std::array<std::uint16_t, 12> converted = {};
-  cpu_compute::GemmEpilogue<float> epilogue;
-  epilogue.output_conversion = cpu_compute::GemmOutputConversion::kBFloat16;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kBFloat16;
   epilogue.converted_output = converted.data();
   plan.ExecuteHalf(half_plan, a.data(), b.data(), epilogue, workspace.data());
 
@@ -1102,19 +1116,19 @@ TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
   constexpr std::size_t k = 4096;
   const std::array<std::size_t, 3> a_shape = {batch_count, m, k};
   const std::array<std::size_t, 2> b_shape = {k, n};
-  const cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
+  const ml_cpu_compute::MatMulPlan<float> plan(a_shape, b_shape);
   std::vector<float> a(batch_count * m * k, 1.0f);
   std::vector<float> b(k * n, 1.0f);
   std::vector<float> y(batch_count * m * n);
   InlineExecutor executor;
-  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
 
   {
-    cpu_compute::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     plan.Execute(a.data(), b.data(), y.data());
   }
 
-  EXPECT_EQ(plan.gemm_plan().algorithm(), cpu_compute::GemmAlgorithm::kSplitK);
+  EXPECT_EQ(plan.gemm_plan().algorithm(), ml_cpu_compute::GemmAlgorithm::kSplitK);
   EXPECT_EQ(executor.maximum_blocks, 4);
   EXPECT_EQ(executor.multi_block_dispatches, 1);
   for (float value : y) {
@@ -1125,7 +1139,7 @@ TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
 TEST(MatMulPlan, AppliesMatrixTransposeBeforeBatchMultiplication) {
   const std::array<std::size_t, 3> a_shape = {2, 3, 2};
   const std::array<std::size_t, 2> b_shape = {4, 3};
-  const cpu_compute::MatMulPlan<double> plan(a_shape, b_shape, true, true);
+  const ml_cpu_compute::MatMulPlan<double> plan(a_shape, b_shape, true, true);
   const std::array<double, 12> a = {1, 4, 2, 5, 3, 6, 1, 0, 0, 1, 1, 1};
   const std::array<double, 12> b = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
   std::array<double, 16> y = {};
@@ -1144,7 +1158,7 @@ TEST(MatMulPlan, OwnsBroadcastConstantB) {
   const std::array<std::size_t, 3> a_shape = {2, 1, 2};
   const std::array<std::size_t, 3> b_shape = {2, 2, 1};
   std::vector<float> b = {2, 3, 4, 5};
-  const cpu_compute::MatMulPlan<float> plan(a_shape, b_shape, false, false, b);
+  const ml_cpu_compute::MatMulPlan<float> plan(a_shape, b_shape, false, false, b);
   b.assign(b.size(), 0);
   const std::array<float, 4> a = {1, 2, 3, 4};
   std::array<float, 2> y = {};
@@ -1158,23 +1172,23 @@ TEST(MatMulPlan, OwnsBroadcastConstantB) {
 TEST(MatMulPlan, HandlesEmptyBatchMatrixAndReductionDimensions) {
   const std::array<std::size_t, 3> empty_batch_a = {0, 2, 3};
   const std::array<std::size_t, 3> empty_batch_b = {1, 3, 4};
-  const cpu_compute::MatMulPlan<float> empty_batch(empty_batch_a, empty_batch_b);
+  const ml_cpu_compute::MatMulPlan<float> empty_batch(empty_batch_a, empty_batch_b);
   ExpectShape(empty_batch.output_shape(), std::array<std::size_t, 3>{0, 2, 4});
   EXPECT_NO_THROW(empty_batch.Execute(nullptr, nullptr, nullptr));
 
   const std::array<std::size_t, 2> empty_rows_a = {0, 3};
   const std::array<std::size_t, 2> regular_b = {3, 2};
-  const cpu_compute::MatMulPlan<float> empty_rows(empty_rows_a, regular_b);
+  const ml_cpu_compute::MatMulPlan<float> empty_rows(empty_rows_a, regular_b);
   EXPECT_NO_THROW(empty_rows.Execute(nullptr, nullptr, nullptr));
 
   const std::array<std::size_t, 2> regular_a = {2, 3};
   const std::array<std::size_t, 2> empty_columns_b = {3, 0};
-  const cpu_compute::MatMulPlan<float> empty_columns(regular_a, empty_columns_b);
+  const ml_cpu_compute::MatMulPlan<float> empty_columns(regular_a, empty_columns_b);
   EXPECT_NO_THROW(empty_columns.Execute(nullptr, nullptr));
 
   const std::array<std::size_t, 2> empty_k_a = {2, 0};
   const std::array<std::size_t, 2> empty_k_b = {0, 3};
-  const cpu_compute::MatMulPlan<float> empty_k(empty_k_a, empty_k_b);
+  const ml_cpu_compute::MatMulPlan<float> empty_k(empty_k_a, empty_k_b);
   std::array<float, 6> y = {1, 1, 1, 1, 1, 1};
   empty_k.Execute(nullptr, nullptr, y.data());
   ExpectValues({y.begin(), y.end()}, std::array<float, 6>{0, 0, 0, 0, 0, 0});
@@ -1183,51 +1197,52 @@ TEST(MatMulPlan, HandlesEmptyBatchMatrixAndReductionDimensions) {
 TEST(MatMulPlan, RejectsInvalidShapes) {
   const std::array<std::size_t, 1> scalar_shape = {0};
   const std::array<std::size_t, 2> matrix_shape = {2, 3};
-  EXPECT_THROW((cpu_compute::MatMulPlan<float>({}, matrix_shape)), std::invalid_argument);
-  EXPECT_THROW((cpu_compute::MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{4, 2})),
+  EXPECT_THROW((ml_cpu_compute::MatMulPlan<float>({}, matrix_shape)), std::invalid_argument);
+  EXPECT_THROW((ml_cpu_compute::MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{4, 2})),
                std::invalid_argument);
-  EXPECT_THROW((cpu_compute::MatMulPlan<float>(std::array<std::size_t, 3>{2, 2, 3},
-                                               std::array<std::size_t, 3>{3, 3, 2})),
+  EXPECT_THROW((ml_cpu_compute::MatMulPlan<float>(std::array<std::size_t, 3>{2, 2, 3},
+                                                  std::array<std::size_t, 3>{3, 3, 2})),
                std::invalid_argument);
-  EXPECT_THROW((cpu_compute::MatMulPlan<float>(scalar_shape, scalar_shape, true)),
+  EXPECT_THROW((ml_cpu_compute::MatMulPlan<float>(scalar_shape, scalar_shape, true)),
                std::invalid_argument);
 
   const std::array<float, 1> wrong_constant = {1};
-  EXPECT_THROW((cpu_compute::MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{3, 2},
-                                               false, false, wrong_constant)),
+  EXPECT_THROW((ml_cpu_compute::MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{3, 2},
+                                                  false, false, wrong_constant)),
                std::invalid_argument);
 }
 
 TEST(StridedBatchedGemm, ExecutesEveryBatchWithElementStrides) {
   const std::array<float, 4> b = {1, 0, 0, 1};
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2, 1.0f, 0.0f, b});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 2, 2, 1.0f, 0.0f, b});
   const std::vector<float> a = {1, 2, 3, 4, -1, -1, 5, 6, 7, 8};
   std::vector<float> y(10, -1.0f);
 
-  cpu_compute::StridedBatchedGemm<float>(plan, 2, a.data(), 6, nullptr, 0, nullptr, 0, y.data(), 6);
+  ml_cpu_compute::StridedBatchedGemm<float>(plan, 2, a.data(), 6, nullptr, 0, nullptr, 0, y.data(),
+                                            6);
 
   ExpectValues({y.begin(), y.begin() + 4}, std::array<float, 4>{1, 2, 3, 4});
   ExpectValues({y.begin() + 6, y.end()}, std::array<float, 4>{5, 6, 7, 8});
 }
 
 TEST(GroupedGemm, ExecutesHeterogeneousPlans) {
-  const cpu_compute::GemmPlan<float> first(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1, 2, 2});
-  const cpu_compute::GemmPlan<float> second(
-      cpu_compute::GemmPlanOptions<float>{false, false, 2, 1, 2});
+  const ml_cpu_compute::GemmPlan<float> first(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, 2, 2});
+  const ml_cpu_compute::GemmPlan<float> second(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 2, 1, 2});
   const std::array<float, 2> a1 = {2, 3};
   const std::array<float, 4> b1 = {1, 2, 3, 4};
   const std::array<float, 4> a2 = {1, 2, 3, 4};
   const std::array<float, 2> b2 = {5, 6};
   std::array<float, 2> y1 = {};
   std::array<float, 2> y2 = {};
-  const std::array<cpu_compute::GroupedGemmProblem<float>, 2> problems = {
-      cpu_compute::GroupedGemmProblem<float>{&first, a1.data(), b1.data(), nullptr, y1.data()},
-      cpu_compute::GroupedGemmProblem<float>{&second, a2.data(), b2.data(), nullptr, y2.data()},
+  const std::array<ml_cpu_compute::GroupedGemmProblem<float>, 2> problems = {
+      ml_cpu_compute::GroupedGemmProblem<float>{&first, a1.data(), b1.data(), nullptr, y1.data()},
+      ml_cpu_compute::GroupedGemmProblem<float>{&second, a2.data(), b2.data(), nullptr, y2.data()},
   };
 
-  cpu_compute::GroupedGemm<float>(problems);
+  ml_cpu_compute::GroupedGemm<float>(problems);
 
   EXPECT_FLOAT_EQ(y1[0], 11);
   EXPECT_FLOAT_EQ(y1[1], 16);
@@ -1236,28 +1251,28 @@ TEST(GroupedGemm, ExecutesHeterogeneousPlans) {
 }
 
 TEST(GroupedGemm, ValidatesAllProblemsBeforeExecution) {
-  const cpu_compute::GemmPlan<float> plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1, 1, 1});
+  const ml_cpu_compute::GemmPlan<float> plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, 1, 1});
   const float a = 2.0f;
   const float b = 3.0f;
   float y = -1.0f;
-  const std::array<cpu_compute::GroupedGemmProblem<float>, 2> problems = {
-      cpu_compute::GroupedGemmProblem<float>{&plan, &a, &b, nullptr, &y},
-      cpu_compute::GroupedGemmProblem<float>{nullptr, &a, &b, nullptr, &y},
+  const std::array<ml_cpu_compute::GroupedGemmProblem<float>, 2> problems = {
+      ml_cpu_compute::GroupedGemmProblem<float>{&plan, &a, &b, nullptr, &y},
+      ml_cpu_compute::GroupedGemmProblem<float>{nullptr, &a, &b, nullptr, &y},
   };
 
-  EXPECT_THROW(cpu_compute::GroupedGemm<float>(problems), std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::GroupedGemm<float>(problems), std::invalid_argument);
   EXPECT_FLOAT_EQ(y, -1.0f);
 }
 
 TEST(GemmPlan, RejectsInvalidConstantAndMissingDynamicB) {
   const std::array<float, 1> wrong_size_b = {1.0f};
-  EXPECT_THROW((cpu_compute::GemmPlan<float>(cpu_compute::GemmPlanOptions<float>{
+  EXPECT_THROW((ml_cpu_compute::GemmPlan<float>(ml_cpu_compute::GemmPlanOptions<float>{
                    false, false, 2, 2, 3, 1.0f, 0.0f, wrong_size_b})),
                std::invalid_argument);
 
-  const cpu_compute::GemmPlan<float> dynamic_plan(
-      cpu_compute::GemmPlanOptions<float>{false, false, 1, 1, 1});
+  const ml_cpu_compute::GemmPlan<float> dynamic_plan(
+      ml_cpu_compute::GemmPlanOptions<float>{false, false, 1, 1, 1});
   const float a = 1.0f;
   float y = 0.0f;
   EXPECT_THROW(dynamic_plan.Execute(&a, nullptr, nullptr, &y), std::invalid_argument);
@@ -1265,8 +1280,8 @@ TEST(GemmPlan, RejectsInvalidConstantAndMissingDynamicB) {
 }
 
 TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
-  const cpu_compute::GemmHalfPlanOptions options{true, false, false, 2, 2, 3, 0.5f};
-  const cpu_compute::GemmHalfPlan plan(options);
+  const ml_cpu_compute::GemmHalfPlanOptions options{true, false, false, 2, 2, 3, 0.5f};
+  const ml_cpu_compute::GemmHalfPlan plan(options);
 
   const std::vector<float> a_f = {1, 2, 3, 4, 5, 6};
   const std::vector<float> b_f = {1, 2, 3, 4, 5, 6};
@@ -1281,8 +1296,8 @@ TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
 
   std::vector<std::uint16_t> converted(4, 0);
   std::vector<float> y(4, 0.0f);
-  cpu_compute::GemmEpilogue<float> epilogue;
-  epilogue.output_conversion = cpu_compute::GemmOutputConversion::kBFloat16;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kBFloat16;
   epilogue.converted_output = converted.data();
 
   plan.Execute(a.data(), b.data(), epilogue, y.data());
@@ -1304,11 +1319,11 @@ TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
 }
 
 TEST(GemmHalfPlan, AppliesNormalAndCompactBlocking) {
-  cpu_compute::GemmHalfPlanOptions options{true, false, false, 16, 16, 16, 1.0f};
+  ml_cpu_compute::GemmHalfPlanOptions options{true, false, false, 16, 16, 16, 1.0f};
   options.blocking = {11, 13, 17, 0, 0};
   options.compact_blocking = {19, 23, 29, 0, 0};
 
-  const cpu_compute::GemmHalfPlan plan(options);
+  const ml_cpu_compute::GemmHalfPlan plan(options);
 
   EXPECT_EQ(plan.blocking().mc, 11u);
   EXPECT_EQ(plan.blocking().nc, 13u);

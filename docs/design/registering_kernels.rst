@@ -302,7 +302,7 @@ Add a new kernel
 
 Kernel implementations must follow the
 `borrowed executor contract in execution.h
-<https://github.com/xadupre/onnx-light-cpu/blob/main/cpu_compute/include/cpu_compute/execution.h>`_:
+<https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/execution.h>`_:
 borrow the current executor only for the invocation, keep range callbacks
 non-throwing, and submit parallel work through the shared range helpers.
 The contract defines lifetime, failure propagation, nested execution, participant

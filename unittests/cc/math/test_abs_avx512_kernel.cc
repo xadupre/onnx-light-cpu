@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <gtest/gtest.h>
 
@@ -12,26 +12,26 @@
 #include <limits>
 #include <vector>
 
-namespace cpu_compute {
+namespace ml_cpu_compute {
 
 // Direct references make missing ISA-specific implementations a link error,
 // even when the tests run on a machine without AVX-512.
-#ifdef CPU_COMPUTE_HAVE_AVX512
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
 void AbsFloat64_AVX512(const double *input, double *output, std::size_t count);
 void AbsFloat16_AVX512(const uint16_t *input, uint16_t *output, std::size_t count);
 void AbsInt32_AVX512(const int32_t *input, int32_t *output, std::size_t count);
 void AbsInt64_AVX512(const int64_t *input, int64_t *output, std::size_t count);
 #endif
-#ifdef CPU_COMPUTE_HAVE_AVX512BW
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512BW
 void AbsInt8_AVX512(const int8_t *input, int8_t *output, std::size_t count);
 void AbsInt16_AVX512(const int16_t *input, int16_t *output, std::size_t count);
 #endif
 
-} // namespace cpu_compute
+} // namespace ml_cpu_compute
 
 namespace {
 
-using namespace cpu_compute;
+using namespace ml_cpu_compute;
 
 template <typename T> using AbsFn = void (*)(const T *, T *, std::size_t);
 
@@ -98,7 +98,7 @@ struct AbsCase {
   bool requires_bw;
 };
 
-#ifdef CPU_COMPUTE_HAVE_AVX512
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
 #define ABS_AVX512_FUNCTION(name) &name
 constexpr bool kAvx512Compiled = true;
 #else
@@ -106,7 +106,7 @@ constexpr bool kAvx512Compiled = true;
 constexpr bool kAvx512Compiled = false;
 #endif
 
-#ifdef CPU_COMPUTE_HAVE_AVX512BW
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512BW
 #define ABS_AVX512BW_FUNCTION(name) &name
 constexpr bool kAvx512BWCompiled = true;
 #else
@@ -117,8 +117,8 @@ constexpr bool kAvx512BWCompiled = false;
 const AbsCase kCases[] = {
     {"Float32",
      [](bool direct) {
-       CheckFloatingAbs<float>(cpu_compute::AbsFloat32,
-                               direct ? ABS_AVX512_FUNCTION(cpu_compute::AbsFloat32_AVX512)
+       CheckFloatingAbs<float>(ml_cpu_compute::AbsFloat32,
+                               direct ? ABS_AVX512_FUNCTION(ml_cpu_compute::AbsFloat32_AVX512)
                                       : nullptr);
      },
      kAvx512Compiled, false},
@@ -126,22 +126,22 @@ const AbsCase kCases[] = {
      [](bool direct) {
        CheckFloatingAbs<float>(
            [](const float *input, float *output, std::size_t count) {
-             auto tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
+             auto tuning = ml_cpu_compute::DefaultAbsFloat32ExecutionTuning();
              tuning.streaming_store_threshold_bytes = 1;
-             cpu_compute::AbsFloat32WithTuning(input, output, count, tuning);
+             ml_cpu_compute::AbsFloat32WithTuning(input, output, count, tuning);
            },
-           direct ? ABS_AVX512_FUNCTION(cpu_compute::AbsFloat32_AVX512Streaming) : nullptr);
+           direct ? ABS_AVX512_FUNCTION(ml_cpu_compute::AbsFloat32_AVX512Streaming) : nullptr);
      },
      kAvx512Compiled, false},
     {"Float64",
      [](bool direct) {
-       CheckFloatingAbs<double>(cpu_compute::AbsFloat64,
+       CheckFloatingAbs<double>(ml_cpu_compute::AbsFloat64,
                                 direct ? ABS_AVX512_FUNCTION(AbsFloat64_AVX512) : nullptr);
      },
      kAvx512Compiled, false},
     {"Float16",
      [](bool direct) {
-       CheckAbs<uint16_t>(cpu_compute::AbsFloat16,
+       CheckAbs<uint16_t>(ml_cpu_compute::AbsFloat16,
                           direct ? ABS_AVX512_FUNCTION(AbsFloat16_AVX512) : nullptr,
                           {0x8000, 0x0000, 0xbc00, 0x3c00, 0xfc00, 0x7c00, 0xfe01, 0x8001, 0xfbff},
                           {0x0000, 0x0000, 0x3c00, 0x3c00, 0x7c00, 0x7c00, 0x7e01, 0x0001, 0x7bff});
@@ -149,7 +149,7 @@ const AbsCase kCases[] = {
      kAvx512Compiled, false},
     {"BFloat16",
      [](bool direct) {
-       CheckAbs<uint16_t>(cpu_compute::AbsFloat16,
+       CheckAbs<uint16_t>(ml_cpu_compute::AbsFloat16,
                           direct ? ABS_AVX512_FUNCTION(AbsFloat16_AVX512) : nullptr,
                           {0x8000, 0x0000, 0xbf80, 0x3f80, 0xff80, 0x7f80, 0xffc1, 0x8001, 0xff7f},
                           {0x0000, 0x0000, 0x3f80, 0x3f80, 0x7f80, 0x7f80, 0x7fc1, 0x0001, 0x7f7f});
@@ -157,25 +157,25 @@ const AbsCase kCases[] = {
      kAvx512Compiled, false},
     {"Int8",
      [](bool direct) {
-       CheckIntegerAbs<int8_t>(cpu_compute::AbsInt8,
+       CheckIntegerAbs<int8_t>(ml_cpu_compute::AbsInt8,
                                direct ? ABS_AVX512BW_FUNCTION(AbsInt8_AVX512) : nullptr);
      },
      kAvx512BWCompiled, true},
     {"Int16",
      [](bool direct) {
-       CheckIntegerAbs<int16_t>(cpu_compute::AbsInt16,
+       CheckIntegerAbs<int16_t>(ml_cpu_compute::AbsInt16,
                                 direct ? ABS_AVX512BW_FUNCTION(AbsInt16_AVX512) : nullptr);
      },
      kAvx512BWCompiled, true},
     {"Int32",
      [](bool direct) {
-       CheckIntegerAbs<int32_t>(cpu_compute::AbsInt32,
+       CheckIntegerAbs<int32_t>(ml_cpu_compute::AbsInt32,
                                 direct ? ABS_AVX512_FUNCTION(AbsInt32_AVX512) : nullptr);
      },
      kAvx512Compiled, false},
     {"Int64",
      [](bool direct) {
-       CheckIntegerAbs<int64_t>(cpu_compute::AbsInt64,
+       CheckIntegerAbs<int64_t>(ml_cpu_compute::AbsInt64,
                                 direct ? ABS_AVX512_FUNCTION(AbsInt64_AVX512) : nullptr);
      },
      kAvx512Compiled, false},
@@ -193,8 +193,8 @@ TEST_P(AbsAvx512, DirectAndDispatchNumerics) {
   if (!test.compiled) {
     GTEST_SKIP() << "AVX-512 implementation not compiled";
   }
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512 ||
-      (test.requires_bw && !cpu_compute::CpuSupportsAvx512BW())) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512 ||
+      (test.requires_bw && !ml_cpu_compute::CpuSupportsAvx512BW())) {
     GTEST_SKIP() << "Required AVX-512 ISA not supported at runtime";
   }
   test.check(true);

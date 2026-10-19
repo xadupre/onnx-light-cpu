@@ -6,9 +6,9 @@
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_common.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/checked_arithmetic.h"
-#include "cpu_compute/execution.h"
-#include "cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -39,8 +39,8 @@ template <typename T> float Read(const T *data, std::size_t index, DataType dtyp
   if constexpr (sizeof(T) == sizeof(float)) {
     return data[index];
   } else {
-    return dtype == DataType::FLOAT16 ? cpu_compute::detail::Float16BitsToFloat(data[index])
-                                      : cpu_compute::detail::Bfloat16BitsToFloat(data[index]);
+    return dtype == DataType::FLOAT16 ? ml_cpu_compute::detail::Float16BitsToFloat(data[index])
+                                      : ml_cpu_compute::detail::Bfloat16BitsToFloat(data[index]);
   }
 }
 
@@ -48,8 +48,8 @@ template <typename T> void Write(T *data, std::size_t index, float value, DataTy
   if constexpr (sizeof(T) == sizeof(float)) {
     data[index] = value;
   } else {
-    data[index] = dtype == DataType::FLOAT16 ? cpu_compute::detail::FloatToFloat16Bits(value)
-                                             : cpu_compute::detail::FloatToBFloat16Bits(value);
+    data[index] = dtype == DataType::FLOAT16 ? ml_cpu_compute::detail::FloatToFloat16Bits(value)
+                                             : ml_cpu_compute::detail::FloatToBFloat16Bits(value);
   }
 }
 
@@ -65,10 +65,10 @@ void Compute(const Tensor &input, const Tensor &weight, const Tensor *bias, cons
   auto *y = reinterpret_cast<T *>(output.mutable_bytes());
   auto *s = reinterpret_cast<T *>(present.mutable_bytes());
   const DataType dtype = static_cast<DataType>(input.data_type);
-  cpu_compute::ExecuteRanges(
-      cpu_compute::CheckedIndexMultiply(static_cast<std::int64_t>(batch),
-                                        static_cast<std::int64_t>(channels), "CausalConvWithState",
-                                        "batch channels"),
+  ml_cpu_compute::ExecuteRanges(
+      ml_cpu_compute::CheckedIndexMultiply(static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(channels),
+                                           "CausalConvWithState", "batch channels"),
       static_cast<double>(length) * static_cast<double>(width) + 2.0 * static_cast<double>(pad),
       [&](std::int64_t first, std::int64_t last) {
         for (auto task = first; task < last; ++task) {
@@ -134,18 +134,18 @@ detail::PlanCausalConvWithState(const Tensor &input, const Tensor &weight, const
   std::size_t channels = 1;
   if (channels_last) {
     for (std::size_t i = 2; i < input.shape.size(); ++i) {
-      channels = cpu_compute::CheckedMultiply(
-          channels, cpu_compute::CheckedDimension(input.shape[i], name, "channels"), name,
+      channels = ml_cpu_compute::CheckedMultiply(
+          channels, ml_cpu_compute::CheckedDimension(input.shape[i], name, "channels"), name,
           "channels");
     }
   } else {
-    channels = cpu_compute::CheckedDimension(input.shape[1], name, "channels");
+    channels = ml_cpu_compute::CheckedDimension(input.shape[1], name, "channels");
   }
-  const std::size_t batch = cpu_compute::CheckedDimension(input.shape[0], name, "batch");
+  const std::size_t batch = ml_cpu_compute::CheckedDimension(input.shape[0], name, "batch");
   const std::size_t length =
-      cpu_compute::CheckedDimension(input.shape[channels_last ? 1 : 2], name, "sequence");
-  const std::size_t width = cpu_compute::CheckedDimension(weight.shape[2], name, "kernel width");
-  const std::size_t pad = cpu_compute::CheckedMultiply(
+      ml_cpu_compute::CheckedDimension(input.shape[channels_last ? 1 : 2], name, "sequence");
+  const std::size_t width = ml_cpu_compute::CheckedDimension(weight.shape[2], name, "kernel width");
+  const std::size_t pad = ml_cpu_compute::CheckedMultiply(
       width - 1, static_cast<std::size_t>(dilation), name, "state length");
   if (channels > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) ||
       weight.shape[0] != static_cast<std::int64_t>(channels) || pad > INT32_MAX ||
@@ -165,15 +165,15 @@ detail::PlanCausalConvWithState(const Tensor &input, const Tensor &weight, const
     throw std::invalid_argument("CausalConvWithState: tensor types or past_state shape mismatch.");
   }
   const std::size_t elements =
-      cpu_compute::CheckedProduct({batch, channels, length}, name, "output");
+      ml_cpu_compute::CheckedProduct({batch, channels, length}, name, "output");
   const std::size_t state_elements =
-      cpu_compute::CheckedProduct({batch, channels, pad}, name, "state");
+      ml_cpu_compute::CheckedProduct({batch, channels, pad}, name, "state");
   const std::size_t bytes =
-      cpu_compute::CheckedByteSize(elements, input.element_size(), name, "output");
+      ml_cpu_compute::CheckedByteSize(elements, input.element_size(), name, "output");
   const std::size_t state_bytes =
-      cpu_compute::CheckedByteSize(state_elements, input.element_size(), name, "state");
-  cpu_compute::CheckedIndexMultiply(static_cast<std::int64_t>(batch),
-                                    static_cast<std::int64_t>(channels), name, "batch channels");
+      ml_cpu_compute::CheckedByteSize(state_elements, input.element_size(), name, "state");
+  ml_cpu_compute::CheckedIndexMultiply(static_cast<std::int64_t>(batch),
+                                       static_cast<std::int64_t>(channels), name, "batch channels");
   tensor_validation::ValidateBufferCapacity(input, name, "input");
   tensor_validation::ValidateBufferCapacity(weight, name, "weight");
   if (bias != nullptr) {

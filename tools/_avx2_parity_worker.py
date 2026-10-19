@@ -63,7 +63,7 @@ def shared_library_snapshot() -> dict[str, str] | None:
         if len(fields) != 6:
             continue
         filename = fields[5]
-        if not Path(filename).name.startswith(("liblib_onnx", "libcpu_compute")):
+        if not Path(filename).name.startswith(("liblib_onnx", "libml_cpu_compute")):
             continue
         if filename.endswith(" (deleted)"):
             raise RuntimeError(f"Loaded runtime library was replaced: {filename}")

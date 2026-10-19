@@ -323,7 +323,7 @@ TEST(QMoEDequantization, SimdLayoutsPreserveQuantizationAndTails) {
           if (bits == 4 && unsigned_int8) {
             continue;
           }
-          cpu_compute::QMoEAttributes attributes;
+          ml_cpu_compute::QMoEAttributes attributes;
           attributes.expert_weight_bits = bits;
           attributes.block_size = block_size;
           const auto factor = 8 / bits;
@@ -352,12 +352,12 @@ TEST(QMoEDequantization, SimdLayoutsPreserveQuantizationAndTails) {
               }
             }
           }
-          cpu_compute::QMoEWeight weight{
-              data.data(),  scales.data(),   cpu_compute::MoEDataType::kFloat32,
+          ml_cpu_compute::QMoEWeight weight{
+              data.data(),  scales.data(),   ml_cpu_compute::MoEDataType::kFloat32,
               output_major, block_size == 0, unsigned_int8};
           std::vector<float> actual(experts * outputs * inputs);
-          cpu_compute::DequantizeQMoEWeights(weight, actual.data(), experts, inputs, outputs,
-                                             attributes);
+          ml_cpu_compute::DequantizeQMoEWeights(weight, actual.data(), experts, inputs, outputs,
+                                                attributes);
           for (std::size_t row = 0; row < experts * stored_rows; ++row) {
             const auto expert = row / stored_rows;
             const auto stored_row = row % stored_rows;

@@ -20,8 +20,8 @@ def test_project_version_consistency():
         ("setup.py", r'version="([^"]+)"'),
         ("CMakeLists.txt", r"project\(onnx_light_cpu VERSION ([\d.]+)"),
         (
-            "cpu_compute/CMakeLists.txt",
-            r"project\(cpu_compute VERSION ([\d.]+)",
+            "ml_cpu_compute/CMakeLists.txt",
+            r"project\(ml_cpu_compute VERSION ([\d.]+)",
         ),
         ("onnx_light_cpu/__init__.py", r'__version__ = "([^"]+)"'),
     ):

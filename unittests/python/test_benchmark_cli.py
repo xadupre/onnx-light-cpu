@@ -448,7 +448,7 @@ class TestBenchmarkCli(ExtTestCase):
         ]
         tests, dtypes = infer_pr_benchmark_selection(
             [
-                "cpu_compute/src/math/abs.cc",
+                "ml_cpu_compute/src/math/abs.cc",
                 "docs/command_line.rst",
             ],
             "+  const float value = input[i];",
@@ -458,7 +458,7 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(dtypes, ["float32"])
 
         tests, dtypes = infer_pr_benchmark_selection(
-            ["cpu_compute/include/cpu_compute/math/math.h"],
+            ["ml_cpu_compute/include/ml_cpu_compute/math/math.h"],
             "+void AbsFloat32(const float *input, float *output, std::size_t count);",
             kernels,
         )
@@ -479,7 +479,7 @@ class TestBenchmarkCli(ExtTestCase):
             self._kernel("Pow", ("FLOAT",)),
         ]
         tests, dtypes = infer_pr_benchmark_selection(
-            ["cpu_compute/src/math/binary/binary_descriptor.cc"],
+            ["ml_cpu_compute/src/math/binary/binary_descriptor.cc"],
             "+ void BulkFloatIntegerPowRightScalar();\n+ float value;",
             kernels,
         )
@@ -493,7 +493,7 @@ class TestBenchmarkCli(ExtTestCase):
             self._kernel("TreeEnsemble", ("FLOAT",)),
         ]
         tests, dtypes = infer_pr_benchmark_selection(
-            ["cpu_compute/src/traditionalml/tree_ensemble.cc"],
+            ["ml_cpu_compute/src/traditionalml/tree_ensemble.cc"],
             "+ partial_stride = SaturatingAdd(rows, lanes);\n+ if (left && right) {}",
             kernels,
         )
@@ -502,7 +502,7 @@ class TestBenchmarkCli(ExtTestCase):
 
     def test_reads_pull_request_benchmark_selection(self):
         completed = [
-            SimpleNamespace(stdout="cpu_compute/src/math/abs.cc\n"),
+            SimpleNamespace(stdout="ml_cpu_compute/src/math/abs.cc\n"),
             SimpleNamespace(stdout="+ DataType::FLOAT\n"),
         ]
         kernels = [self._kernel("Abs", ("FLOAT", "DOUBLE"))]

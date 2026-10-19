@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <algorithm>
 #include <chrono>
@@ -43,9 +43,10 @@ int main(int argc, char **argv) {
   }
   std::vector<float> input(count, -1.0f);
   std::vector<float> output(count);
-#ifdef CPU_COMPUTE_HAVE_AVX512
-  const double cached = Measure(cpu_compute::AbsFloat32_AVX512, input, output, samples);
-  const double streaming = Measure(cpu_compute::AbsFloat32_AVX512Streaming, input, output, samples);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+  const double cached = Measure(ml_cpu_compute::AbsFloat32_AVX512, input, output, samples);
+  const double streaming =
+      Measure(ml_cpu_compute::AbsFloat32_AVX512Streaming, input, output, samples);
   std::printf("size=%zu cached_us=%.2f streaming_us=%.2f speedup=%.3f\n", count, cached * 1e6,
               streaming * 1e6, cached / streaming);
 #else

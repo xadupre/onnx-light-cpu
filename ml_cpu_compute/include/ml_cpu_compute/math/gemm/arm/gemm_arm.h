@@ -1,0 +1,160 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ml_cpu_compute/arm_simd_level.h"
+#include "ml_cpu_compute/math/gemm/gemm_common.h"
+
+#include <cstddef>
+#include <cstdint>
+
+namespace ml_cpu_compute {
+
+enum class ArmGemmImplementation {
+  kScalar,
+  kNeon,
+  kSve,
+};
+
+struct ArmGemmProfile {
+  ArmGemmImplementation kind = ArmGemmImplementation::kScalar;
+  std::size_t vector_bytes = 0;
+  std::size_t register_rows = kGemmMR;
+};
+
+ArmGemmProfile SelectArmGemmProfile(ArmSimdLevel level, std::size_t sve_vector_bytes,
+                                    bool sve_routine_available);
+ArmGemmProfile DetectArmGemmProfile();
+
+#ifdef ML_CPU_COMPUTE_HAVE_NEON
+void GemmMicroTile_NEON_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                            const float *Bmat, std::size_t N, const float *Crow_base,
+                            std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                            std::size_t n0, GemmAccumMode mode, const float *Apack);
+
+void GemmMicroTile_NEON_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha,
+                            double beta, const double *Bmat, std::size_t N, const double *Crow_base,
+                            std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
+                            std::size_t n0, GemmAccumMode mode, const double *Apack);
+
+// Converts ``n`` contiguous BFLOAT16 patterns to float32, eight at a time
+// through a NEON zero-extend and 16-bit left shift, with an exact scalar tail.
+// Used by the GEMM packing loops to widen while packing without a full-tensor
+// conversion pass. Only requires baseline NEON, so it is always available in
+// this translation unit.
+void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
+
+// Native BFLOAT16 member of the GEMM micro-tiles family (Roadmap PR08.2). It
+// matches ``GemmBf16MicroTile``: ``Bmat`` and ``Apack`` stay BFLOAT16 to the
+// register file and each eight-column ``B`` row is widened on the fly with the
+// baseline NEON zero-extend / 16-bit shift while the dot products accumulate in
+// float32, so no full-tensor widening buffer is needed. The scalar column tail
+// reuses ``GemmMicroTile_ScalarBf16``. Only requires baseline NEON, so it is
+// always available in this translation unit.
+void GemmMicroTile_NEON_BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                             const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                             std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                             std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack);
+
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_FP16
+// Converts ``n`` contiguous FLOAT16 patterns to float32 with the NEON
+// ``vcvt_f32_f16`` (``FCVTL``) instruction, eight at a time, with an exact
+// scalar tail. Widens while packing in the GEMM packing loops. Requires the
+// FP16 vector load/convert intrinsics, so it is only declared/defined when the
+// translation unit is compiled with support for them.
+void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
+
+// Native FLOAT16 member of the GEMM micro-tiles family (Roadmap PR08.2). It
+// matches ``GemmFp16MicroTile``: ``Bmat`` and ``Apack`` stay FLOAT16 to the
+// register file and each eight-column ``B`` row is widened on the fly with the
+// NEON ``vcvt_f32_f16`` (``FCVTL``) instruction while the dot products
+// accumulate in float32, so no full-tensor widening buffer is needed. The
+// scalar column tail reuses ``GemmMicroTile_ScalarFp16``. Requires the FP16
+// vector load/convert intrinsics, so it is only declared/defined when the
+// translation unit is compiled with support for them.
+void GemmMicroTile_NEON_FP16(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                             const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                             std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                             std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack);
+#endif
+#endif
+
+#ifdef ML_CPU_COMPUTE_HAVE_SVE
+std::size_t GemmSveVectorBytes();
+
+void GemmMicroTile_SVE_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                           const float *Bmat, std::size_t N, const float *Crow_base,
+                           std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                           std::size_t n0, GemmAccumMode mode, const float *Apack);
+
+void GemmMicroTile_SVE_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha, double beta,
+                           const double *Bmat, std::size_t N, const double *Crow_base,
+                           std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
+                           std::size_t n0, GemmAccumMode mode, const double *Apack);
+
+// Native BFLOAT16 member of the GEMM micro-tiles family (Roadmap PR08.3). It
+// matches ``GemmBf16MicroTile``: ``Bmat`` and ``Apack`` stay BFLOAT16 to the
+// register file and each ``B`` row is widened on the fly with an SVE
+// zero-extending halfword load (``svld1uh_u32``) plus a 16-bit shift while the
+// dot products accumulate in float32, so no full-tensor widening buffer is
+// needed. The runtime vector length drives the lane count and predicated tails
+// cover the column remainder; unsupported row counts fall back to
+// ``GemmMicroTile_ScalarBf16``. Only requires baseline SVE, so it is always
+// available in this translation unit.
+void GemmMicroTile_SVE_BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                            const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                            std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                            std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack);
+
+// Native FLOAT16 member of the GEMM micro-tiles family (Roadmap PR08.3). It
+// matches ``GemmFp16MicroTile``: ``Bmat`` and ``Apack`` stay FLOAT16 to the
+// register file and each ``B`` row is widened on the fly with the SVE
+// ``FCVT`` (``svcvt_f32_f16``) instruction while the dot products accumulate in
+// float32, so no full-tensor widening buffer is needed. The runtime vector
+// length drives the lane count and predicated tails cover the column remainder;
+// unsupported row counts fall back to ``GemmMicroTile_ScalarFp16``.
+// Half-precision floating point is part of baseline SVE, so it is always
+// available in this translation unit (no separate FP16 feature gate).
+void GemmMicroTile_SVE_FP16(std::size_t mr, std::size_t nb, std::size_t K, float alpha, float beta,
+                            const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                            std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                            std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack);
+#endif
+
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+namespace detail {
+
+// Signed NEON dot product used after packed INT4/UINT4 values have been
+// expanded into the shared UINT8 x INT8 panels. Values in the UINT8 panel are
+// at most 15, so reinterpreting them as signed bytes is exact.
+std::int32_t IntegerDot4BitU8S8NeonDotProd(const std::uint8_t *a, const std::int8_t *b,
+                                           std::int64_t depth);
+
+} // namespace detail
+
+// Native INT8/UINT8 dot-product member of the GEMM routine family (Roadmap
+// PR09.3). Computes the contiguous row-major 2D ``MatMulInteger``
+//   ``C[m,n] = sum_k (A[m,k] - a_zero_point[m]) * (B[k,n] - b_zero_point[n])``
+// for dense ``M x K`` (``a``) and ``K x N`` (``b``) operands, writing the
+// row-major ``M x N`` INT32 result to ``c``. ``a_signed`` / ``b_signed`` select
+// the INT8 (``true``) or UINT8 (``false``) element type of each operand, which
+// lets a single unsigned ``UDOT`` path serve every signedness combination: the
+// signed operands are folded into the unsigned domain (a 128 offset absorbed
+// into the zero point) and the raw products are recovered with row/column sum
+// corrections. Zero points are raw integer values; each array holds either one
+// shared value (``count == 1``) or one value per ``A`` row / ``B`` column. The
+// accumulation matches the portable scalar fallback exactly, wrapping modulo
+// 2^32 per the ONNX INT32 accumulation semantics, and the ``K`` remainder that
+// does not fill a 16-byte ``UDOT`` uses an exact scalar tail. Requires the NEON
+// dot-product intrinsics, so it is only declared/defined when the translation
+// unit is compiled with support for them.
+void GemmMatMulIntegerNeonDotProd(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                                  bool b_signed, std::int32_t *c, std::size_t m, std::size_t n,
+                                  std::size_t k, const std::int32_t *a_zero_points,
+                                  std::size_t a_zero_point_count, const std::int32_t *b_zero_points,
+                                  std::size_t b_zero_point_count);
+#endif
+
+} // namespace ml_cpu_compute

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/math/binary/binary_broadcast_plan.h"
-#include "cpu_compute/math/binary/binary_integer_arithmetic.h"
+#include "ml_cpu_compute/math/binary/binary_broadcast_plan.h"
+#include "ml_cpu_compute/math/binary/binary_integer_arithmetic.h"
 
 #include <gtest/gtest.h>
 
@@ -17,7 +17,7 @@
 
 namespace {
 
-using namespace cpu_compute;
+using namespace ml_cpu_compute;
 using Shape = std::vector<std::int64_t>;
 
 template <typename T> constexpr DataType Type() {
@@ -55,7 +55,7 @@ template <typename U> void CheckDivider() {
     divisors.push_back(divisor == 0 ? U{1} : divisor);
   }
   for (U divisor : divisors) {
-    cpu_compute::detail::IntegerDivider<U> divider(divisor);
+    ml_cpu_compute::detail::IntegerDivider<U> divider(divisor);
     const std::array<U, 6> boundaries{0,
                                       1,
                                       static_cast<U>(divisor - 1),
@@ -77,7 +77,7 @@ TEST(IntegerBinaryOptimized, ReciprocalDivisionRandomAndBoundaries) {
   CheckDivider<std::uint32_t>();
   CheckDivider<std::uint64_t>();
   for (unsigned divisor = 1; divisor < 256; ++divisor) {
-    const cpu_compute::detail::IntegerDivider<std::uint8_t> divider(
+    const ml_cpu_compute::detail::IntegerDivider<std::uint8_t> divider(
         static_cast<std::uint8_t>(divisor));
     for (unsigned numerator = 0; numerator < 256; ++numerator)
       ASSERT_EQ(divider.Divide(static_cast<std::uint8_t>(numerator)), numerator / divisor);
@@ -97,9 +97,9 @@ template <typename T> void CheckDivModPlans() {
   }
   for (const std::string op : {"Div", "Mod"}) {
     for (int fmod : {0, 1}) {
-      cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
       attributes.mod_fmod = fmod;
-      const cpu_compute::BinaryOperationDescriptor descriptor(op, 14, attributes);
+      const ml_cpu_compute::BinaryOperationDescriptor descriptor(op, 14, attributes);
       const auto &adapter = descriptor.ResolveAdapter(Type<T>(), Type<T>(), Type<T>());
       ASSERT_NE(adapter.bulk_right_scalar, nullptr);
       ASSERT_NE(adapter.validate_right_bulk, nullptr);
@@ -116,8 +116,9 @@ template <typename T> void CheckDivModPlans() {
                 value = minimum + 1;
         }
         for (std::size_t count : {std::size_t{1}, std::size_t{3}, std::size_t{4}, input.size()}) {
-          const cpu_compute::BinaryBroadcastPlan plan(descriptor, Type<T>(), Type<T>(), Type<T>(),
-                                                      Shape{static_cast<std::int64_t>(count)}, {});
+          const ml_cpu_compute::BinaryBroadcastPlan plan(
+              descriptor, Type<T>(), Type<T>(), Type<T>(), Shape{static_cast<std::int64_t>(count)},
+              {});
           std::vector<T> output(count);
           plan.Execute(input.data(), &divisor, output.data());
           std::vector<T> in_place(input.begin(), input.begin() + count);
@@ -135,8 +136,8 @@ template <typename T> void CheckDivModPlans() {
         }
       }
       T input[4]{minimum, maximum, 0, 1}, output[4]{42, 42, 42, 42}, zero = 0;
-      const cpu_compute::BinaryBroadcastPlan plan(descriptor, Type<T>(), Type<T>(), Type<T>(),
-                                                  Shape{4}, {});
+      const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, Type<T>(), Type<T>(), Type<T>(),
+                                                     Shape{4}, {});
       EXPECT_THROW(plan.Execute(input, &zero, output), std::invalid_argument);
       EXPECT_EQ(output[0], 42);
       if constexpr (std::is_signed_v<T>) {
@@ -145,13 +146,13 @@ template <typename T> void CheckDivModPlans() {
         EXPECT_EQ(output[0], 42);
       }
       const T varying_divisors[4]{1, 3, 0, 7};
-      const cpu_compute::BinaryBroadcastPlan contiguous(descriptor, Type<T>(), Type<T>(), Type<T>(),
-                                                        Shape{4}, Shape{4});
+      const ml_cpu_compute::BinaryBroadcastPlan contiguous(descriptor, Type<T>(), Type<T>(),
+                                                           Type<T>(), Shape{4}, Shape{4});
       EXPECT_THROW(contiguous.Execute(input, varying_divisors, output), std::invalid_argument);
       EXPECT_EQ(output[0], 42);
       const T row_divisors[3]{3, 7, 11};
-      const cpu_compute::BinaryBroadcastPlan rows(descriptor, Type<T>(), Type<T>(), Type<T>(),
-                                                  Shape{1, 4}, Shape{3, 1});
+      const ml_cpu_compute::BinaryBroadcastPlan rows(descriptor, Type<T>(), Type<T>(), Type<T>(),
+                                                     Shape{1, 4}, Shape{3, 1});
       T row_output[12]{};
       rows.Execute(input, row_divisors, row_output);
       for (int row = 0; row < 3; ++row)
@@ -177,7 +178,7 @@ TEST(IntegerBinaryOptimized, DivModAllIntegerTypes) {
 }
 
 template <typename T, typename E> void CheckPowPlans() {
-  const cpu_compute::BinaryOperationDescriptor descriptor("Pow", 15, {});
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Pow", 15, {});
   const auto &adapter = descriptor.ResolveAdapter(Type<T>(), Type<E>(), Type<T>());
   ASSERT_NE(adapter.bulk_contiguous, nullptr);
   ASSERT_NE(adapter.bulk_left_scalar, nullptr);
@@ -185,8 +186,8 @@ template <typename T, typename E> void CheckPowPlans() {
   const std::vector<T> bases{-3, -2, -1, 0, 1, 2, 3, 7, 11};
   const std::vector<E> exponents{0, 1, 2, 3};
   std::vector<T> output(bases.size() * exponents.size());
-  const cpu_compute::BinaryBroadcastPlan inner(descriptor, Type<T>(), Type<E>(), Type<T>(),
-                                               Shape{1, 9}, Shape{4, 1});
+  const ml_cpu_compute::BinaryBroadcastPlan inner(descriptor, Type<T>(), Type<E>(), Type<T>(),
+                                                  Shape{1, 9}, Shape{4, 1});
   inner.Execute(bases.data(), exponents.data(), output.data());
   for (std::size_t row = 0; row < exponents.size(); ++row)
     for (std::size_t col = 0; col < bases.size(); ++col) {
@@ -197,13 +198,13 @@ template <typename T, typename E> void CheckPowPlans() {
     }
   T base = -3;
   T actual[4]{};
-  const cpu_compute::BinaryBroadcastPlan left(descriptor, Type<T>(), Type<E>(), Type<T>(), {},
-                                              Shape{4});
+  const ml_cpu_compute::BinaryBroadcastPlan left(descriptor, Type<T>(), Type<E>(), Type<T>(), {},
+                                                 Shape{4});
   left.Execute(&base, exponents.data(), actual);
   EXPECT_EQ((std::vector<T>(actual, actual + 4)), (std::vector<T>{1, -3, 9, -27}));
   const T contiguous_bases[4]{-3, -3, -3, -3};
-  const cpu_compute::BinaryBroadcastPlan contiguous(descriptor, Type<T>(), Type<E>(), Type<T>(),
-                                                    Shape{4}, Shape{4});
+  const ml_cpu_compute::BinaryBroadcastPlan contiguous(descriptor, Type<T>(), Type<E>(), Type<T>(),
+                                                       Shape{4}, Shape{4});
   contiguous.Execute(contiguous_bases, exponents.data(), actual);
   EXPECT_EQ((std::vector<T>(actual, actual + 4)), (std::vector<T>{1, -3, 9, -27}));
   base = std::numeric_limits<T>::max();
@@ -263,39 +264,39 @@ TEST(IntegerBinaryOptimized, PortableMultiplyMatchesWideReference) {
       0, 1, UINT32_MAX, UINT64_C(1) << 32, UINT64_C(1) << 63, UINT64_MAX};
   for (auto a : boundaries)
     for (auto b : boundaries)
-      EXPECT_EQ(cpu_compute::detail::MultiplyHigh64Portable(a, b),
-                cpu_compute::detail::MultiplyHigh64(a, b));
+      EXPECT_EQ(ml_cpu_compute::detail::MultiplyHigh64Portable(a, b),
+                ml_cpu_compute::detail::MultiplyHigh64(a, b));
   for (int i = 0; i < 100000; ++i) {
     const auto a = random(), b = random();
-    ASSERT_EQ(cpu_compute::detail::MultiplyHigh64Portable(a, b),
-              cpu_compute::detail::MultiplyHigh64(a, b));
+    ASSERT_EQ(ml_cpu_compute::detail::MultiplyHigh64Portable(a, b),
+              ml_cpu_compute::detail::MultiplyHigh64(a, b));
 #if defined(__SIZEOF_INT128__)
     const std::int64_t sa = std::bit_cast<std::int64_t>(a);
     const std::int64_t sb = std::bit_cast<std::int64_t>(b);
     const __int128 product = static_cast<__int128>(sa) * sb;
     const bool overflow = product < INT64_MIN || product > INT64_MAX;
     std::int64_t actual;
-    ASSERT_EQ(cpu_compute::detail::MultiplyOverflowPortable(sa, sb, actual), overflow);
+    ASSERT_EQ(ml_cpu_compute::detail::MultiplyOverflowPortable(sa, sb, actual), overflow);
     if (!overflow)
       ASSERT_EQ(actual, product);
 #endif
   }
   std::int64_t result;
-  EXPECT_FALSE(cpu_compute::detail::MultiplyOverflowPortable(INT64_MIN, INT64_C(1), result));
+  EXPECT_FALSE(ml_cpu_compute::detail::MultiplyOverflowPortable(INT64_MIN, INT64_C(1), result));
   EXPECT_EQ(result, INT64_MIN);
-  EXPECT_TRUE(cpu_compute::detail::MultiplyOverflowPortable(INT64_MIN, INT64_C(-1), result));
-  EXPECT_FALSE(cpu_compute::detail::MultiplyOverflowPortable(INT64_C(-2097152),
-                                                             INT64_C(4398046511104), result));
+  EXPECT_TRUE(ml_cpu_compute::detail::MultiplyOverflowPortable(INT64_MIN, INT64_C(-1), result));
+  EXPECT_FALSE(ml_cpu_compute::detail::MultiplyOverflowPortable(INT64_C(-2097152),
+                                                                INT64_C(4398046511104), result));
   EXPECT_EQ(result, INT64_MIN);
-  EXPECT_FALSE(cpu_compute::detail::MultiplyOverflowPortable(INT64_C(3037000499),
-                                                             INT64_C(3037000499), result));
+  EXPECT_FALSE(ml_cpu_compute::detail::MultiplyOverflowPortable(INT64_C(3037000499),
+                                                                INT64_C(3037000499), result));
   EXPECT_EQ(result, INT64_C(9223372030926249001));
-  EXPECT_TRUE(cpu_compute::detail::MultiplyOverflowPortable(INT64_C(3037000500),
-                                                            INT64_C(3037000500), result));
+  EXPECT_TRUE(ml_cpu_compute::detail::MultiplyOverflowPortable(INT64_C(3037000500),
+                                                               INT64_C(3037000500), result));
 }
 
 TEST(IntegerBinaryOptimized, ExactPowScalarContracts) {
-  using cpu_compute::detail::CheckedIntegerPow;
+  using ml_cpu_compute::detail::CheckedIntegerPow;
   EXPECT_EQ(CheckedIntegerPow(INT64_C(3037000499), 2, "Pow"), INT64_C(9223372030926249001));
   EXPECT_EQ(CheckedIntegerPow(INT64_C(2097151), 3, "Pow"), INT64_C(9223358842721533951));
   EXPECT_EQ(CheckedIntegerPow(INT64_C(-2097152), 3, "Pow"), INT64_MIN);
@@ -346,10 +347,10 @@ template <typename T> void CheckRegisteredComparisons() {
                                     std::bit_cast<T>(UINT64_C(0x00000000ffffffff)),
                                     std::bit_cast<T>(UINT64_C(0xffffffff00000000))};
   for (const std::string op : {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}) {
-    const cpu_compute::BinaryOperationDescriptor descriptor(op, 19, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(op, 19, {});
     const auto &adapter = descriptor.ResolveAdapter(Type<T>(), Type<T>(), DataType::BOOL);
     ASSERT_EQ(adapter.bulk_implementation,
-              cpu_compute::BinaryOperationDescriptor::Adapter::BulkImplementation::kCompare64);
+              ml_cpu_compute::BinaryOperationDescriptor::Adapter::BulkImplementation::kCompare64);
     ASSERT_NE(adapter.bulk_contiguous, nullptr);
     ASSERT_NE(adapter.bulk_left_scalar, nullptr);
     ASSERT_NE(adapter.bulk_right_scalar, nullptr);

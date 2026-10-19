@@ -7,8 +7,8 @@
 // preallocated buffers and reports the environment separately from the
 // end-to-end parity runner.
 
-#include "cpu_compute/math/math.h"
-#include "cpu_compute/simd_level.h"
+#include "ml_cpu_compute/math/math.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,17 +26,17 @@
 
 namespace {
 
-const char *IsaName(cpu_compute::SimdLevel level) {
+const char *IsaName(ml_cpu_compute::SimdLevel level) {
   switch (level) {
-  case cpu_compute::SimdLevel::kNone:
+  case ml_cpu_compute::SimdLevel::kNone:
     return "scalar";
-  case cpu_compute::SimdLevel::kSSE2:
+  case ml_cpu_compute::SimdLevel::kSSE2:
     return "SSE2";
-  case cpu_compute::SimdLevel::kAVX:
+  case ml_cpu_compute::SimdLevel::kAVX:
     return "AVX";
-  case cpu_compute::SimdLevel::kAVX2:
+  case ml_cpu_compute::SimdLevel::kAVX2:
     return "AVX2";
-  case cpu_compute::SimdLevel::kAVX512:
+  case ml_cpu_compute::SimdLevel::kAVX512:
     return "AVX-512";
   }
   return "unknown";
@@ -100,9 +100,9 @@ std::pair<double, double> Summary(std::vector<double> values) {
 }
 
 int MeasureTanh(std::size_t samples) {
-#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
-  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
-      !cpu_compute::CpuSupportsFma()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
     std::fprintf(stderr, "direct Tanh comparison requires AVX2 and FMA\n");
     return 2;
   }
@@ -121,12 +121,12 @@ int MeasureTanh(std::size_t samples) {
         input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
       }
       using Kernel = void (*)(const float *, float *, std::size_t);
-      std::vector<Kernel> kernels{cpu_compute::TanhFloat32_Scalar,
-                                  cpu_compute::TanhFloat32_AVX2_FMA};
+      std::vector<Kernel> kernels{ml_cpu_compute::TanhFloat32_Scalar,
+                                  ml_cpu_compute::TanhFloat32_AVX2_FMA};
       std::vector<const char *> names{"TanhScalar", "TanhAVX2FMA"};
-#ifdef CPU_COMPUTE_HAVE_AVX512
-      if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512) {
-        kernels.push_back(cpu_compute::TanhFloat32_AVX512);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+      if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX512) {
+        kernels.push_back(ml_cpu_compute::TanhFloat32_AVX512);
         names.push_back("TanhAVX512");
       }
 #endif
@@ -190,14 +190,14 @@ int main(int argc, char **argv) {
 #else
               "unknown",
 #endif
-              static_cast<long>(__cplusplus), IsaName(cpu_compute::DetectSimdLevel()), samples);
+              static_cast<long>(__cplusplus), IsaName(ml_cpu_compute::DetectSimdLevel()), samples);
   if (argc > 2 && std::string(argv[2]) == "tanh") {
     return MeasureTanh(samples);
   }
   std::printf("operator,size,median_seconds,iqr_seconds,cycles_per_element\n");
   for (const std::size_t size : Sizes()) {
-    const auto exp = Measure(cpu_compute::ExpFloat32, size, samples);
-    const auto log = Measure(cpu_compute::LogFloat32, size, samples);
+    const auto exp = Measure(ml_cpu_compute::ExpFloat32, size, samples);
+    const auto log = Measure(ml_cpu_compute::LogFloat32, size, samples);
     for (const auto &entry :
          {std::pair<const char *, std::vector<double>>{"Exp", exp}, {"Log", log}}) {
       const auto [median, iqr] = Summary(entry.second);

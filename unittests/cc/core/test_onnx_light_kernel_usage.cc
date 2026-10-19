@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
-#include "cpu_compute/math/binary/binary_manifest.h"
+#include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"

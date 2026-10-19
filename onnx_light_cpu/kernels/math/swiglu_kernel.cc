@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -64,23 +64,23 @@ void SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float alp
   const std::size_t count = static_cast<std::size_t>(gate.element_count());
   switch (static_cast<DataType>(gate.data_type)) {
   case DataType::FLOAT:
-    cpu_compute::SwiGLUFloat32(gate.AsFloat(), value.AsFloat(), output.AsFloat(), count, alpha);
+    ml_cpu_compute::SwiGLUFloat32(gate.AsFloat(), value.AsFloat(), output.AsFloat(), count, alpha);
     return;
   case DataType::DOUBLE:
-    cpu_compute::SwiGLUFloat64(gate.AsDouble(), value.AsDouble(), output.AsDouble(), count,
-                               static_cast<double>(alpha));
+    ml_cpu_compute::SwiGLUFloat64(gate.AsDouble(), value.AsDouble(), output.AsDouble(), count,
+                                  static_cast<double>(alpha));
     return;
   case DataType::FLOAT16:
-    cpu_compute::SwiGLUFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
-                               reinterpret_cast<const std::uint16_t *>(value.bytes()),
-                               reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                               alpha);
+    ml_cpu_compute::SwiGLUFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
+                                  reinterpret_cast<const std::uint16_t *>(value.bytes()),
+                                  reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                                  alpha);
     return;
   case DataType::BFLOAT16:
-    cpu_compute::SwiGLUBFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
-                                reinterpret_cast<const std::uint16_t *>(value.bytes()),
-                                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                                alpha);
+    ml_cpu_compute::SwiGLUBFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
+                                   reinterpret_cast<const std::uint16_t *>(value.bytes()),
+                                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                                   alpha);
     return;
   default:
     throw std::invalid_argument(

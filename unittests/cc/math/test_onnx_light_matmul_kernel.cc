@@ -1,6 +1,6 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
-#include "cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "unittests/cc/heap_allocation_tracker.h"
 #include "unittests/cc/scoped_x86_gradual_underflow.h"
 
@@ -23,7 +23,7 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
 
 void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
-                                    cpu_compute::GemmAlgorithm algorithm,
+                                    ml_cpu_compute::GemmAlgorithm algorithm,
                                     bool subnormal_inputs = false) {
   const rt_ns::Shape a_shape{static_cast<std::int64_t>(m), static_cast<std::int64_t>(k)};
   const rt_ns::Shape b_shape{static_cast<std::int64_t>(k), static_cast<std::int64_t>(n)};
@@ -37,7 +37,7 @@ void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
                             : static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
   }
 
-  const cpu_compute::GemmHalfPlan plan({true, false, false, m, n, k});
+  const ml_cpu_compute::GemmHalfPlan plan({true, false, false, m, n, k});
   ASSERT_EQ(plan.algorithm(), algorithm);
   onnx_light_cpu::MatMulKernel kernel(MakeCtx());
   const auto expected = kernel(rt_ns::Tensor::From<float>("A", a_shape, a),
@@ -66,7 +66,7 @@ void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
   ASSERT_GE(workspace_peak, workspace_bytes);
   EXPECT_LE(peak, workspace_peak);
   ASSERT_GT(k * n * sizeof(float), workspace_peak);
-  if (algorithm == cpu_compute::GemmAlgorithm::kGeneral) {
+  if (algorithm == ml_cpu_compute::GemmAlgorithm::kGeneral) {
     ASSERT_GT(m * k * sizeof(float), workspace_peak);
   }
   const auto &actual = runtime.Get("Y");
@@ -81,16 +81,16 @@ void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
 }
 
 TEST(MatMulKernel, Bfloat16GeneralUsesBoundedConversion) {
-  CheckBfloat16BoundedConversion(512, 512, 1024, cpu_compute::GemmAlgorithm::kGeneral);
+  CheckBfloat16BoundedConversion(512, 512, 1024, ml_cpu_compute::GemmAlgorithm::kGeneral);
 }
 
 TEST(MatMulKernel, Bfloat16DirectUsesBoundedConversion) {
-  CheckBfloat16BoundedConversion(8, 4097, 32, cpu_compute::GemmAlgorithm::kDirect);
+  CheckBfloat16BoundedConversion(8, 4097, 32, ml_cpu_compute::GemmAlgorithm::kDirect);
 }
 
 TEST(MatMulKernel, Bfloat16SubnormalConversionStaysBounded) {
   onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
-  CheckBfloat16BoundedConversion(512, 512, 1024, cpu_compute::GemmAlgorithm::kGeneral, true);
+  CheckBfloat16BoundedConversion(512, 512, 1024, ml_cpu_compute::GemmAlgorithm::kGeneral, true);
 }
 
 TEST(MatMulKernel, Bfloat16SubnormalInputsMatchFloat32) {

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpu_compute/execution.h"
-#include "cpu_compute/thread_topology.h"
-#include "cpu_compute/traditionalml/tree_ensemble.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/thread_topology.h"
+#include "ml_cpu_compute/traditionalml/tree_ensemble.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,13 +21,13 @@
 
 namespace {
 
-using cpu_compute::ExecutionBlockFn;
-using cpu_compute::ExecutionExecutorScope;
-using cpu_compute::ExecutionExecutorView;
-using cpu_compute::TreeBranchMode;
-using cpu_compute::TreeEnsembleAttributes;
-using cpu_compute::TreeEnsembleExecutionStrategy;
-using cpu_compute::TreeEnsemblePlan;
+using ml_cpu_compute::ExecutionBlockFn;
+using ml_cpu_compute::ExecutionExecutorScope;
+using ml_cpu_compute::ExecutionExecutorView;
+using ml_cpu_compute::TreeBranchMode;
+using ml_cpu_compute::TreeEnsembleAttributes;
+using ml_cpu_compute::TreeEnsembleExecutionStrategy;
+using ml_cpu_compute::TreeEnsemblePlan;
 
 struct ThreadExecutor {
   explicit ThreadExecutor(std::size_t threads) {
@@ -50,7 +50,7 @@ struct ThreadExecutor {
   }
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  cpu_compute::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadExecutor *>(context);
     {
       std::lock_guard lock(self.mutex);
@@ -100,12 +100,12 @@ struct ThreadExecutor {
   std::int64_t pending = 0;
   std::int64_t num_blocks = 0;
   void *task_context = nullptr;
-  cpu_compute::ExecutionBlockFn task = nullptr;
+  ml_cpu_compute::ExecutionBlockFn task = nullptr;
   bool stopping = false;
 };
 
-cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees) {
-  cpu_compute::TreeEnsembleAttributes attributes;
+ml_cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees) {
+  ml_cpu_compute::TreeEnsembleAttributes attributes;
   attributes.n_features = 1;
   attributes.n_targets = 1;
   attributes.base_values = {0.5};
@@ -114,7 +114,7 @@ cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees) {
     attributes.tree_roots.push_back(static_cast<std::int64_t>(tree));
     attributes.nodes_featureids.push_back(0);
     attributes.nodes_splits.push_back(0.0);
-    attributes.nodes_modes.push_back(cpu_compute::TreeBranchMode::kLeq);
+    attributes.nodes_modes.push_back(ml_cpu_compute::TreeBranchMode::kLeq);
     attributes.nodes_truenodeids.push_back(leaf);
     attributes.nodes_falsenodeids.push_back(leaf + 1);
     attributes.nodes_trueleafs.push_back(1);
@@ -127,15 +127,15 @@ cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees) {
   return attributes;
 }
 
-std::string_view StrategyName(cpu_compute::TreeEnsembleExecutionStrategy strategy) {
+std::string_view StrategyName(ml_cpu_compute::TreeEnsembleExecutionStrategy strategy) {
   switch (strategy) {
-  case cpu_compute::TreeEnsembleExecutionStrategy::kRowParallel:
+  case ml_cpu_compute::TreeEnsembleExecutionStrategy::kRowParallel:
     return "row_parallel";
-  case cpu_compute::TreeEnsembleExecutionStrategy::kTreeParallel:
+  case ml_cpu_compute::TreeEnsembleExecutionStrategy::kTreeParallel:
     return "tree_parallel";
-  case cpu_compute::TreeEnsembleExecutionStrategy::kTreeMajorBatch:
+  case ml_cpu_compute::TreeEnsembleExecutionStrategy::kTreeMajorBatch:
     return "tree_major_batch";
-  case cpu_compute::TreeEnsembleExecutionStrategy::kInterleavedRows:
+  case ml_cpu_compute::TreeEnsembleExecutionStrategy::kInterleavedRows:
     return "interleaved_rows";
   }
   return "unknown";
@@ -143,15 +143,15 @@ std::string_view StrategyName(cpu_compute::TreeEnsembleExecutionStrategy strateg
 
 void Measure(std::string_view scenario, std::string_view configuration, std::size_t trees,
              std::size_t rows, std::size_t threads) {
-  const cpu_compute::TreeEnsemblePlan plan(MakeForest(trees));
+  const ml_cpu_compute::TreeEnsemblePlan plan(MakeForest(trees));
   std::vector<double> input(rows);
   for (std::size_t row = 0; row < rows; ++row) {
     input[row] = (row % 2 == 0) ? -1.0 : 1.0;
   }
   ThreadExecutor executor(threads);
-  cpu_compute::ExecutionExecutorView view{&executor, static_cast<std::int64_t>(threads),
-                                          &ThreadExecutor::Run};
-  cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, static_cast<std::int64_t>(threads),
+                                             &ThreadExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto decision = plan.SelectExecution(rows);
   for (int iteration = 0; iteration < 3; ++iteration) {
     (void)plan.Evaluate(input, rows);
@@ -178,7 +178,7 @@ void Measure(std::string_view scenario, std::string_view configuration, std::siz
 
 int main() {
   const std::size_t physical_threads =
-      std::max<std::size_t>(cpu_compute::GetCpuTopology().physical_core_count, 1);
+      std::max<std::size_t>(ml_cpu_compute::GetCpuTopology().physical_core_count, 1);
   const std::vector<std::pair<std::string_view, std::size_t>> configurations{
       {"1", 1}, {"2", 2}, {"4", 4}, {"physical", physical_threads}};
   std::cout << "scenario,configuration,trees,rows,threads,strategy,workspace_bytes,median_us,"

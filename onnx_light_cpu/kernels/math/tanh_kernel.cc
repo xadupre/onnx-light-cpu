@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/kernels/math/tanh_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
-#include "cpu_compute/math/math.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 
@@ -48,15 +48,15 @@ void TanhKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::size_t count = static_cast<std::size_t>(x.element_count());
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    cpu_compute::TanhFloat32(x.AsFloat(), output.AsFloat(), count);
+    ml_cpu_compute::TanhFloat32(x.AsFloat(), output.AsFloat(), count);
     return;
   case DataType::FLOAT16:
-    cpu_compute::TanhFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                             reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count);
+    ml_cpu_compute::TanhFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count);
     return;
   case DataType::BFLOAT16:
-    cpu_compute::TanhBFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                              reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count);
+    ml_cpu_compute::TanhBFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count);
     return;
   default:
     throw std::invalid_argument(
