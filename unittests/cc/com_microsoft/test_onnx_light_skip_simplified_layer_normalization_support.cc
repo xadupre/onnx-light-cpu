@@ -326,6 +326,8 @@ TEST(SkipSimplifiedLayerNormalizationSupport, NativeGraphBuilderSchemaCallbackAn
   };
   for (auto type : {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16}) {
     builder_ns::GraphBuilder builder("skip-normalization", lookup);
+    builder.SetOpsetVersion("", 23);
+    builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
     const SymShape shape{SymDim("B"), SymDim("S"), SymDim(4)};
     builder.MakeInput("input", type, shape);
     builder.MakeInput("skip", type, {SymDim("S"), SymDim(4)});
@@ -355,6 +357,8 @@ TEST(SkipSimplifiedLayerNormalizationSupport, NativeGraphBuilderStatisticsAndRes
                                              {"output", "", "inv_std_var"},
                                              {"output", "", "", "sum"}}) {
     builder_ns::GraphBuilder builder("skip-statistics", lookup);
+    builder.SetOpsetVersion("", 23);
+    builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
     const SymShape shape{SymDim("B"), SymDim(3), SymDim(4)};
     builder.MakeInput("input", TensorType::kBfloat16, shape);
     builder.MakeInput("skip", TensorType::kBfloat16, shape);
