@@ -87,3 +87,54 @@ def test_inplace_symlinks():
 
 def test_foreign_extension():
     _check_runtime(foreign=True)
+
+
+def test_cmake_source_header_layouts():
+    for standalone_proto in (False, True):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "onnx-light"
+            package = source / "onnx_light"
+            package.mkdir(parents=True)
+            if standalone_proto:
+                proto = source / "onnx_proto/include/onnx_proto"
+                helpers = source / "onnx_proto/helpers/include"
+            else:
+                proto = package / "onnx_proto"
+                helpers = package / "onnx_helpers/include"
+            proto.mkdir(parents=True)
+            helpers.mkdir(parents=True)
+            (proto / "onnx.h").touch()
+            runtime = package / "onnx_py"
+            runtime.mkdir()
+            suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
+            libraries = {}
+            for component in ("core", "proto", "kernels"):
+                library = runtime / f"liblib_onnx_{component}{suffix}"
+                library.touch()
+                libraries[component] = library
+            command = [
+                "cmake",
+                "-S",
+                str(_SETUP.parent),
+                "-B",
+                str(root / "build"),
+                "-DONNX_LIGHT_CPU_BUILD_PYTHON=OFF",
+                "-DONNX_LIGHT_CPU_BUILD_TESTS=OFF",
+                "-DONNX_LIGHT_CPU_INSTALL=OFF",
+                "-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON",
+                f"-DONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR={source}",
+                f"-DONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY={libraries['core']}",
+                f"-DONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY={libraries['proto']}",
+                f"-DONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY={libraries['kernels']}",
+            ]
+            if sys.platform == "win32":
+                command.extend(
+                    f"-DONNX_LIGHT_CPU_ONNX_LIGHT"
+                    f"{'' if component == 'core' else '_' + component.upper()}_IMPLIB={library}"
+                    for component, library in libraries.items()
+                )
+            result = subprocess.run(
+                command, capture_output=True, text=True, check=False, timeout=120
+            )
+            assert result.returncode == 0, result.stdout + result.stderr

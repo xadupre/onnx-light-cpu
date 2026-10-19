@@ -20,24 +20,24 @@ def test_avx2_parity_uses_release_version():
 
 def test_getting_started_uses_release_version():
     guide = (_ROOT / "docs" / "getting_started.rst").read_text(encoding="utf-8")
-    assert f"published onnx-light {ONNX_LIGHT_VERSION} wheels" in guide
+    assert f"Release builds target onnx-light {ONNX_LIGHT_VERSION}" in guide
 
 
 def test_release_wheel_names():
     assert wheel_name("Linux", "x86_64", (3, 12)) == (
-        "onnx_light-0.1.35-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+        "onnx_light-0.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
     )
     assert wheel_name("Linux", "aarch64", (3, 13)) == (
-        "onnx_light-0.1.35-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+        "onnx_light-0.2.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
     )
     assert wheel_name("Darwin", "arm64", (3, 14)) == (
-        "onnx_light-0.1.35-cp314-cp314-macosx_13_0_universal2.whl"
+        "onnx_light-0.2.0-cp314-cp314-macosx_13_0_universal2.whl"
     )
     assert wheel_name("Windows", "AMD64", (3, 12)) == (
-        "onnx_light-0.1.35-cp312-cp312-win_amd64.whl"
+        "onnx_light-0.2.0-cp312-cp312-win_amd64.whl"
     )
     assert wheel_url("Windows", "ARM64", (3, 13)).endswith(
-        "/0.1.35/onnx_light-0.1.35-cp313-cp313-win_arm64.whl"
+        "/0.2.0/onnx_light-0.2.0-cp313-cp313-win_arm64.whl"
     )
 
 
