@@ -59,6 +59,7 @@ struct CostExecutor : InlineExecutor {
 };
 
 TEST(Execution, StandaloneIsSerial) {
+  EXPECT_FALSE(ml_cpu_compute::HasExecutionExecutorScope());
   EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
   EXPECT_EQ(ml_cpu_compute::ExecutionThreadCount(), 1);
   EXPECT_EQ(ml_cpu_compute::ExecutionBlockCount(1000000), 1);
@@ -146,6 +147,7 @@ TEST(Execution, DispatchFailurePropagatesAndRestoresScope) {
   EXPECT_THROW(run(), std::runtime_error);
   EXPECT_EQ(calls, 0);
   EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+  EXPECT_FALSE(ml_cpu_compute::HasExecutionExecutorScope());
   EXPECT_FALSE(ml_cpu_compute::ExecutionInParallelRegion());
 }
 
@@ -226,9 +228,11 @@ TEST(Execution, BindingsAndNestedRegionsAreThreadLocal) {
   InlineExecutor executor;
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   ExecutionExecutorScope outer(&view);
+  EXPECT_TRUE(ml_cpu_compute::HasExecutionExecutorScope());
   ExecuteRanges(1, [&](int64_t, int64_t) {
     EXPECT_TRUE(ExecutionInParallelRegion());
     std::thread worker([] {
+      EXPECT_FALSE(ml_cpu_compute::HasExecutionExecutorScope());
       EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
       EXPECT_EQ(ExecutionThreadCount(), 1);
       EXPECT_FALSE(ExecutionInParallelRegion());
@@ -242,6 +246,7 @@ TEST(Execution, BindingsAndNestedRegionsAreThreadLocal) {
         });
       }
       EXPECT_EQ(local_executor.dispatches, 1);
+      EXPECT_FALSE(ml_cpu_compute::HasExecutionExecutorScope());
       EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
       EXPECT_FALSE(ExecutionInParallelRegion());
     });

@@ -17,11 +17,12 @@ namespace ml_cpu_compute {
 //   for the duration of a call. The compute library never creates a pool or
 //   extends the executor lifetime.
 // - CurrentExecutionExecutor() returns a non-owning, thread-local view, or nullptr
-//   without an installed executor. Its address is not a stable executor identity.
+//   for serial execution. Its address is not a stable executor identity.
 // - An explicit ExecutionExecutorScope borrows its view and context on the calling
 //   thread and restores the previous binding on destruction, including unwinding.
 //   The installer must keep both alive through the scope and all submitted work.
-//   A nullptr scope temporarily selects serial execution.
+//   A nullptr scope explicitly selects serial execution. Adapters must respect
+//   HasExecutionExecutorScope() even when CurrentExecutionExecutor() is nullptr.
 //
 // Dispatch and failures:
 // - run_blocks must be valid whenever parallel dispatch is possible. It invokes
@@ -94,6 +95,7 @@ struct ExecutionSchedule {
 };
 
 const ExecutionExecutorView *CurrentExecutionExecutor() noexcept;
+bool HasExecutionExecutorScope() noexcept;
 
 class ExecutionExecutorScope {
 public:

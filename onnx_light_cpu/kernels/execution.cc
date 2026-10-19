@@ -55,7 +55,7 @@ ml_cpu_compute::ExecutionExecutorView RuntimeExecutorView() noexcept {
 } // namespace
 
 RuntimeExecutionScope::RuntimeExecutionScope() noexcept
-    : view_(RuntimeExecutorView()), scope_(ml_cpu_compute::CurrentExecutionExecutor() != nullptr
+    : view_(RuntimeExecutorView()), scope_(ml_cpu_compute::HasExecutionExecutorScope()
                                                ? ml_cpu_compute::CurrentExecutionExecutor()
                                            : view_.context != nullptr ? &view_
                                                                       : nullptr) {}

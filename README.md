@@ -184,6 +184,11 @@ executor through `ExecutionExecutorView` and `ExecutionExecutorScope` from
 session's executor in `onnx_light_cpu/kernels/execution.cc`; the computation
 library has no runtime dependency.
 
+An explicit `ExecutionExecutorScope(nullptr)` forces serial execution even when
+an ONNX session executor is active. Adapters distinguish this override from an
+absent binding with `HasExecutionExecutorScope()` and restore the previous
+binding when the scope exits.
+
 The full runtime project also exports the computation target:
 
 ```cmake

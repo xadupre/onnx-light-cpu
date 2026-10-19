@@ -17,16 +17,27 @@ int &ExecutionDepthSlot() noexcept {
   return depth;
 }
 
+int &ExecutorScopeDepthSlot() noexcept {
+  thread_local int depth = 0;
+  return depth;
+}
+
 } // namespace
 
 const ExecutionExecutorView *CurrentExecutionExecutor() noexcept { return CurrentExecutorSlot(); }
 
+bool HasExecutionExecutorScope() noexcept { return ExecutorScopeDepthSlot() != 0; }
+
 ExecutionExecutorScope::ExecutionExecutorScope(const ExecutionExecutorView *executor) noexcept
     : previous_(CurrentExecutorSlot()) {
   CurrentExecutorSlot() = executor;
+  ++ExecutorScopeDepthSlot();
 }
 
-ExecutionExecutorScope::~ExecutionExecutorScope() { CurrentExecutorSlot() = previous_; }
+ExecutionExecutorScope::~ExecutionExecutorScope() {
+  CurrentExecutorSlot() = previous_;
+  --ExecutorScopeDepthSlot();
+}
 
 namespace detail {
 

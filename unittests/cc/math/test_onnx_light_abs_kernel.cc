@@ -285,6 +285,17 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
   onnx_light_cpu::AbsKernel direct_kernel(MakeCtx());
   {
     rt_ns::CpuExecutorScope scope(executor.get());
+    {
+      const ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+      const onnx_light_cpu::RuntimeExecutionScope adapter;
+      EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+      EXPECT_EQ(ml_cpu_compute::ExecutionThreadCount(), 1);
+      kernel->Run(runtime);
+      EXPECT_EQ(runtime.Get("y").AsFloat()[n - 1], 3.0f);
+      const rt_ns::Tensor serial_output = direct_kernel(runtime.Get("x"));
+      EXPECT_EQ(serial_output.AsFloat()[n - 1], 3.0f);
+      EXPECT_EQ(executor->counters().dispatches, dispatches);
+    }
     const rt_ns::Tensor output = direct_kernel(runtime.Get("x"));
     EXPECT_EQ(output.AsFloat()[n - 1], 3.0f);
   }
@@ -314,6 +325,13 @@ TEST(OnnxLightAbsKernel, RuntimeScopePreservesExplicitExecutorAndRestoresPreviou
       EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), &explicit_view);
     }
     EXPECT_NE(ml_cpu_compute::CurrentExecutionExecutor(), &explicit_view);
+    {
+      const ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+      const onnx_light_cpu::RuntimeExecutionScope nested_adapter;
+      EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+      EXPECT_EQ(ml_cpu_compute::ExecutionThreadCount(), 1);
+    }
+    EXPECT_NE(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
   }
   EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
 }
