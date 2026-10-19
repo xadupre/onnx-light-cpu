@@ -268,8 +268,8 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         set_property(TARGET onnx_threads::lib_onnx_threads PROPERTY
             IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB}")
       endif()
-      set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
-          INTERFACE_LINK_LIBRARIES onnx_threads::lib_onnx_threads)
+      target_link_libraries(onnx_light::lib_onnx_proto INTERFACE
+          onnx_threads::lib_onnx_threads)
     endif()
     add_library(onnx_light::lib_onnx_core
         ${_onnx_light_imported_library_type} IMPORTED GLOBAL)

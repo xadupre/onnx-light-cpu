@@ -162,9 +162,10 @@ def test_cmake_source_header_layouts():
                 f"-DONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY={libraries['kernels']}",
             ]
             if layout == "threads":
-                command.append(
+                threads_library_arg = (
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={libraries['threads']}"
                 )
+                command.append(threads_library_arg)
             if sys.platform == "win32":
                 command.extend(
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT"
@@ -176,7 +177,9 @@ def test_cmake_source_header_layouts():
             )
             assert result.returncode == 0, result.stdout + result.stderr
             if layout == "threads":
-                command.append("-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY=")
+                command[command.index(threads_library_arg)] = (
+                    "-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY="
+                )
                 result = subprocess.run(
                     command, capture_output=True, text=True, check=False, timeout=120
                 )
