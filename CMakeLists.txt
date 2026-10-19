@@ -42,12 +42,16 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY "" CACHE FILEPATH
     "Exact onnx-light core shared library loaded by the Python runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY "" CACHE FILEPATH
     "Exact onnx-light proto shared library loaded by the Python runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY "" CACHE FILEPATH
+    "Exact onnx-light threading shared library loaded by the Python runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY "" CACHE FILEPATH
     "Exact onnx-light kernels shared library (Cast compatibility dependency).")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB "" CACHE FILEPATH
+    "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light kernels runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
@@ -73,7 +77,11 @@ if(ONNX_LIGHT_CPU_RELEASE_WHEEL)
   list(GET _onnx_light_runtime_libraries 0 ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY)
   list(GET _onnx_light_runtime_libraries 1 ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY)
   if(WIN32)
-    foreach(_component CORE PROTO KERNELS BACKEND_TEST OP SHAPE)
+    set(_onnx_light_components CORE PROTO KERNELS BACKEND_TEST OP SHAPE)
+    if(EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include/onnx_threads/config.h")
+      list(APPEND _onnx_light_components THREADS)
+    endif()
+    foreach(_component ${_onnx_light_components})
       string(TOLOWER "${_component}" _name)
       file(GLOB_RECURSE _import_lib
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/build/lib_onnx_${_name}.lib")
@@ -226,6 +234,42 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       list(APPEND _onnx_light_include_dirs
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include"
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto")
+    endif()
+    if(EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include/onnx_threads/config.h")
+      get_filename_component(_onnx_light_libdir
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}" DIRECTORY)
+      if(ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY)
+        set(_onnx_light_threads_lib "${ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY}")
+      else()
+        file(GLOB _onnx_light_threads_lib
+            "${_onnx_light_libdir}/liblib_onnx_threads${CMAKE_SHARED_LIBRARY_SUFFIX}"
+            "${_onnx_light_libdir}/lib_onnx_threads${CMAKE_SHARED_LIBRARY_SUFFIX}")
+      endif()
+      if(NOT _onnx_light_threads_lib)
+        message(FATAL_ERROR
+            "The onnx-light threading shared library is required by this source tree. "
+            "Set ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY to the library loaded by Python.")
+      endif()
+      list(GET _onnx_light_threads_lib 0 _onnx_light_threads_lib)
+      add_library(onnx_threads::lib_onnx_threads
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
+      set_target_properties(onnx_threads::lib_onnx_threads PROPERTIES
+          IMPORTED_LOCATION "${_onnx_light_threads_lib}"
+          INTERFACE_INCLUDE_DIRECTORIES
+              "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include"
+          INTERFACE_COMPILE_DEFINITIONS ONNX_THREADS_SHARED
+          INTERFACE_LINK_LIBRARIES Threads::Threads)
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB)
+          message(FATAL_ERROR
+              "ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB is required for "
+              "source-runtime integration on Windows.")
+        endif()
+        set_property(TARGET onnx_threads::lib_onnx_threads PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB}")
+      endif()
+      set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
+          INTERFACE_LINK_LIBRARIES onnx_threads::lib_onnx_threads)
     endif()
     add_library(onnx_light::lib_onnx_core
         ${_onnx_light_imported_library_type} IMPORTED GLOBAL)

@@ -28,11 +28,13 @@ tree.body = [
 ]
 namespace = {"__file__": str(path)}
 exec(compile(tree, str(path), "exec"), namespace)
-print(json.dumps(namespace["_onnx_light_source_build_info"]()))
+info = namespace["_onnx_light_source_build_info"]()
+cmake_args = namespace["_add_onnx_light_source_defines"]([], info)
+print(json.dumps({"info": info, "cmake_args": cmake_args}))
 """
 
 
-def _check_runtime(*, symlinks=False, foreign=False):
+def _check_runtime(*, symlinks=False, foreign=False, threads=False):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         package = root / "onnx_light"
@@ -41,12 +43,19 @@ def _check_runtime(*, symlinks=False, foreign=False):
         header = package / "onnx_core/runtime/kernels/kernel_dispatch_table.h"
         header.parent.mkdir(parents=True)
         header.touch()
+        if threads:
+            thread_header = root / "onnx_threads/include/onnx_threads/config.h"
+            thread_header.parent.mkdir(parents=True)
+            thread_header.touch()
         (package / "__init__.py").touch()
         (runtime / "__init__.py").touch()
         artifacts = root / "build" if symlinks or foreign else runtime
         artifacts.mkdir(exist_ok=True)
         extension_name = "_onnxpyprotoop" + importlib.machinery.EXTENSION_SUFFIXES[0]
-        for name in (extension_name, "liblib_onnx_core.so", "liblib_onnx_proto.so"):
+        names = [extension_name, "liblib_onnx_core.so", "liblib_onnx_proto.so"]
+        if threads:
+            names.append("liblib_onnx_threads.so")
+        for name in names:
             artifact = artifacts / name
             artifact.touch()
             if symlinks:
@@ -70,10 +79,19 @@ def _check_runtime(*, symlinks=False, foreign=False):
             assert f"expected it in {runtime}" in result.stderr
         else:
             assert result.returncode == 0, result.stderr
-            info = json.loads(result.stdout)
+            output = json.loads(result.stdout)
+            info = output["info"]
             assert info["include_dir"] == str(package)
             assert info["core_library"] == str(artifacts / "liblib_onnx_core.so")
             assert info["proto_library"] == str(artifacts / "liblib_onnx_proto.so")
+            if threads:
+                assert info["threads_library"] == str(artifacts / "liblib_onnx_threads.so")
+                assert (
+                    f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={info['threads_library']}"
+                    in output["cmake_args"]
+                )
+            else:
+                assert "threads_library" not in info
 
 
 def test_inplace_files():
@@ -89,14 +107,23 @@ def test_foreign_extension():
     _check_runtime(foreign=True)
 
 
+def test_inplace_threads():
+    _check_runtime(threads=True)
+
+
+@unittest.skipIf(sys.platform == "win32", "Symbolic links require Windows privileges.")
+def test_inplace_threads_symlinks():
+    _check_runtime(symlinks=True, threads=True)
+
+
 def test_cmake_source_header_layouts():
-    for standalone_proto in (False, True):
+    for layout in ("legacy", "proto", "threads"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "onnx-light"
             package = source / "onnx_light"
             package.mkdir(parents=True)
-            if standalone_proto:
+            if layout != "legacy":
                 proto = source / "onnx_proto/include/onnx_proto"
                 helpers = source / "onnx_proto/helpers/include"
             else:
@@ -109,7 +136,13 @@ def test_cmake_source_header_layouts():
             runtime.mkdir()
             suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
             libraries = {}
-            for component in ("core", "proto", "kernels"):
+            components = ["core", "proto", "kernels"]
+            if layout == "threads":
+                thread_header = source / "onnx_threads/include/onnx_threads/config.h"
+                thread_header.parent.mkdir(parents=True)
+                thread_header.touch()
+                components.append("threads")
+            for component in components:
                 library = runtime / f"liblib_onnx_{component}{suffix}"
                 library.touch()
                 libraries[component] = library
@@ -128,6 +161,10 @@ def test_cmake_source_header_layouts():
                 f"-DONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY={libraries['proto']}",
                 f"-DONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY={libraries['kernels']}",
             ]
+            if layout == "threads":
+                command.append(
+                    f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={libraries['threads']}"
+                )
             if sys.platform == "win32":
                 command.extend(
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT"
@@ -138,3 +175,15 @@ def test_cmake_source_header_layouts():
                 command, capture_output=True, text=True, check=False, timeout=120
             )
             assert result.returncode == 0, result.stdout + result.stderr
+            if layout == "threads":
+                command.append("-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY=")
+                result = subprocess.run(
+                    command, capture_output=True, text=True, check=False, timeout=120
+                )
+                assert result.returncode == 0, result.stdout + result.stderr
+                libraries["threads"].unlink()
+                result = subprocess.run(
+                    command, capture_output=True, text=True, check=False, timeout=120
+                )
+                assert result.returncode != 0
+                assert "threading shared library is required" in result.stderr

@@ -157,6 +157,8 @@ def _onnx_light_source_build_info():
             "core_library": find_runtime_library("lib_onnx_core"),
             "proto_library": find_runtime_library("lib_onnx_proto"),
         }
+        if (include_dir.parent / "onnx_threads/include/onnx_threads/config.h").is_file():
+            info["threads_library"] = find_runtime_library("lib_onnx_threads")
     else:
         info = dict(onnx_light.get_cpp_build_info())
         info["include_dir"] = str(include_dir)
@@ -175,12 +177,15 @@ def _onnx_light_source_build_info():
         components = {
             "core_import_library": "lib_onnx_core.lib",
             "proto_import_library": "lib_onnx_proto.lib",
+            "threads_import_library": "lib_onnx_threads.lib",
             "kernels_import_library": "lib_onnx_kernels.lib",
             "backend_test_import_library": "lib_onnx_backend_test.lib",
             "op_import_library": "lib_onnx_op.lib",
             "shape_import_library": "lib_onnx_shape.lib",
         }
         for key, filename in components.items():
+            if key == "threads_import_library" and "threads_library" not in info:
+                continue
             matches = sorted(root.glob(f"**/{filename}"))
             if not matches:
                 raise FileNotFoundError(f"Could not find {filename!r} under {root}.")
@@ -211,6 +216,18 @@ def _add_onnx_light_source_defines(cmake_args, build_info=None):
         "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY",
         info["proto_library"],
     )
+    if "threads_library" in info:
+        cmake_args = _set_cmake_define(
+            cmake_args,
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY",
+            info["threads_library"],
+        )
+    if "threads_import_library" in info:
+        cmake_args = _set_cmake_define(
+            cmake_args,
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB",
+            info["threads_import_library"],
+        )
     if "core_import_library" in info:
         cmake_args = _set_cmake_define(
             cmake_args,
