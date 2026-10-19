@@ -70,7 +70,7 @@ the extension is located through the selected source package, and linking uses
 the resolved runtime-library paths.
 
 Python builds that exchange nanobind-bound C++ objects must also use the same
-effective ABI mode. The published onnx-light 0.1.33 wheels use nanobind's
+effective ABI mode. The published onnx-light 0.1.35 wheels use nanobind's
 native ABI even though ``ONNX_LIGHT_PYTHON_STABLE_ABI`` defaults to ``ON``:
 the option requests stable ABI support, but the effective mode depends on the
 build frontend and Python configuration. The matching onnx-light-cpu release
