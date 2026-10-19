@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -112,7 +112,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.calls;
     self.blocks += count;
@@ -124,8 +124,8 @@ struct InlineExecutor {
 
 TEST(CausalConvWithState, SchedulingAccountsForConvolutionAndStateCopies) {
   InlineExecutor executor;
-  const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  const onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  const ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const onnx_light_cpu::CausalConvWithStateKernel kernel(Context());
   const onnx_light_cpu::NaiveCausalConvWithStateKernel naive(Context());
   const auto check = [&](std::int64_t channels, std::int64_t length, std::int64_t width) {
@@ -147,7 +147,7 @@ TEST(CausalConvWithState, SchedulingAccountsForConvolutionAndStateCopies) {
   EXPECT_GT(executor.blocks, 1);
   executor.calls = executor.blocks = 0;
   {
-    onnx_light_cpu::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
     check(64, 512, 4);
   }
   EXPECT_EQ(executor.calls, 0);
@@ -261,8 +261,8 @@ TEST(CausalConvWithState, HalfTypesAndSilu) {
     auto [output, state] = kernel(input, weight, nullptr, nullptr, "silu");
     const auto *values = reinterpret_cast<const std::uint16_t *>(output.bytes());
     auto read = [bf16](std::uint16_t value) {
-      return bf16 ? onnx_light_cpu::detail::Bfloat16BitsToFloat(value)
-                  : onnx_light_cpu::detail::Float16BitsToFloat(value);
+      return bf16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(value)
+                  : ml_cpu_compute::detail::Float16BitsToFloat(value);
     };
     EXPECT_NEAR(read(values[0]), 1.0f / (1.0f + std::exp(-1.0f)), 0.02f);
     EXPECT_NEAR(read(values[1]), 3.0f / (1.0f + std::exp(-3.0f)), 0.02f);

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/processor_performance_profile.h"
+#include "ml_cpu_compute/processor_performance_profile.h"
 
 #include <gtest/gtest.h>
 
@@ -13,24 +13,24 @@
 
 namespace {
 
-using onnx_light_cpu::BenchmarkProcessorPerformance;
-using onnx_light_cpu::CpuAffinity;
-using onnx_light_cpu::DataType;
-using onnx_light_cpu::DeriveRooflineEntries;
-using onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion;
-using onnx_light_cpu::MemoryProfileLevel;
-using onnx_light_cpu::ParseProcessorThreadPolicy;
-using onnx_light_cpu::ProcessorPerformanceProfile;
-using onnx_light_cpu::ProcessorProfileComputeEntry;
-using onnx_light_cpu::ProcessorProfileMemoryEntry;
-using onnx_light_cpu::ProcessorProfileOptions;
-using onnx_light_cpu::ProcessorThreadPolicy;
-using onnx_light_cpu::ProcessorThreadPolicyName;
-using onnx_light_cpu::ValidateProcessorProfileOptions;
+using ml_cpu_compute::BenchmarkProcessorPerformance;
+using ml_cpu_compute::CpuAffinity;
+using ml_cpu_compute::DataType;
+using ml_cpu_compute::DeriveRooflineEntries;
+using ml_cpu_compute::kProcessorPerformanceProfileSchemaVersion;
+using ml_cpu_compute::MemoryProfileLevel;
+using ml_cpu_compute::ParseProcessorThreadPolicy;
+using ml_cpu_compute::ProcessorPerformanceProfile;
+using ml_cpu_compute::ProcessorProfileComputeEntry;
+using ml_cpu_compute::ProcessorProfileMemoryEntry;
+using ml_cpu_compute::ProcessorProfileOptions;
+using ml_cpu_compute::ProcessorThreadPolicy;
+using ml_cpu_compute::ProcessorThreadPolicyName;
+using ml_cpu_compute::ValidateProcessorProfileOptions;
 
-ProcessorProfileOptions BoundedOptions() {
-  ProcessorProfileOptions options;
-  options.thread_policies = {ProcessorThreadPolicy::kSingle};
+ml_cpu_compute::ProcessorProfileOptions BoundedOptions() {
+  ml_cpu_compute::ProcessorProfileOptions options;
+  options.thread_policies = {ml_cpu_compute::ProcessorThreadPolicy::kSingle};
   options.repeats = 2;
   options.minimum_duration_ms = 1.0;
   options.memory_budget_bytes = 8 * 1024 * 1024;
@@ -43,46 +43,46 @@ ProcessorProfileOptions BoundedOptions() {
 // ---------------------------------------------------------------------------
 
 TEST(ProcessorPerformanceProfile, ValidBoundedOptionsPassValidation) {
-  EXPECT_TRUE(ValidateProcessorProfileOptions(BoundedOptions()).empty());
+  EXPECT_TRUE(ml_cpu_compute::ValidateProcessorProfileOptions(BoundedOptions()).empty());
 }
 
 TEST(ProcessorPerformanceProfile, EmptyThreadPoliciesFailValidation) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.thread_policies.clear();
-  EXPECT_FALSE(ValidateProcessorProfileOptions(options).empty());
+  EXPECT_FALSE(ml_cpu_compute::ValidateProcessorProfileOptions(options).empty());
 }
 
 TEST(ProcessorPerformanceProfile, ZeroRepeatsFailValidation) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.repeats = 0;
-  EXPECT_FALSE(ValidateProcessorProfileOptions(options).empty());
+  EXPECT_FALSE(ml_cpu_compute::ValidateProcessorProfileOptions(options).empty());
 }
 
 TEST(ProcessorPerformanceProfile, NonPositiveDurationFailsValidation) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.minimum_duration_ms = 0.0;
-  EXPECT_FALSE(ValidateProcessorProfileOptions(options).empty());
+  EXPECT_FALSE(ml_cpu_compute::ValidateProcessorProfileOptions(options).empty());
   options.minimum_duration_ms = -1.0;
-  EXPECT_FALSE(ValidateProcessorProfileOptions(options).empty());
+  EXPECT_FALSE(ml_cpu_compute::ValidateProcessorProfileOptions(options).empty());
 }
 
 TEST(ProcessorPerformanceProfile, ZeroMemoryBudgetFailsValidation) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.memory_budget_bytes = 0;
-  EXPECT_FALSE(ValidateProcessorProfileOptions(options).empty());
+  EXPECT_FALSE(ml_cpu_compute::ValidateProcessorProfileOptions(options).empty());
 }
 
 TEST(ProcessorPerformanceProfile, ImplausibleExplicitAffinityFailsValidation) {
-  ProcessorProfileOptions options = BoundedOptions();
-  options.explicit_single_affinity = CpuAffinity{0xFFFFu, 0xFFFFu};
-  const std::string error = ValidateProcessorProfileOptions(options);
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
+  options.explicit_single_affinity = ml_cpu_compute::CpuAffinity{0xFFFFu, 0xFFFFu};
+  const std::string error = ml_cpu_compute::ValidateProcessorProfileOptions(options);
   EXPECT_FALSE(error.empty());
 }
 
 TEST(ProcessorPerformanceProfile, InvalidOptionsThrowBeforeMeasuring) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.repeats = 0;
-  EXPECT_THROW(BenchmarkProcessorPerformance(options), std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::BenchmarkProcessorPerformance(options), std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -90,16 +90,16 @@ TEST(ProcessorPerformanceProfile, InvalidOptionsThrowBeforeMeasuring) {
 // ---------------------------------------------------------------------------
 
 TEST(ProcessorPerformanceProfile, ThreadPolicyNamesRoundTrip) {
-  ProcessorThreadPolicy policy = ProcessorThreadPolicy::kPhysical;
-  ASSERT_TRUE(ParseProcessorThreadPolicy("single", policy));
-  EXPECT_EQ(policy, ProcessorThreadPolicy::kSingle);
-  EXPECT_STREQ(ProcessorThreadPolicyName(policy), "single");
+  ml_cpu_compute::ProcessorThreadPolicy policy = ml_cpu_compute::ProcessorThreadPolicy::kPhysical;
+  ASSERT_TRUE(ml_cpu_compute::ParseProcessorThreadPolicy("single", policy));
+  EXPECT_EQ(policy, ml_cpu_compute::ProcessorThreadPolicy::kSingle);
+  EXPECT_STREQ(ml_cpu_compute::ProcessorThreadPolicyName(policy), "single");
 
-  ASSERT_TRUE(ParseProcessorThreadPolicy("physical", policy));
-  EXPECT_EQ(policy, ProcessorThreadPolicy::kPhysical);
-  EXPECT_STREQ(ProcessorThreadPolicyName(policy), "physical");
+  ASSERT_TRUE(ml_cpu_compute::ParseProcessorThreadPolicy("physical", policy));
+  EXPECT_EQ(policy, ml_cpu_compute::ProcessorThreadPolicy::kPhysical);
+  EXPECT_STREQ(ml_cpu_compute::ProcessorThreadPolicyName(policy), "physical");
 
-  EXPECT_FALSE(ParseProcessorThreadPolicy("both", policy));
+  EXPECT_FALSE(ml_cpu_compute::ParseProcessorThreadPolicy("both", policy));
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +108,11 @@ TEST(ProcessorPerformanceProfile, ThreadPolicyNamesRoundTrip) {
 // ---------------------------------------------------------------------------
 
 TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
-  const ProcessorPerformanceProfile profile = BenchmarkProcessorPerformance(BoundedOptions());
+  const ml_cpu_compute::ProcessorPerformanceProfile profile =
+      ml_cpu_compute::BenchmarkProcessorPerformance(BoundedOptions());
 
-  EXPECT_EQ(profile.metadata.schema_version, kProcessorPerformanceProfileSchemaVersion);
+  EXPECT_EQ(profile.metadata.schema_version,
+            ml_cpu_compute::kProcessorPerformanceProfileSchemaVersion);
   EXPECT_GT(profile.metadata.unix_timestamp_ns, 0);
   EXPECT_FALSE(profile.metadata.platform.empty());
   EXPECT_FALSE(profile.metadata.compiler.empty());
@@ -122,8 +124,8 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
   // At least L1 must be measurable on any host running these tests.
   const bool has_l1_entry =
       std::any_of(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
-        return entry.level == MemoryProfileLevel::kL1 &&
-               entry.policy == ProcessorThreadPolicy::kSingle;
+        return entry.level == ml_cpu_compute::MemoryProfileLevel::kL1 &&
+               entry.policy == ml_cpu_compute::ProcessorThreadPolicy::kSingle;
       });
   EXPECT_TRUE(has_l1_entry);
 
@@ -142,7 +144,7 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
   const bool has_float32_entry =
       std::any_of(profile.compute.begin(), profile.compute.end(), [](const auto &entry) {
         return entry.element_type == DataType::FLOAT &&
-               entry.policy == ProcessorThreadPolicy::kSingle;
+               entry.policy == ml_cpu_compute::ProcessorThreadPolicy::kSingle;
       });
   EXPECT_TRUE(has_float32_entry);
   for (const auto &entry : profile.compute) {
@@ -161,20 +163,21 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
 }
 
 TEST(ProcessorPerformanceProfile, PhysicalPolicyProducesAtLeastOneParticipant) {
-  ProcessorProfileOptions options = BoundedOptions();
-  options.thread_policies = {ProcessorThreadPolicy::kPhysical};
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
+  options.thread_policies = {ml_cpu_compute::ProcessorThreadPolicy::kPhysical};
 
-  const ProcessorPerformanceProfile profile = BenchmarkProcessorPerformance(options);
+  const ml_cpu_compute::ProcessorPerformanceProfile profile =
+      ml_cpu_compute::BenchmarkProcessorPerformance(options);
 
   const bool has_physical_compute =
       std::any_of(profile.compute.begin(), profile.compute.end(), [](const auto &entry) {
-        return entry.policy == ProcessorThreadPolicy::kPhysical;
+        return entry.policy == ml_cpu_compute::ProcessorThreadPolicy::kPhysical;
       });
   EXPECT_TRUE(has_physical_compute);
 
   const auto l1 = std::find_if(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
-    return entry.level == MemoryProfileLevel::kL1 &&
-           entry.policy == ProcessorThreadPolicy::kPhysical;
+    return entry.level == ml_cpu_compute::MemoryProfileLevel::kL1 &&
+           entry.policy == ml_cpu_compute::ProcessorThreadPolicy::kPhysical;
   });
   ASSERT_NE(l1, profile.memory.end());
   ASSERT_FALSE(l1->read_scaling.empty());
@@ -183,32 +186,37 @@ TEST(ProcessorPerformanceProfile, PhysicalPolicyProducesAtLeastOneParticipant) {
 }
 
 TEST(ProcessorPerformanceProfile, LatencyOptedOutLeavesEveryLatencySlotAbsent) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   options.include_latency = false;
 
-  const ProcessorPerformanceProfile profile = BenchmarkProcessorPerformance(options);
+  const ml_cpu_compute::ProcessorPerformanceProfile profile =
+      ml_cpu_compute::BenchmarkProcessorPerformance(options);
   for (const auto &entry : profile.memory) {
     EXPECT_FALSE(entry.latency.has_value());
   }
 }
 
 TEST(ProcessorPerformanceProfile, ImpossibleRamBudgetIsAbsentAndExplained) {
-  ProcessorProfileOptions options = BoundedOptions();
+  ml_cpu_compute::ProcessorProfileOptions options = BoundedOptions();
   // A budget this small cannot possibly satisfy the RAM working-set contract
   // (larger than twice the last-level cache) on any real host.
   options.memory_budget_bytes = 1;
 
-  const ProcessorPerformanceProfile profile = BenchmarkProcessorPerformance(options);
+  const ml_cpu_compute::ProcessorPerformanceProfile profile =
+      ml_cpu_compute::BenchmarkProcessorPerformance(options);
   const bool has_ram_entry =
-      std::any_of(profile.memory.begin(), profile.memory.end(),
-                  [](const auto &entry) { return entry.level == MemoryProfileLevel::kRam; });
+      std::any_of(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
+        return entry.level == ml_cpu_compute::MemoryProfileLevel::kRam;
+      });
   EXPECT_FALSE(has_ram_entry);
   EXPECT_FALSE(profile.warnings.empty());
 }
 
 TEST(ProcessorPerformanceProfile, RepeatedRunsProduceIndependentImmutableValues) {
-  const ProcessorPerformanceProfile first = BenchmarkProcessorPerformance(BoundedOptions());
-  const ProcessorPerformanceProfile second = BenchmarkProcessorPerformance(BoundedOptions());
+  const ml_cpu_compute::ProcessorPerformanceProfile first =
+      ml_cpu_compute::BenchmarkProcessorPerformance(BoundedOptions());
+  const ml_cpu_compute::ProcessorPerformanceProfile second =
+      ml_cpu_compute::BenchmarkProcessorPerformance(BoundedOptions());
 
   // Each call returns its own value; mutating one must not be observable
   // through the other (this is a compile-time property of returning by
@@ -225,9 +233,10 @@ TEST(ProcessorPerformanceProfile, RepeatedRunsProduceIndependentImmutableValues)
 // read bandwidth, independent of any live measurement.
 // ---------------------------------------------------------------------------
 
-ProcessorProfileComputeEntry MakeComputeEntry(DataType element_type, ProcessorThreadPolicy policy,
-                                              double median_gops) {
-  ProcessorProfileComputeEntry entry;
+ml_cpu_compute::ProcessorProfileComputeEntry
+MakeComputeEntry(DataType element_type, ml_cpu_compute::ProcessorThreadPolicy policy,
+                 double median_gops) {
+  ml_cpu_compute::ProcessorProfileComputeEntry entry;
   entry.element_type = element_type;
   entry.policy = policy;
   entry.result.available = true;
@@ -235,13 +244,13 @@ ProcessorProfileComputeEntry MakeComputeEntry(DataType element_type, ProcessorTh
   return entry;
 }
 
-ProcessorProfileMemoryEntry MakeMemoryEntryWithRead(MemoryProfileLevel level,
-                                                    ProcessorThreadPolicy policy,
-                                                    double median_gbps) {
-  ProcessorProfileMemoryEntry entry;
+ml_cpu_compute::ProcessorProfileMemoryEntry
+MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel level,
+                        ml_cpu_compute::ProcessorThreadPolicy policy, double median_gbps) {
+  ml_cpu_compute::ProcessorProfileMemoryEntry entry;
   entry.level = level;
   entry.policy = policy;
-  onnx_light_cpu::MemoryBandwidthResult read;
+  ml_cpu_compute::MemoryBandwidthResult read;
   read.available = true;
   read.median_gbps = median_gbps;
   entry.read = read;
@@ -249,31 +258,35 @@ ProcessorProfileMemoryEntry MakeMemoryEntryWithRead(MemoryProfileLevel level,
 }
 
 TEST(ProcessorPerformanceProfileRoofline, CrossoverMatchesComputeOverBandwidth) {
-  const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
-  const std::vector<ProcessorProfileMemoryEntry> memory{
-      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(DataType::FLOAT, ml_cpu_compute::ProcessorThreadPolicy::kSingle, 100.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL1,
+                              ml_cpu_compute::ProcessorThreadPolicy::kSingle, 40.0)};
 
-  const auto roofline = DeriveRooflineEntries(compute, memory);
+  const auto roofline = ml_cpu_compute::DeriveRooflineEntries(compute, memory);
   ASSERT_EQ(roofline.size(), 1u);
   EXPECT_EQ(roofline[0].element_type, DataType::FLOAT);
-  EXPECT_EQ(roofline[0].policy, ProcessorThreadPolicy::kSingle);
-  EXPECT_EQ(roofline[0].level, MemoryProfileLevel::kL1);
+  EXPECT_EQ(roofline[0].policy, ml_cpu_compute::ProcessorThreadPolicy::kSingle);
+  EXPECT_EQ(roofline[0].level, ml_cpu_compute::MemoryProfileLevel::kL1);
   EXPECT_DOUBLE_EQ(roofline[0].compute_gops, 100.0);
   EXPECT_DOUBLE_EQ(roofline[0].memory_read_gbps, 40.0);
   EXPECT_DOUBLE_EQ(roofline[0].arithmetic_intensity_crossover, 2.5);
 }
 
 TEST(ProcessorPerformanceProfileRoofline, PairsEveryComputeEntryWithMatchingPolicyLevels) {
-  const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0),
-      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kPhysical, 200.0)};
-  const std::vector<ProcessorProfileMemoryEntry> memory{
-      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 50.0),
-      MakeMemoryEntryWithRead(MemoryProfileLevel::kL2, ProcessorThreadPolicy::kSingle, 25.0),
-      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kPhysical, 100.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(DataType::FLOAT, ml_cpu_compute::ProcessorThreadPolicy::kSingle, 100.0),
+      MakeComputeEntry(DataType::FLOAT, ml_cpu_compute::ProcessorThreadPolicy::kPhysical, 200.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL1,
+                              ml_cpu_compute::ProcessorThreadPolicy::kSingle, 50.0),
+      MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL2,
+                              ml_cpu_compute::ProcessorThreadPolicy::kSingle, 25.0),
+      MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL1,
+                              ml_cpu_compute::ProcessorThreadPolicy::kPhysical, 100.0)};
 
-  const auto roofline = DeriveRooflineEntries(compute, memory);
+  const auto roofline = ml_cpu_compute::DeriveRooflineEntries(compute, memory);
   // The single-policy compute entry pairs with both single-policy memory
   // levels; the physical-policy compute entry only pairs with the one
   // physical-policy memory level.
@@ -281,7 +294,7 @@ TEST(ProcessorPerformanceProfileRoofline, PairsEveryComputeEntryWithMatchingPoli
   int single_count = 0;
   int physical_count = 0;
   for (const auto &entry : roofline) {
-    if (entry.policy == ProcessorThreadPolicy::kSingle) {
+    if (entry.policy == ml_cpu_compute::ProcessorThreadPolicy::kSingle) {
       ++single_count;
     } else {
       ++physical_count;
@@ -293,29 +306,31 @@ TEST(ProcessorPerformanceProfileRoofline, PairsEveryComputeEntryWithMatchingPoli
 }
 
 TEST(ProcessorPerformanceProfileRoofline, MissingOrZeroReadBandwidthYieldsNoEntry) {
-  ProcessorProfileMemoryEntry no_read;
-  no_read.level = MemoryProfileLevel::kL1;
-  no_read.policy = ProcessorThreadPolicy::kSingle;
+  ml_cpu_compute::ProcessorProfileMemoryEntry no_read;
+  no_read.level = ml_cpu_compute::MemoryProfileLevel::kL1;
+  no_read.policy = ml_cpu_compute::ProcessorThreadPolicy::kSingle;
   // ``read`` left unset (unavailable).
 
-  const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(DataType::FLOAT, ml_cpu_compute::ProcessorThreadPolicy::kSingle, 100.0)};
 
-  EXPECT_TRUE(DeriveRooflineEntries(compute, {no_read}).empty());
+  EXPECT_TRUE(ml_cpu_compute::DeriveRooflineEntries(compute, {no_read}).empty());
   EXPECT_TRUE(
-      DeriveRooflineEntries(compute, {MakeMemoryEntryWithRead(MemoryProfileLevel::kL1,
-                                                              ProcessorThreadPolicy::kSingle, 0.0)})
+      ml_cpu_compute::DeriveRooflineEntries(
+          compute, {MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL1,
+                                            ml_cpu_compute::ProcessorThreadPolicy::kSingle, 0.0)})
           .empty());
 }
 
 TEST(ProcessorPerformanceProfileRoofline, EmptyComputeOrMemoryYieldsEmptyRoofline) {
-  const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
-  const std::vector<ProcessorProfileMemoryEntry> memory{
-      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(DataType::FLOAT, ml_cpu_compute::ProcessorThreadPolicy::kSingle, 100.0)};
+  const std::vector<ml_cpu_compute::ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(ml_cpu_compute::MemoryProfileLevel::kL1,
+                              ml_cpu_compute::ProcessorThreadPolicy::kSingle, 40.0)};
 
-  EXPECT_TRUE(DeriveRooflineEntries({}, memory).empty());
-  EXPECT_TRUE(DeriveRooflineEntries(compute, {}).empty());
+  EXPECT_TRUE(ml_cpu_compute::DeriveRooflineEntries({}, memory).empty());
+  EXPECT_TRUE(ml_cpu_compute::DeriveRooflineEntries(compute, {}).empty());
 }
 
 } // namespace

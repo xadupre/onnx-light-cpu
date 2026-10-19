@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -24,32 +25,33 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
-VariadicOperator ParseOperator(std::string_view op_type) {
+ml_cpu_compute::VariadicOperator ParseOperator(std::string_view op_type) {
   if (op_type == "Sum") {
-    return VariadicOperator::kSum;
+    return ml_cpu_compute::VariadicOperator::kSum;
   }
   if (op_type == "Mean") {
-    return VariadicOperator::kMean;
+    return ml_cpu_compute::VariadicOperator::kMean;
   }
   if (op_type == "Min") {
-    return VariadicOperator::kMin;
+    return ml_cpu_compute::VariadicOperator::kMin;
   }
   if (op_type == "Max") {
-    return VariadicOperator::kMax;
+    return ml_cpu_compute::VariadicOperator::kMax;
   }
   throw std::invalid_argument("onnx_light_cpu::VariadicElementwiseKernel: unsupported operator.");
 }
 
-VariadicElementwisePlan MakePlan(VariadicOperator op, const rt_ns::Tensors &inputs) {
-  std::vector<onnx_light_cpu::DataType> types;
+ml_cpu_compute::VariadicElementwisePlan MakePlan(ml_cpu_compute::VariadicOperator op,
+                                                 const rt_ns::Tensors &inputs) {
+  std::vector<ml_cpu_compute::DataType> types;
   std::vector<std::vector<std::int64_t>> shapes;
   types.reserve(inputs.size());
   shapes.reserve(inputs.size());
   for (const rt_ns::Tensor &input : inputs) {
-    types.push_back(static_cast<onnx_light_cpu::DataType>(input.data_type));
+    types.push_back(static_cast<ml_cpu_compute::DataType>(input.data_type));
     shapes.emplace_back(input.shape.begin(), input.shape.end());
   }
-  return VariadicElementwisePlan(op, types, shapes);
+  return ml_cpu_compute::VariadicElementwisePlan(op, types, shapes);
 }
 
 std::vector<const void *> InputPointers(const rt_ns::Tensors &inputs) {
@@ -78,12 +80,13 @@ VariadicElementwiseKernel::VariadicElementwiseKernel(const ONNX_LIGHT_NAMESPACE:
 
 rt_ns::Tensor VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
                                                     rt_ns::RuntimeContext *rt) const {
-  const VariadicElementwisePlan plan = MakePlan(op_, inputs);
+  const RuntimeExecutionScope execution_scope;
+  const ml_cpu_compute::VariadicElementwisePlan plan = MakePlan(op_, inputs);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan.output_shape().begin(), plan.output_shape().end()));
   const auto output_type = static_cast<rt_ns::DataType>(plan.data_type());
-  const std::size_t output_bytes = CheckedByteSize(plan.element_count(), plan.element_size(),
-                                                   "VariadicElementwise", "output byte size");
+  const std::size_t output_bytes = ml_cpu_compute::CheckedByteSize(
+      plan.element_count(), plan.element_size(), "VariadicElementwise", "output byte size");
   rt_ns::Tensor output =
       rt != nullptr ? rt->MakeOutputTensor(0, output_type, output_shape, output_bytes)
                     : rt_ns::MakeOutputTensor(output_type, output_shape, output_bytes, nullptr);
@@ -94,7 +97,8 @@ rt_ns::Tensor VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs
 
 void VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
                                            rt_ns::Tensor &output) const {
-  const VariadicElementwisePlan plan = MakePlan(op_, inputs);
+  const RuntimeExecutionScope execution_scope;
+  const ml_cpu_compute::VariadicElementwisePlan plan = MakePlan(op_, inputs);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan.output_shape().begin(), plan.output_shape().end()));
   if (output.data_type != static_cast<std::int32_t>(plan.data_type()) ||
@@ -107,6 +111,7 @@ void VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
 }
 
 void VariadicElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   const auto &node = *node_;
   if (rt.kernel_usage_enabled()) {
     rt.RecordKernelUsage(std::string("onnx_light_cpu::") + ToString(op_));
@@ -122,8 +127,9 @@ void VariadicElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
 }
 
 void RegisterVariadicElementwiseKernels() {
-  for (const VariadicOperator op : {VariadicOperator::kSum, VariadicOperator::kMean,
-                                    VariadicOperator::kMin, VariadicOperator::kMax}) {
+  for (const ml_cpu_compute::VariadicOperator op :
+       {ml_cpu_compute::VariadicOperator::kSum, ml_cpu_compute::VariadicOperator::kMean,
+        ml_cpu_compute::VariadicOperator::kMin, ml_cpu_compute::VariadicOperator::kMax}) {
     const std::string op_type = ToString(op);
     rt_ns::NodeKernelFn factory =
         [](const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &,
@@ -135,7 +141,8 @@ void RegisterVariadicElementwiseKernels() {
     info.op_type = op_type;
     info.device = sym_ns::Device::kCPU;
     info.kernel_name = std::string("onnx_light_cpu::") + op_type;
-    info.types = op == VariadicOperator::kSum || op == VariadicOperator::kMean
+    info.types = op == ml_cpu_compute::VariadicOperator::kSum ||
+                         op == ml_cpu_compute::VariadicOperator::kMean
                      ? std::vector<rt_ns::DataType>{rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE}
                      : MinMaxTypes();
     info.since_version = 13;

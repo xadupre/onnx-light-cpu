@@ -301,8 +301,8 @@ Add a new kernel
 ----------------
 
 Kernel implementations must follow the
-`CpuExecutor bridge contract in impl/execution.h
-<https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/execution.h>`_:
+`borrowed executor contract in execution.h
+<https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/execution.h>`_:
 borrow the current executor only for the invocation, keep range callbacks
 non-throwing, and submit parallel work through the shared range helpers.
 The contract defines lifetime, failure propagation, nested execution, participant
@@ -322,6 +322,10 @@ The three steps are:
    of ``Run`` so the kernel can be recognised in ``rt.GetKernelUsage()``; add its
    ``{op_type, kName}`` pair to ``RegisteredKernelNames()`` in
    ``onnx_light_cpu/kernels/kernel_usage.cc``.
+   Install a ``RuntimeExecutionScope`` from
+   ``onnx_light_cpu/kernels/execution.h`` at the start of ``Run`` and each
+   directly callable ``operator()`` so numerical calls borrow the session's
+   executor without coupling the computation library to ONNX.
 #. Wrap the class in a ``NodeKernelFn`` factory that constructs the kernel and
    calls ``set_node``.
 #. Call ``RegisterKernelFn(domain, op_type, symbolic::Device::kCPU, factory)``.

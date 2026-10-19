@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
@@ -51,8 +51,8 @@ Tensor MakeFloatingTensor(DataType dtype, const Shape &shape, const std::vector<
   auto *words = reinterpret_cast<std::uint16_t *>(bytes.data());
   for (std::size_t index = 0; index < values.size(); ++index) {
     words[index] = dtype == DataType::FLOAT16
-                       ? onnx_light_cpu::detail::FloatToFloat16Bits(values[index])
-                       : onnx_light_cpu::detail::FloatToBFloat16Bits(values[index]);
+                       ? ml_cpu_compute::detail::FloatToFloat16Bits(values[index])
+                       : ml_cpu_compute::detail::FloatToBFloat16Bits(values[index]);
   }
   return Tensor(name, static_cast<std::int32_t>(dtype), shape, std::move(bytes));
 }
@@ -63,8 +63,8 @@ float ReadFloatingElement(const Tensor &tensor, std::size_t index) {
     return tensor.AsFloat()[index];
   }
   const auto *words = reinterpret_cast<const std::uint16_t *>(tensor.bytes());
-  return dtype == DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(words[index])
-                                    : onnx_light_cpu::detail::Bfloat16BitsToFloat(words[index]);
+  return dtype == DataType::FLOAT16 ? ml_cpu_compute::detail::Float16BitsToFloat(words[index])
+                                    : ml_cpu_compute::detail::Bfloat16BitsToFloat(words[index]);
 }
 
 void ExpectFloatingTensorsNear(const Tensor &actual, const Tensor &expected, float tolerance) {

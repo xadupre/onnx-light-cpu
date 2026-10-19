@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/attention/linear_attention.h"
+#include "ml_cpu_compute/attention/linear_attention.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -50,7 +50,7 @@ struct LinearAttentionGroupingPolicy {
 /// :cpp:func:`PlanLinearAttention` to obtain this instead of duplicating its
 /// ~150 lines of tensor-shape and attribute validation.
 struct LinearAttentionPlan {
-  LinearAttentionParameters parameters;
+  ml_cpu_compute::LinearAttentionParameters parameters;
   /// ``max(query_heads, key_value_heads)``: the number of heads in the output
   /// tensor's last dimension.
   std::size_t output_heads = 0;
@@ -91,10 +91,10 @@ struct LinearAttentionKernelConfig {
 
 /// Parses `rule` into a :cpp:enum:`LinearAttentionRule`, throwing
 /// ``std::invalid_argument`` (prefixed with `kernel_name`) for anything else.
-LinearAttentionRule ParseLinearAttentionRule(const std::string &kernel_name,
-                                             const std::string &rule);
-bool LinearAttentionRuleUsesDecay(LinearAttentionRule rule);
-bool LinearAttentionRuleUsesBeta(LinearAttentionRule rule);
+ml_cpu_compute::LinearAttentionRule ParseLinearAttentionRule(const std::string &kernel_name,
+                                                             const std::string &rule);
+bool LinearAttentionRuleUsesDecay(ml_cpu_compute::LinearAttentionRule rule);
+bool LinearAttentionRuleUsesBeta(ml_cpu_compute::LinearAttentionRule rule);
 
 /// Validates every LinearAttention input/attribute relationship (packed-3D
 /// query/key/value ranks and types, batch/sequence agreement, head-count

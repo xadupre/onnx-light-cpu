@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ml_cpu_compute/com_microsoft/moe.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
-#include "onnx_light_cpu/impl/com_microsoft/moe.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
@@ -540,7 +540,7 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
   const sym_ns::SymShape fc1_shape{SymDim(3), SymDim(10), SymDim(8)};
   const sym_ns::SymShape fc2_shape{SymDim(3), SymDim(8), SymDim(5)};
   const std::int64_t expected_scratch =
-      8 * 3 * static_cast<std::int64_t>(sizeof(onnx_light_cpu::MoERoute)) +
+      8 * 3 * static_cast<std::int64_t>(sizeof(ml_cpu_compute::MoERoute)) +
       8 * (3 + 10 + 5 + 2 * 8) * static_cast<std::int64_t>(sizeof(float));
   EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(
                 sym_ns::Device::kCPU,
@@ -601,11 +601,11 @@ TEST(CustomOperatorSupport, MoEUsesRuntimeAllocatorForAllStorage) {
   const Tensor router = Tensor::FromFloat("", {1, 1}, {0.0f});
   const Tensor fc1 = Tensor::FromFloat("", {1, 1, 1}, {3.0f});
   const Tensor fc2 = Tensor::FromFloat("", {1, 1, 1}, {4.0f});
-  const onnx_light_cpu::MoEAttributes attributes;
-  const onnx_light_cpu::MoEScratchSize scratch_size = onnx_light_cpu::ComputeMoEScratchSize(
-      1, 1, 1, 1, onnx_light_cpu::MoEDataType::kFloat32, attributes);
+  const ml_cpu_compute::MoEAttributes attributes;
+  const ml_cpu_compute::MoEScratchSize scratch_size = ml_cpu_compute::ComputeMoEScratchSize(
+      1, 1, 1, 1, ml_cpu_compute::MoEDataType::kFloat32, attributes);
   const std::size_t expected_peak = sizeof(float) +
-                                    scratch_size.route_count * sizeof(onnx_light_cpu::MoERoute) +
+                                    scratch_size.route_count * sizeof(ml_cpu_compute::MoERoute) +
                                     scratch_size.value_count * sizeof(float);
 
   {
@@ -1187,8 +1187,8 @@ TEST(CustomOperatorSupport, MatMulNBitsGradientExecutesForEveryTypeAndPackedWidt
         return tensor.AsFloat()[index];
       }
       const std::uint16_t value = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
-      return type == rt_ns::DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(value)
-                                              : onnx_light_cpu::detail::Bfloat16BitsToFloat(value);
+      return type == rt_ns::DataType::FLOAT16 ? ml_cpu_compute::detail::Float16BitsToFloat(value)
+                                              : ml_cpu_compute::detail::Bfloat16BitsToFloat(value);
     };
     for (int64_t bits : {2, 4, 8}) {
       const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true, bits));
@@ -1387,8 +1387,8 @@ TEST(CustomOperatorSupport, GroupQueryAttentionGradientRunsForFloat16AndBFloat16
       const auto *bits = reinterpret_cast<const uint16_t *>(gradients[index].bytes());
       for (size_t element = 0; element < gradients[index].element_count(); ++element) {
         const float value = type == rt_ns::DataType::FLOAT16
-                                ? onnx_light_cpu::detail::Float16BitsToFloat(bits[element])
-                                : onnx_light_cpu::detail::Bfloat16BitsToFloat(bits[element]);
+                                ? ml_cpu_compute::detail::Float16BitsToFloat(bits[element])
+                                : ml_cpu_compute::detail::Bfloat16BitsToFloat(bits[element]);
         EXPECT_TRUE(std::isfinite(value));
       }
     }

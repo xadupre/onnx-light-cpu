@@ -109,7 +109,7 @@ approximation.
 Broadcast plan
 --------------
 
-An immutable ``BinaryKernelDescriptor`` is created with the node. It contains
+An immutable ``BinaryOperationDescriptor`` is created with the node. It contains
 the operator, opset, attributes, validated type signature, and scalar/ISA
 functions that the current CPU may use. It contains no invocation tensors,
 shape-specific offsets, thread count, or mutable tuning state.
@@ -501,7 +501,7 @@ Remaining pull-request sequence
      - Manifest, backend corpus, descriptor, prepared plan, and scalar loops.
      - The generated operator/opset/type manifest and lazy correctness/benchmark
        cases cover all 19 operators and loop families.
-       ``BinaryKernelDescriptor`` is immutable; shape-guarded
+       ``BinaryOperationDescriptor`` is immutable; shape-guarded
        ``BinaryBroadcastPlan`` coalesces dimensions, uses a bounded dynamic
        cache, selects scalar loops, advances offsets per inner block, and
        proves safe alias decisions.

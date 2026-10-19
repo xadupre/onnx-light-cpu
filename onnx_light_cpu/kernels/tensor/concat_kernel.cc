@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/concat_kernel.h"
+#include "ml_cpu_compute/tensor/concat.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -71,7 +72,7 @@ struct ConcatPlan {
   int64_t outer = 0;
   std::size_t row_bytes = 0;
   std::size_t bytes = 0;
-  std::vector<ConcatInput> inputs;
+  std::vector<ml_cpu_compute::ConcatInput> inputs;
 };
 
 template <typename GetInput>
@@ -141,7 +142,7 @@ void Copy(const ConcatPlan &plan, Tensor &output) {
       Invalid("output must not overlap any input.");
     }
   }
-  ConcatCopy(plan.inputs, output.mutable_bytes(), plan.outer, plan.row_bytes);
+  ml_cpu_compute::ConcatCopy(plan.inputs, output.mutable_bytes(), plan.outer, plan.row_bytes);
 }
 
 Tensor Allocate(const ConcatPlan &plan, rt_ns::RuntimeContext *rt,
@@ -160,6 +161,7 @@ ConcatKernel::ConcatKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis,
                                 rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const ConcatPlan plan = PrepareConcat(
       inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Tensor output = Allocate(plan, rt, ctx_.allocator);
@@ -168,12 +170,14 @@ Tensor ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis,
 }
 
 void ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const ConcatPlan plan = PrepareConcat(
       inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Copy(plan, output);
 }
 
 void ConcatKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireMinInputCount(node, 1);

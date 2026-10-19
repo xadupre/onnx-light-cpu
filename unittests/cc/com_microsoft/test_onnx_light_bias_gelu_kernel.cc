@@ -6,6 +6,8 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -14,8 +16,6 @@
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -84,11 +84,11 @@ TEST(OnnxLightBiasGeluKernel, Float16Works) {
   const auto *pb = reinterpret_cast<const std::uint16_t *>(b.bytes());
   const auto *pc = reinterpret_cast<const std::uint16_t *>(c.bytes());
   for (std::size_t i = 0; i < 3; ++i) {
-    const float rounded_a = onnx_light_cpu::detail::Float16BitsToFloat(pa[i]);
-    const float rounded_b = onnx_light_cpu::detail::Float16BitsToFloat(pb[i]);
-    const float actual = onnx_light_cpu::detail::Float16BitsToFloat(pc[i]);
+    const float rounded_a = ml_cpu_compute::detail::Float16BitsToFloat(pa[i]);
+    const float rounded_b = ml_cpu_compute::detail::Float16BitsToFloat(pb[i]);
+    const float actual = ml_cpu_compute::detail::Float16BitsToFloat(pc[i]);
     const auto *reference_bits = reinterpret_cast<const std::uint16_t *>(reference.bytes());
-    EXPECT_NEAR(actual, onnx_light_cpu::detail::Float16BitsToFloat(reference_bits[i]), 5e-3) << i;
+    EXPECT_NEAR(actual, ml_cpu_compute::detail::Float16BitsToFloat(reference_bits[i]), 5e-3) << i;
     EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_b), 5e-3) << i;
   }
 }
@@ -104,11 +104,11 @@ TEST(OnnxLightBiasGeluKernel, BFloat16Works) {
   const auto *pb = reinterpret_cast<const std::uint16_t *>(b.bytes());
   const auto *pc = reinterpret_cast<const std::uint16_t *>(c.bytes());
   for (std::size_t i = 0; i < 3; ++i) {
-    const float rounded_a = onnx_light_cpu::detail::Bfloat16BitsToFloat(pa[i]);
-    const float rounded_b = onnx_light_cpu::detail::Bfloat16BitsToFloat(pb[i]);
-    const float actual = onnx_light_cpu::detail::Bfloat16BitsToFloat(pc[i]);
+    const float rounded_a = ml_cpu_compute::detail::Bfloat16BitsToFloat(pa[i]);
+    const float rounded_b = ml_cpu_compute::detail::Bfloat16BitsToFloat(pb[i]);
+    const float actual = ml_cpu_compute::detail::Bfloat16BitsToFloat(pc[i]);
     const auto *reference_bits = reinterpret_cast<const std::uint16_t *>(reference.bytes());
-    EXPECT_NEAR(actual, onnx_light_cpu::detail::Bfloat16BitsToFloat(reference_bits[i]), 5e-2) << i;
+    EXPECT_NEAR(actual, ml_cpu_compute::detail::Bfloat16BitsToFloat(reference_bits[i]), 5e-2) << i;
     EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_b), 5e-2) << i;
   }
 }
@@ -160,7 +160,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -222,8 +222,8 @@ TEST(OnnxLightBiasGeluKernel, RegistersAndAppliesValidatedTuning) {
       "A", {static_cast<int64_t>(outer), static_cast<int64_t>(inner)}, a_values);
   const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {static_cast<int64_t>(inner)}, b_values);
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const rt_ns::Tensor c = kernel(a, b);
   const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   EXPECT_EQ(executor.dispatches, 1);

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -36,10 +37,12 @@ using rt_ns::Tensor;
 
 namespace {
 
-using Float32Fn = void (*)(const float *, float *, std::size_t, const UnaryExecutionTuning &);
-using Float64Fn = void (*)(const double *, double *, std::size_t, const UnaryExecutionTuning &);
+using Float32Fn = void (*)(const float *, float *, std::size_t,
+                           const ml_cpu_compute::UnaryExecutionTuning &);
+using Float64Fn = void (*)(const double *, double *, std::size_t,
+                           const ml_cpu_compute::UnaryExecutionTuning &);
 using Float16Fn = void (*)(const std::uint16_t *, std::uint16_t *, std::size_t,
-                           const UnaryExecutionTuning &);
+                           const ml_cpu_compute::UnaryExecutionTuning &);
 
 constexpr const char *kParallelThresholdBytes = "parallel.threshold_bytes";
 constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
@@ -57,23 +60,24 @@ bool SupportsElementType(int32_t element_type) {
   return false;
 }
 
-const UnaryExecutionTuning &DefaultTuning(std::string_view op_type, int32_t element_type) {
+const ml_cpu_compute::UnaryExecutionTuning &DefaultTuning(std::string_view op_type,
+                                                          int32_t element_type) {
   if (op_type == "Exp" && element_type == static_cast<int32_t>(DataType::FLOAT)) {
-    return kDefaultExpFloat32ExecutionTuning;
+    return ml_cpu_compute::kDefaultExpFloat32ExecutionTuning;
   }
   if (op_type == "Log" && element_type == static_cast<int32_t>(DataType::FLOAT)) {
-    return kDefaultLogFloat32ExecutionTuning;
+    return ml_cpu_compute::kDefaultLogFloat32ExecutionTuning;
   }
   if (op_type == "Log" && element_type == static_cast<int32_t>(DataType::FLOAT16)) {
-    return kDefaultLogFloat16ExecutionTuning;
+    return ml_cpu_compute::kDefaultLogFloat16ExecutionTuning;
   }
   if (op_type == "Log" && element_type == static_cast<int32_t>(DataType::BFLOAT16)) {
-    return kDefaultLogBFloat16ExecutionTuning;
+    return ml_cpu_compute::kDefaultLogBFloat16ExecutionTuning;
   }
   return element_type == static_cast<int32_t>(DataType::FLOAT16) ||
                  element_type == static_cast<int32_t>(DataType::BFLOAT16)
-             ? kDefaultExpLogHalfExecutionTuning
-             : kDefaultExpLogExecutionTuning;
+             ? ml_cpu_compute::kDefaultExpLogHalfExecutionTuning
+             : ml_cpu_compute::kDefaultExpLogExecutionTuning;
 }
 
 rt_ns::KernelTuningKey MakeTuningKey(const char *op_type, int32_t element_type,
@@ -101,7 +105,7 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(const char *op_type, int32_t element_type,
                                                  std::uint32_t tuning_abi) {
-  const UnaryExecutionTuning &defaults = DefaultTuning(op_type, element_type);
+  const ml_cpu_compute::UnaryExecutionTuning &defaults = DefaultTuning(op_type, element_type);
   return {MakeTuningKey(op_type, element_type, tuning_abi),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
@@ -109,7 +113,7 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(const char *op_type, int32_t el
            {kCostModel, defaults.use_cost_model ? int64_t{1} : int64_t{0}}}};
 }
 
-UnaryExecutionTuning ReadTuning(const rt_ns::KernelTuningParameters &parameters) {
+ml_cpu_compute::UnaryExecutionTuning ReadTuning(const rt_ns::KernelTuningParameters &parameters) {
   return {
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
@@ -123,7 +127,7 @@ UnaryExecutionTuning ReadTuning(const rt_ns::KernelTuningParameters &parameters)
 // name the kernel in error messages.
 void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Float32Fn f32,
                   Float64Fn f64, Float16Fn f16, Float16Fn bf16,
-                  const UnaryExecutionTuning &tuning) {
+                  const ml_cpu_compute::UnaryExecutionTuning &tuning) {
   if (output.data_type != x.data_type) {
     throw std::invalid_argument(std::string("onnx_light_cpu::") + kernel_name +
                                 ": output dtype must match input dtype.");
@@ -173,9 +177,9 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
 }
 
 Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
-  const std::size_t y_n_bytes =
-      CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Exp/Log input")),
-                      x.element_size(), "Exp/Log", "output byte size");
+  const std::size_t y_n_bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Exp/Log input")),
+      x.element_size(), "Exp/Log", "output byte size");
   return rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
                        : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
 }
@@ -183,11 +187,11 @@ Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
 } // namespace
 
 struct ExpKernel::Tuning {
-  UnaryExecutionTuning value;
+  ml_cpu_compute::UnaryExecutionTuning value;
 };
 
 struct LogKernel::Tuning {
-  UnaryExecutionTuning value;
+  ml_cpu_compute::UnaryExecutionTuning value;
 };
 
 ExpKernel::ExpKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
@@ -222,19 +226,23 @@ void ExpKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 Tensor ExpKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   Tensor y = MakeLike(x, rt);
   (*this)(x, y);
   return y;
 }
 
 void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
-  const UnaryExecutionTuning &tuning =
+  const RuntimeExecutionScope execution_scope;
+  const ml_cpu_compute::UnaryExecutionTuning &tuning =
       tuning_configured_ ? tuning_->value : DefaultTuning("Exp", x.data_type);
-  ComputeUnary(x, output, "ExpKernel", &ExpFloat32WithTuning, &ExpFloat64WithTuning,
-               &ExpFloat16WithTuning, &ExpBFloat16WithTuning, tuning);
+  ComputeUnary(x, output, "ExpKernel", &ml_cpu_compute::ExpFloat32WithTuning,
+               &ml_cpu_compute::ExpFloat64WithTuning, &ml_cpu_compute::ExpFloat16WithTuning,
+               &ml_cpu_compute::ExpBFloat16WithTuning, tuning);
 }
 
 void ExpKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
@@ -244,6 +252,7 @@ void ExpKernel::Run(RuntimeContext &rt) {
 }
 
 Tensor LogKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   Tensor y = MakeLike(x, rt);
   (*this)(x, y);
   return y;
@@ -281,13 +290,16 @@ void LogKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 void LogKernel::operator()(const Tensor &x, Tensor &output) const {
-  const UnaryExecutionTuning &tuning =
+  const RuntimeExecutionScope execution_scope;
+  const ml_cpu_compute::UnaryExecutionTuning &tuning =
       tuning_configured_ ? tuning_->value : DefaultTuning("Log", x.data_type);
-  ComputeUnary(x, output, "LogKernel", &LogFloat32WithTuning, &LogFloat64WithTuning,
-               &LogFloat16WithTuning, &LogBFloat16WithTuning, tuning);
+  ComputeUnary(x, output, "LogKernel", &ml_cpu_compute::LogFloat32WithTuning,
+               &ml_cpu_compute::LogFloat64WithTuning, &ml_cpu_compute::LogFloat16WithTuning,
+               &ml_cpu_compute::LogBFloat16WithTuning, tuning);
 }
 
 void LogKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

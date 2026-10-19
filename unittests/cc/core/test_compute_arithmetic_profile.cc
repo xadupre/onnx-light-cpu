@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/compute_arithmetic_profile.h"
+#include "ml_cpu_compute/compute_arithmetic_profile.h"
 
 #include <gtest/gtest.h>
 
@@ -12,37 +12,39 @@
 
 namespace {
 
-using onnx_light_cpu::ArmSimdLevel;
-using onnx_light_cpu::ComputeDotProductOperationAccounting;
-using onnx_light_cpu::ComputeFmaOperationAccounting;
-using onnx_light_cpu::ComputeImplementation;
-using onnx_light_cpu::ComputeImplementationName;
-using onnx_light_cpu::ComputeOperationAccounting;
-using onnx_light_cpu::ComputeParticipantPolicy;
-using onnx_light_cpu::ComputeProfileOptions;
-using onnx_light_cpu::ComputeProfileTimerName;
-using onnx_light_cpu::ComputeProfileUnavailableReason;
-using onnx_light_cpu::ComputeThroughputResult;
-using onnx_light_cpu::DataType;
-using onnx_light_cpu::MeasureComputeArithmeticThroughput;
-using onnx_light_cpu::SimdLevel;
-using onnx_light_cpu::detail::ComputeDispatchDecision;
-using onnx_light_cpu::detail::ComputeDispatchInputs;
-using onnx_light_cpu::detail::SelectComputeImplementation;
+using ml_cpu_compute::ArmSimdLevel;
+using ml_cpu_compute::ComputeDotProductOperationAccounting;
+using ml_cpu_compute::ComputeFmaOperationAccounting;
+using ml_cpu_compute::ComputeImplementation;
+using ml_cpu_compute::ComputeImplementationName;
+using ml_cpu_compute::ComputeOperationAccounting;
+using ml_cpu_compute::ComputeParticipantPolicy;
+using ml_cpu_compute::ComputeProfileOptions;
+using ml_cpu_compute::ComputeProfileTimerName;
+using ml_cpu_compute::ComputeProfileUnavailableReason;
+using ml_cpu_compute::ComputeThroughputResult;
+using ml_cpu_compute::DataType;
+using ml_cpu_compute::MeasureComputeArithmeticThroughput;
+using ml_cpu_compute::SimdLevel;
+using ml_cpu_compute::detail::ComputeDispatchDecision;
+using ml_cpu_compute::detail::ComputeDispatchInputs;
+using ml_cpu_compute::detail::SelectComputeImplementation;
 
 // ---------------------------------------------------------------------------
 // Operation accounting: pure arithmetic, no timing.
 // ---------------------------------------------------------------------------
 
 TEST(ComputeArithmeticProfile, FmaAccountingCountsTwoOpsPerFma) {
-  const ComputeOperationAccounting accounting = ComputeFmaOperationAccounting(8, 64);
+  const ml_cpu_compute::ComputeOperationAccounting accounting =
+      ml_cpu_compute::ComputeFmaOperationAccounting(8, 64);
   EXPECT_EQ(accounting.fma_count_per_pass, 8u * 64u);
   EXPECT_EQ(accounting.operations_per_pass, 8u * 64u * 2u);
   EXPECT_EQ(accounting.dot_product_length, 0u);
 }
 
 TEST(ComputeArithmeticProfile, DotProductAccountingCountsTwoOpsPerElementPair) {
-  const ComputeOperationAccounting accounting = ComputeDotProductOperationAccounting(16, 64, 4);
+  const ml_cpu_compute::ComputeOperationAccounting accounting =
+      ml_cpu_compute::ComputeDotProductOperationAccounting(16, 64, 4);
   const std::uint64_t total_pairs = 16u * 64u * 4u;
   EXPECT_EQ(accounting.fma_count_per_pass, total_pairs);
   EXPECT_EQ(accounting.dot_product_length, 4u);
@@ -50,15 +52,25 @@ TEST(ComputeArithmeticProfile, DotProductAccountingCountsTwoOpsPerElementPair) {
 }
 
 TEST(ComputeArithmeticProfile, ImplementationNamesAreStable) {
-  EXPECT_STREQ(ComputeImplementationName(ComputeImplementation::kScalar), "scalar");
-  EXPECT_STREQ(ComputeImplementationName(ComputeImplementation::kSSE2), "SSE2");
-  EXPECT_STREQ(ComputeImplementationName(ComputeImplementation::kAVX2), "AVX2");
-  EXPECT_STREQ(ComputeImplementationName(ComputeImplementation::kAVX512), "AVX-512");
-  EXPECT_STREQ(ComputeImplementationName(ComputeImplementation::kNeon), "NEON");
+  EXPECT_STREQ(
+      ml_cpu_compute::ComputeImplementationName(ml_cpu_compute::ComputeImplementation::kScalar),
+      "scalar");
+  EXPECT_STREQ(
+      ml_cpu_compute::ComputeImplementationName(ml_cpu_compute::ComputeImplementation::kSSE2),
+      "SSE2");
+  EXPECT_STREQ(
+      ml_cpu_compute::ComputeImplementationName(ml_cpu_compute::ComputeImplementation::kAVX2),
+      "AVX2");
+  EXPECT_STREQ(
+      ml_cpu_compute::ComputeImplementationName(ml_cpu_compute::ComputeImplementation::kAVX512),
+      "AVX-512");
+  EXPECT_STREQ(
+      ml_cpu_compute::ComputeImplementationName(ml_cpu_compute::ComputeImplementation::kNeon),
+      "NEON");
 }
 
 TEST(ComputeArithmeticProfile, TimerNameIsStable) {
-  EXPECT_STREQ(ComputeProfileTimerName(), "std::chrono::steady_clock");
+  EXPECT_STREQ(ml_cpu_compute::ComputeProfileTimerName(), "std::chrono::steady_clock");
 }
 
 // ---------------------------------------------------------------------------
@@ -71,65 +83,65 @@ TEST(ComputeArithmeticProfile, Float32IsAlwaysAvailableAndFallsBackToScalar) {
   ComputeDispatchInputs inputs;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kScalar);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kScalar);
 }
 
 TEST(ComputeArithmeticProfile, Float64IsAlwaysAvailableAndFallsBackToScalar) {
   ComputeDispatchInputs inputs;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::DOUBLE, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kScalar);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kScalar);
 }
 
 TEST(ComputeArithmeticProfile, Float32PrefersSse2OverScalarWhenDetected) {
   ComputeDispatchInputs inputs;
-  inputs.simd_level = SimdLevel::kSSE2;
+  inputs.simd_level = ml_cpu_compute::SimdLevel::kSSE2;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kSSE2);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kSSE2);
 }
 
 TEST(ComputeArithmeticProfile, Float32PrefersAvx2OverSse2WhenFmaDetected) {
   ComputeDispatchInputs inputs;
-  inputs.simd_level = SimdLevel::kAVX2;
+  inputs.simd_level = ml_cpu_compute::SimdLevel::kAVX2;
   inputs.has_fma = true;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX2);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kAVX2);
 }
 
 TEST(ComputeArithmeticProfile, Float32DoesNotSelectAvx2WithoutFma) {
   ComputeDispatchInputs inputs;
-  inputs.simd_level = SimdLevel::kAVX2;
+  inputs.simd_level = ml_cpu_compute::SimdLevel::kAVX2;
   inputs.has_fma = false;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kSSE2);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kSSE2);
 }
 
 TEST(ComputeArithmeticProfile, Float32SelectsAvx512OnlyWhenCompiledAndDetected) {
   ComputeDispatchInputs inputs;
-  inputs.simd_level = SimdLevel::kAVX512;
+  inputs.simd_level = ml_cpu_compute::SimdLevel::kAVX512;
   inputs.has_fma = true;
   inputs.avx512_compiled = false;
   const ComputeDispatchDecision without_compiled =
       SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(without_compiled.available);
-  EXPECT_EQ(without_compiled.implementation, ComputeImplementation::kAVX2);
+  EXPECT_EQ(without_compiled.implementation, ml_cpu_compute::ComputeImplementation::kAVX2);
 
   inputs.avx512_compiled = true;
   const ComputeDispatchDecision with_compiled =
       SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(with_compiled.available);
-  EXPECT_EQ(with_compiled.implementation, ComputeImplementation::kAVX512);
+  EXPECT_EQ(with_compiled.implementation, ml_cpu_compute::ComputeImplementation::kAVX512);
 }
 
 TEST(ComputeArithmeticProfile, Float32SelectsNeonOnArmRegardlessOfX86Fields) {
   ComputeDispatchInputs inputs;
-  inputs.arm_simd_level = ArmSimdLevel::kNeon;
+  inputs.arm_simd_level = ml_cpu_compute::ArmSimdLevel::kNeon;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kNeon);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kNeon);
 }
 
 TEST(ComputeArithmeticProfile, Float16IsUnavailableWithoutNativeCompiledAndDetectedPath) {
@@ -146,7 +158,7 @@ TEST(ComputeArithmeticProfile, Float16IsUnavailableWithoutNativeCompiledAndDetec
   inputs.avx512fp16_runtime = true;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT16, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kAVX512);
 }
 
 TEST(ComputeArithmeticProfile, BFloat16IsUnavailableWithoutNativeCompiledAndDetectedPath) {
@@ -163,7 +175,7 @@ TEST(ComputeArithmeticProfile, BFloat16IsUnavailableWithoutNativeCompiledAndDete
   inputs.avx512bf16_runtime = true;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::BFLOAT16, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kAVX512);
 }
 
 TEST(ComputeArithmeticProfile, Int8PrefersAvx512VnniOverNeonWhenBothCompiledAndDetected) {
@@ -174,7 +186,7 @@ TEST(ComputeArithmeticProfile, Int8PrefersAvx512VnniOverNeonWhenBothCompiledAndD
   inputs.neon_dotprod_runtime = true;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::INT8, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kAVX512);
 }
 
 TEST(ComputeArithmeticProfile, Int8FallsBackToNeonWhenVnniNotCompiled) {
@@ -185,7 +197,7 @@ TEST(ComputeArithmeticProfile, Int8FallsBackToNeonWhenVnniNotCompiled) {
   inputs.neon_dotprod_runtime = true;
   const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::INT8, inputs);
   EXPECT_TRUE(decision.available);
-  EXPECT_EQ(decision.implementation, ComputeImplementation::kNeon);
+  EXPECT_EQ(decision.implementation, ml_cpu_compute::ComputeImplementation::kNeon);
 }
 
 TEST(ComputeArithmeticProfile, Int8IsUnavailableWithoutAnyNativeCompiledAndDetectedPath) {
@@ -206,22 +218,26 @@ TEST(ComputeArithmeticProfile, Int8IsUnavailableWithoutAnyNativeCompiledAndDetec
 // ---------------------------------------------------------------------------
 
 TEST(ComputeArithmeticProfile, ZeroRepeatsIsInvalidOptions) {
-  ComputeProfileOptions options;
+  ml_cpu_compute::ComputeProfileOptions options;
   options.repeats = 0;
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::FLOAT, ComputeParticipantPolicy::kSingle, options);
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::FLOAT, ml_cpu_compute::ComputeParticipantPolicy::kSingle, options);
   EXPECT_FALSE(result.available);
-  EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kInvalidOptions);
+  EXPECT_EQ(result.unavailable_reason,
+            ml_cpu_compute::ComputeProfileUnavailableReason::kInvalidOptions);
   EXPECT_FALSE(result.diagnostic.empty());
 }
 
 TEST(ComputeArithmeticProfile, NonPositiveMinimumDurationIsInvalidOptions) {
-  ComputeProfileOptions options;
+  ml_cpu_compute::ComputeProfileOptions options;
   options.minimum_duration_ms = 0.0;
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::DOUBLE, ComputeParticipantPolicy::kSingle, options);
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::DOUBLE, ml_cpu_compute::ComputeParticipantPolicy::kSingle, options);
   EXPECT_FALSE(result.available);
-  EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kInvalidOptions);
+  EXPECT_EQ(result.unavailable_reason,
+            ml_cpu_compute::ComputeProfileUnavailableReason::kInvalidOptions);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,16 +245,16 @@ TEST(ComputeArithmeticProfile, NonPositiveMinimumDurationIsInvalidOptions) {
 // short (few repeats, small minimum duration) so the suite stays fast.
 // ---------------------------------------------------------------------------
 
-ComputeProfileOptions FastOptions() {
-  ComputeProfileOptions options;
+ml_cpu_compute::ComputeProfileOptions FastOptions() {
+  ml_cpu_compute::ComputeProfileOptions options;
   options.repeats = 3;
   options.minimum_duration_ms = 2.0;
   return options;
 }
 
-void ExpectFiniteSuccessfulResult(const ComputeThroughputResult &result) {
+void ExpectFiniteSuccessfulResult(const ml_cpu_compute::ComputeThroughputResult &result) {
   ASSERT_TRUE(result.available);
-  EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kNone);
+  EXPECT_EQ(result.unavailable_reason, ml_cpu_compute::ComputeProfileUnavailableReason::kNone);
   EXPECT_FALSE(result.implementation_name.empty());
   EXPECT_FALSE(result.timer_name.empty());
   EXPECT_GT(result.operations_per_pass_per_participant, 0u);
@@ -255,29 +271,33 @@ void ExpectFiniteSuccessfulResult(const ComputeThroughputResult &result) {
 }
 
 TEST(ComputeArithmeticProfile, Float32SingleParticipantIsFiniteAndPositive) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::FLOAT, ComputeParticipantPolicy::kSingle, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::FLOAT, ml_cpu_compute::ComputeParticipantPolicy::kSingle, FastOptions());
   ExpectFiniteSuccessfulResult(result);
   EXPECT_EQ(result.participant_count, 1u);
   EXPECT_EQ(result.dot_product_length, 0u);
 }
 
 TEST(ComputeArithmeticProfile, Float64SingleParticipantIsFiniteAndPositive) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::DOUBLE, ComputeParticipantPolicy::kSingle, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::DOUBLE, ml_cpu_compute::ComputeParticipantPolicy::kSingle, FastOptions());
   ExpectFiniteSuccessfulResult(result);
   EXPECT_EQ(result.participant_count, 1u);
 }
 
 TEST(ComputeArithmeticProfile, Float32PhysicalParticipantsIsFiniteAndPositive) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::FLOAT, ComputeParticipantPolicy::kPhysical, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::FLOAT, ml_cpu_compute::ComputeParticipantPolicy::kPhysical, FastOptions());
   ExpectFiniteSuccessfulResult(result);
 }
 
 TEST(ComputeArithmeticProfile, Float64PhysicalParticipantsIsFiniteAndPositive) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::DOUBLE, ComputeParticipantPolicy::kPhysical, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::DOUBLE, ml_cpu_compute::ComputeParticipantPolicy::kPhysical, FastOptions());
   ExpectFiniteSuccessfulResult(result);
 }
 
@@ -288,36 +308,42 @@ TEST(ComputeArithmeticProfile, Float64PhysicalParticipantsIsFiniteAndPositive) {
 // ---------------------------------------------------------------------------
 
 TEST(ComputeArithmeticProfile, Float16IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::FLOAT16, ComputeParticipantPolicy::kSingle, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::FLOAT16, ml_cpu_compute::ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
   } else {
-    EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kUnsupportedNativePath);
+    EXPECT_EQ(result.unavailable_reason,
+              ml_cpu_compute::ComputeProfileUnavailableReason::kUnsupportedNativePath);
     EXPECT_FALSE(result.diagnostic.empty());
   }
 }
 
 TEST(ComputeArithmeticProfile, BFloat16IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::BFLOAT16, ComputeParticipantPolicy::kSingle, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::BFLOAT16, ml_cpu_compute::ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
     EXPECT_GT(result.dot_product_length, 0u);
   } else {
-    EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kUnsupportedNativePath);
+    EXPECT_EQ(result.unavailable_reason,
+              ml_cpu_compute::ComputeProfileUnavailableReason::kUnsupportedNativePath);
     EXPECT_FALSE(result.diagnostic.empty());
   }
 }
 
 TEST(ComputeArithmeticProfile, Int8IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
-  const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      DataType::INT8, ComputeParticipantPolicy::kSingle, FastOptions());
+  const ml_cpu_compute::ComputeThroughputResult result =
+      ml_cpu_compute::MeasureComputeArithmeticThroughput(
+          DataType::INT8, ml_cpu_compute::ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
     EXPECT_GT(result.dot_product_length, 0u);
   } else {
-    EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kUnsupportedNativePath);
+    EXPECT_EQ(result.unavailable_reason,
+              ml_cpu_compute::ComputeProfileUnavailableReason::kUnsupportedNativePath);
     EXPECT_FALSE(result.diagnostic.empty());
   }
 }

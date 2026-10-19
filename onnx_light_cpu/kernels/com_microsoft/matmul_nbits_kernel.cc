@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -29,6 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -39,6 +41,23 @@ namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 using rt_ns::Tensor;
 using RuntimeDataType = rt_ns::DataType;
+
+template <typename Store, typename Slot> struct LegacyPreparedSlot {
+  const Store *store;
+  Slot slot;
+
+  const rt_ns::RuntimeValue &Get() const { return store->Get(slot); }
+};
+
+template <typename Store, typename Slot>
+auto BindPreparedSlot(const Store &store, const Slot &slot) {
+  if constexpr (requires { store.BindForRead(slot); }) {
+    return store.BindForRead(slot);
+  } else {
+    // onnx-light 0.2.0 predates validated replay bindings.
+    return LegacyPreparedSlot<Store, Slot>{&store, slot};
+  }
+}
 
 constexpr const char *kParallelThresholdOutputs = "parallel.threshold_outputs";
 constexpr const char *kTargetBlockOutputs = "parallel.target_block_outputs";
@@ -75,7 +94,7 @@ MatMulNBitsAttributes ParseAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &nod
   if (attributes.k <= 0 || attributes.n <= 0) {
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: K and N must be positive.");
   }
-  if (!MatMulNBitsBlockSizeSupported(attributes.bits, attributes.block_size) ||
+  if (!ml_cpu_compute::MatMulNBitsBlockSizeSupported(attributes.bits, attributes.block_size) ||
       (attributes.accuracy_level != 0 && attributes.accuracy_level != 4) ||
       attributes.weight_prepacked != 0) {
     throw std::invalid_argument(
@@ -104,42 +123,48 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> expe
 
 struct MatMulNBitsKernel::PreparedInt4Plan {
   PreparedInt4Plan(const Tensor &b, const Tensor &scales, const MatMulNBitsAttributes &attributes,
-                   const MatMulNBitsExecutionTuning &tuning)
+                   const ml_cpu_compute::MatMulNBitsExecutionTuning &tuning)
       : k(static_cast<std::size_t>(attributes.k)), n(static_cast<std::size_t>(attributes.n)),
         blocks((k + 31) / 32), data_type(static_cast<RuntimeDataType>(scales.data_type)),
-        vnni_weights(CheckedMultiply(k, n, "MatMulNBits", "prepared weight count") / 2),
-        vnni_weight_sums(CheckedMultiply(blocks, n, "MatMulNBits", "prepared weight sum count")),
-        vnni_scales(CheckedMultiply(blocks, n, "MatMulNBits", "prepared scale count")),
+        vnni_weights(ml_cpu_compute::CheckedMultiply(k, n, "MatMulNBits", "prepared weight count") /
+                     2),
+        vnni_weight_sums(
+            ml_cpu_compute::CheckedMultiply(blocks, n, "MatMulNBits", "prepared weight sum count")),
+        vnni_scales(
+            ml_cpu_compute::CheckedMultiply(blocks, n, "MatMulNBits", "prepared scale count")),
         max_participants(tuning.max_participants) {
     Pack(b, scales, attributes, vnni_weights.data(), vnni_weight_sums.data(), vnni_scales.data());
   }
 
   static std::size_t WeightBytes(const MatMulNBitsAttributes &attributes) {
-    return CheckedMultiply(static_cast<std::size_t>(attributes.k),
-                           static_cast<std::size_t>(attributes.n), "MatMulNBits",
-                           "prepared weight count") /
+    return ml_cpu_compute::CheckedMultiply(static_cast<std::size_t>(attributes.k),
+                                           static_cast<std::size_t>(attributes.n), "MatMulNBits",
+                                           "prepared weight count") /
            2;
   }
 
   static std::size_t WeightSumBytes(const MatMulNBitsAttributes &attributes) {
     const std::size_t blocks = (static_cast<std::size_t>(attributes.k) + 31) / 32;
-    return CheckedByteSize(CheckedMultiply(blocks, static_cast<std::size_t>(attributes.n),
-                                           "MatMulNBits", "prepared weight sum count"),
-                           sizeof(std::int32_t), "MatMulNBits", "prepared weight sum byte size");
+    return ml_cpu_compute::CheckedByteSize(
+        ml_cpu_compute::CheckedMultiply(blocks, static_cast<std::size_t>(attributes.n),
+                                        "MatMulNBits", "prepared weight sum count"),
+        sizeof(std::int32_t), "MatMulNBits", "prepared weight sum byte size");
   }
 
   static std::size_t ScaleBytes(const MatMulNBitsAttributes &attributes) {
     const std::size_t blocks = (static_cast<std::size_t>(attributes.k) + 31) / 32;
-    return CheckedByteSize(CheckedMultiply(blocks, static_cast<std::size_t>(attributes.n),
-                                           "MatMulNBits", "prepared scale count"),
-                           sizeof(float), "MatMulNBits", "prepared scale byte size");
+    return ml_cpu_compute::CheckedByteSize(
+        ml_cpu_compute::CheckedMultiply(blocks, static_cast<std::size_t>(attributes.n),
+                                        "MatMulNBits", "prepared scale count"),
+        sizeof(float), "MatMulNBits", "prepared scale byte size");
   }
 
   static std::size_t TotalBytes(const MatMulNBitsAttributes &attributes) {
-    return CheckedAdd(WeightBytes(attributes),
-                      CheckedAdd(WeightSumBytes(attributes), ScaleBytes(attributes), "MatMulNBits",
-                                 "prepared metadata byte size"),
-                      "MatMulNBits", "prepared plan byte size");
+    return ml_cpu_compute::CheckedAdd(
+        WeightBytes(attributes),
+        ml_cpu_compute::CheckedAdd(WeightSumBytes(attributes), ScaleBytes(attributes),
+                                   "MatMulNBits", "prepared metadata byte size"),
+        "MatMulNBits", "prepared plan byte size");
   }
 
   static void Pack(const Tensor &b, const Tensor &scales, const MatMulNBitsAttributes &attributes,
@@ -170,9 +195,11 @@ struct MatMulNBitsKernel::PreparedInt4Plan {
           if (data_type == RuntimeDataType::FLOAT) {
             vnni_scales[target] = scale_float[scale_index];
           } else if (data_type == RuntimeDataType::FLOAT16) {
-            vnni_scales[target] = detail::Float16BitsToFloat(scale_half[scale_index]);
+            vnni_scales[target] =
+                ml_cpu_compute::detail::Float16BitsToFloat(scale_half[scale_index]);
           } else {
-            vnni_scales[target] = detail::Bfloat16BitsToFloat(scale_half[scale_index]);
+            vnni_scales[target] =
+                ml_cpu_compute::detail::Bfloat16BitsToFloat(scale_half[scale_index]);
           }
           std::int32_t sum = 0;
           for (std::size_t offset = 0; offset < 16; ++offset) {
@@ -203,10 +230,11 @@ struct MatMulNBitsKernel::PreparedInt8Plan {
   }
 
   static std::size_t WeightBytes(const MatMulNBitsAttributes &attributes) {
-    return CheckedMultiply(CheckedMultiply(Groups(attributes),
-                                           static_cast<std::size_t>(attributes.k) / 32,
-                                           "MatMulNBits", "INT8 prepared groups"),
-                           256, "MatMulNBits", "INT8 prepared weight bytes");
+    return ml_cpu_compute::CheckedMultiply(
+        ml_cpu_compute::CheckedMultiply(Groups(attributes),
+                                        static_cast<std::size_t>(attributes.k) / 32, "MatMulNBits",
+                                        "INT8 prepared groups"),
+        256, "MatMulNBits", "INT8 prepared weight bytes");
   }
 
   static std::size_t WeightSumBytes(const MatMulNBitsAttributes &attributes) {
@@ -214,30 +242,33 @@ struct MatMulNBitsKernel::PreparedInt8Plan {
   }
 
   static std::size_t TotalBytes(const MatMulNBitsAttributes &attributes) {
-    return CheckedAdd(WeightBytes(attributes),
-                      CheckedMultiply(WeightSumBytes(attributes), 2, "MatMulNBits",
-                                      "INT8 prepared metadata bytes"),
-                      "MatMulNBits", "INT8 prepared bytes");
+    return ml_cpu_compute::CheckedAdd(
+        WeightBytes(attributes),
+        ml_cpu_compute::CheckedMultiply(WeightSumBytes(attributes), 2, "MatMulNBits",
+                                        "INT8 prepared metadata bytes"),
+        "MatMulNBits", "INT8 prepared bytes");
   }
 
   static void Pack(const Tensor &b, const Tensor &scales, const MatMulNBitsAttributes &attributes,
                    std::uint8_t *weights, std::int32_t *weight_sums, float *block_scales) {
-    PackMatMulNBitsInt8(b.bytes(), reinterpret_cast<const float *>(scales.bytes()), weights,
-                        weight_sums, block_scales, static_cast<std::size_t>(attributes.k),
-                        static_cast<std::size_t>(attributes.n));
+    ml_cpu_compute::PackMatMulNBitsInt8(b.bytes(), reinterpret_cast<const float *>(scales.bytes()),
+                                        weights, weight_sums, block_scales,
+                                        static_cast<std::size_t>(attributes.k),
+                                        static_cast<std::size_t>(attributes.n));
   }
 };
 
 struct MatMulNBitsKernel::PreparedInt4State {
-  PreparedInt4State(rt_ns::ValueStore &store_, std::uint32_t slot_, std::size_t weight_bytes_,
-                    std::size_t weight_sum_bytes_, std::size_t total_bytes_,
-                    std::int64_t max_participants_)
-      : store(&store_), slot(slot_), weight_bytes(weight_bytes_),
-        weight_sum_bytes(weight_sum_bytes_), total_bytes(total_bytes_),
-        max_participants(max_participants_) {}
+  using Slot = decltype(std::declval<rt_ns::ValueStore &>().Bind(std::string{}));
+  using BoundSlot = decltype(BindPreparedSlot(std::declval<const rt_ns::ValueStore &>(),
+                                              std::declval<const Slot &>()));
 
-  rt_ns::ValueStore *store;
-  std::uint32_t slot;
+  PreparedInt4State(BoundSlot slot_, std::size_t weight_bytes_, std::size_t weight_sum_bytes_,
+                    std::size_t total_bytes_, std::int64_t max_participants_)
+      : slot(std::move(slot_)), weight_bytes(weight_bytes_), weight_sum_bytes(weight_sum_bytes_),
+        total_bytes(total_bytes_), max_participants(max_participants_) {}
+
+  BoundSlot slot;
   std::size_t weight_bytes;
   std::size_t weight_sum_bytes;
   std::size_t total_bytes;
@@ -274,10 +305,12 @@ void MatMulNBitsKernel::RegisterTuningSchemas() {
             {MakeTuningKey(data_type, bits),
              {{kParallelThresholdOutputs,
                static_cast<std::int64_t>(
-                   kDefaultMatMulNBitsExecutionTuning.parallel_threshold_outputs)},
+                   ml_cpu_compute::kDefaultMatMulNBitsExecutionTuning.parallel_threshold_outputs)},
               {kTargetBlockOutputs,
-               static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
-              {kMaxParticipants, kDefaultMatMulNBitsExecutionTuning.max_participants}}},
+               static_cast<std::int64_t>(
+                   ml_cpu_compute::kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
+              {kMaxParticipants,
+               ml_cpu_compute::kDefaultMatMulNBitsExecutionTuning.max_participants}}},
             ValidateTuning));
       }
     }
@@ -319,9 +352,9 @@ bool MatMulNBitsKernel::HasPreparations(
   return node_ != nullptr && attributes_.block_size == 32 &&
          (node_->input_size() <= 3 || node_->input(3).empty()) &&
          ((attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
-           MatMulNBitsAccuracy4Float32Available() && attributes_.n % 16 == 0) ||
+           ml_cpu_compute::MatMulNBitsAccuracy4Float32Available() && attributes_.n % 16 == 0) ||
           (attributes_.bits == 8 && attributes_.accuracy_level == 4 &&
-           MatMulNBitsInt8Float32Available())) &&
+           ml_cpu_compute::MatMulNBitsInt8Float32Available())) &&
          attributes_.k % 32 == 0 && node_ != nullptr && node_->input_size() >= 3 &&
          immutable_inputs.contains(node_->input(1)) && immutable_inputs.contains(node_->input(2));
 }
@@ -389,13 +422,13 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
       scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT)) {
     return;
   }
-  const std::size_t k = CheckedDimension(attributes_.k, "MatMulNBits", "K");
-  const std::size_t n = CheckedDimension(attributes_.n, "MatMulNBits", "N");
+  const std::size_t k = ml_cpu_compute::CheckedDimension(attributes_.k, "MatMulNBits", "K");
+  const std::size_t n = ml_cpu_compute::CheckedDimension(attributes_.n, "MatMulNBits", "N");
   const std::size_t blocks = k / 32;
   RequireShape(
       b, {attributes_.n, static_cast<std::int64_t>(blocks), attributes_.bits == 8 ? 32 : 16}, "B");
   const std::size_t expected_scales =
-      CheckedMultiply(n, blocks, "MatMulNBits", "scale element count");
+      ml_cpu_compute::CheckedMultiply(n, blocks, "MatMulNBits", "scale element count");
   if (!((scales.shape.size() == 1 && TensorElementCount(scales, "scales") == expected_scales) ||
         (scales.shape.size() == 2 && scales.shape[0] == attributes_.n &&
          scales.shape[1] == static_cast<std::int64_t>(blocks)))) {
@@ -423,7 +456,7 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
       << node_->input(2) << ":K=" << attributes_.k << ":N=" << attributes_.n
       << ":dtype=" << scales.data_type << ":digest=" << digest;
   rt_ns::ValueStore &store = rt.value_store();
-  const std::uint32_t slot = store.Bind(key.str());
+  const auto slot = store.Bind(key.str());
   const bool int8 = attributes_.bits == 8;
   const std::size_t weight_bytes = int8 ? PreparedInt8Plan::WeightBytes(attributes_)
                                         : PreparedInt4Plan::WeightBytes(attributes_);
@@ -447,13 +480,15 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
     store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
   }
   auto &prepared = int8 ? prepared_int8_ : prepared_int4_;
-  prepared = std::make_unique<PreparedInt4State>(store, slot, weight_bytes, weight_sum_bytes,
-                                                 total_bytes, tuning_.max_participants);
+  prepared =
+      std::make_unique<PreparedInt4State>(BindPreparedSlot(store, slot), weight_bytes,
+                                          weight_sum_bytes, total_bytes, tuning_.max_participants);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt,
                                      const Tensor *zero_points) const {
+  const RuntimeExecutionScope execution_scope;
   if (attributes_.bits == 3) {
     throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
@@ -465,6 +500,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (attributes_.bits == 3) {
     return ComputeInt3(a, packed_weights, bias, rt);
   }
@@ -507,18 +543,19 @@ Tensor MatMulNBitsKernel::ComputeInt3(const Tensor &a,
   const auto rows = TensorElementCount(a, "A") / k;
   rt_ns::Shape output_shape = a.shape;
   output_shape.back() = attributes_.n;
-  const auto output_bytes =
-      CheckedByteSize(CheckedMultiply(rows, n, "MatMulNBits INT3", "output count"),
-                      rt_ns::ElementSize(a.data_type), "MatMulNBits INT3", "output bytes");
+  const auto output_bytes = ml_cpu_compute::CheckedByteSize(
+      ml_cpu_compute::CheckedMultiply(rows, n, "MatMulNBits INT3", "output count"),
+      rt_ns::ElementSize(a.data_type), "MatMulNBits INT3", "output bytes");
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
   const auto *weights = reinterpret_cast<const std::uint8_t *>(packed_weights.raw_data().data());
   const auto *zero_points =
       layout.has_zero_points ? weights + layout.weight_bytes + layout.scale_bytes : nullptr;
-  MatMulNBitsEncodedInt3(a.bytes(), weights, weights + layout.weight_bytes, zero_points,
-                         bias == nullptr ? nullptr : bias->bytes(), y.mutable_bytes(),
-                         static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n, tuning_);
+  ml_cpu_compute::MatMulNBitsEncodedInt3(
+      a.bytes(), weights, weights + layout.weight_bytes, zero_points,
+      bias == nullptr ? nullptr : bias->bytes(), y.mutable_bytes(),
+      static_cast<ml_cpu_compute::DataType>(a.data_type), rows, k, n, tuning_);
   return y;
 }
 
@@ -553,22 +590,22 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
     throw std::invalid_argument(
         "onnx_light_cpu::MatMulNBits: A must have positive rank and final dimension K.");
   }
-  const std::size_t k = CheckedDimension(attributes_.k, "MatMulNBits", "K");
-  const std::size_t n = CheckedDimension(attributes_.n, "MatMulNBits", "N");
+  const std::size_t k = ml_cpu_compute::CheckedDimension(attributes_.k, "MatMulNBits", "K");
+  const std::size_t n = ml_cpu_compute::CheckedDimension(attributes_.n, "MatMulNBits", "N");
   const std::size_t block_size =
-      CheckedDimension(attributes_.block_size, "MatMulNBits", "block_size");
+      ml_cpu_compute::CheckedDimension(attributes_.block_size, "MatMulNBits", "block_size");
   const std::size_t k_blocks =
-      CheckedAdd(k, block_size - 1, "MatMulNBits", "K blocks") / block_size;
+      ml_cpu_compute::CheckedAdd(k, block_size - 1, "MatMulNBits", "K blocks") / block_size;
   const std::size_t blob_size =
-      CheckedMultiply(block_size, static_cast<std::size_t>(attributes_.bits), "MatMulNBits",
-                      "packed block bits") /
+      ml_cpu_compute::CheckedMultiply(block_size, static_cast<std::size_t>(attributes_.bits),
+                                      "MatMulNBits", "packed block bits") /
       8;
   const std::size_t rows = TensorElementCount(a, "A") / k;
   RequireShape(
       b, {attributes_.n, static_cast<std::int64_t>(k_blocks), static_cast<std::int64_t>(blob_size)},
       "B");
   const std::size_t expected_scales =
-      CheckedMultiply(n, k_blocks, "MatMulNBits", "scale element count");
+      ml_cpu_compute::CheckedMultiply(n, k_blocks, "MatMulNBits", "scale element count");
   if (zero_points != nullptr) {
     const bool packed = zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8);
     if (!packed && zero_points->data_type != a.data_type) {
@@ -578,7 +615,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
     const auto stride = packed ? k_blocks / per_byte + (k_blocks % per_byte != 0) : k_blocks;
     if (!((zero_points->shape.size() == 1 &&
            TensorElementCount(*zero_points, "zero_points") ==
-               CheckedMultiply(n, stride, "MatMulNBits", "zero point count")) ||
+               ml_cpu_compute::CheckedMultiply(n, stride, "MatMulNBits", "zero point count")) ||
           (zero_points->shape.size() == 2 && zero_points->shape[0] == attributes_.n &&
            zero_points->shape[1] == static_cast<std::int64_t>(stride)))) {
       throw std::invalid_argument("MatMulNBits: invalid zero_points shape.");
@@ -596,24 +633,26 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
   }
   rt_ns::Shape output_shape = a.shape;
   output_shape.back() = attributes_.n;
-  const std::size_t output_count = CheckedMultiply(rows, n, "MatMulNBits", "output element count");
-  const std::size_t output_bytes = CheckedByteSize(output_count, rt_ns::ElementSize(a.data_type),
-                                                   "MatMulNBits", "output byte size");
+  const std::size_t output_count =
+      ml_cpu_compute::CheckedMultiply(rows, n, "MatMulNBits", "output element count");
+  const std::size_t output_bytes = ml_cpu_compute::CheckedByteSize(
+      output_count, rt_ns::ElementSize(a.data_type), "MatMulNBits", "output byte size");
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
   if (allow_prepacking && prepared_int8_ != nullptr && data_type == RuntimeDataType::FLOAT) {
-    const rt_ns::RuntimeValue &prepared = prepared_int8_->store->Get(prepared_int8_->slot);
+    const rt_ns::RuntimeValue &prepared = prepared_int8_->slot.Get();
     if (prepared.kind != rt_ns::RuntimeValue::Kind::kTensor ||
         prepared.tensor.size_bytes() < prepared_int8_->total_bytes) {
       throw std::runtime_error("onnx_light_cpu::MatMulNBits: prepared INT8 plan is truncated.");
     }
     const std::uint8_t *base = prepared.tensor.bytes();
-    const auto workspace_elements = MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning_);
+    const auto workspace_elements =
+        ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning_);
     rt_ns::detail::TemporaryTypedBuffer<double> workspace(
         workspace_elements, rt != nullptr ? rt->execution_allocator() : ctx_.allocator,
         "MatMulNBits INT8 scratch");
-    MatMulNBitsInt8Float32(
+    ml_cpu_compute::MatMulNBitsInt8Float32(
         reinterpret_cast<const float *>(a.bytes()), base,
         reinterpret_cast<const std::int32_t *>(base + prepared_int8_->weight_bytes),
         reinterpret_cast<const float *>(base + prepared_int8_->weight_bytes +
@@ -622,7 +661,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
         reinterpret_cast<float *>(y.mutable_bytes()), rows, k, n, tuning_,
         {workspace.data(), workspace_elements});
     if (rt != nullptr) {
-      rt->RecordKernelUsage(MatMulNBitsInt8Implementation());
+      rt->RecordKernelUsage(ml_cpu_compute::MatMulNBitsInt8Implementation());
       if (rows <= 4 && rows != 0 && n != 0) {
         rt->RecordKernelUsage("int8_gemv");
       }
@@ -635,7 +674,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
   std::int64_t prepared_max_participants = tuning_.max_participants;
   std::unique_ptr<const PreparedInt4Plan> invocation_plan;
   if (allow_prepacking && prepared_int4_ != nullptr) {
-    const rt_ns::RuntimeValue &prepared = prepared_int4_->store->Get(prepared_int4_->slot);
+    const rt_ns::RuntimeValue &prepared = prepared_int4_->slot.Get();
     if (prepared.kind != rt_ns::RuntimeValue::Kind::kTensor ||
         prepared.tensor.size_bytes() < prepared_int4_->total_bytes) {
       throw std::runtime_error("onnx_light_cpu::MatMulNBits: prepared INT4 plan is truncated.");
@@ -649,7 +688,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
     prepared_max_participants = prepared_int4_->max_participants;
   }
   if (allow_prepacking && attributes_.block_size == 32 && attributes_.bits == 4 &&
-      attributes_.accuracy_level == 4 && MatMulNBitsAccuracy4Float32Available() &&
+      attributes_.accuracy_level == 4 && ml_cpu_compute::MatMulNBitsAccuracy4Float32Available() &&
       (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
        data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
@@ -673,48 +712,51 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
       scratch.y.resize(output_count);
       const auto *half_a = reinterpret_cast<const std::uint16_t *>(a.bytes());
       if (data_type == RuntimeDataType::FLOAT16) {
-        detail::ConvertFloat16ToFloat32(half_a, scratch.a.data(), scratch.a.size());
+        ml_cpu_compute::detail::ConvertFloat16ToFloat32(half_a, scratch.a.data(), scratch.a.size());
       } else {
-        detail::ConvertBFloat16ToFloat32(half_a, scratch.a.data(), scratch.a.size());
+        ml_cpu_compute::detail::ConvertBFloat16ToFloat32(half_a, scratch.a.data(),
+                                                         scratch.a.size());
       }
       const float *float_bias = nullptr;
       if (bias != nullptr) {
         scratch.bias.resize(n);
         const auto *half_bias = reinterpret_cast<const std::uint16_t *>(bias->bytes());
         if (data_type == RuntimeDataType::FLOAT16) {
-          detail::ConvertFloat16ToFloat32(half_bias, scratch.bias.data(), n);
+          ml_cpu_compute::detail::ConvertFloat16ToFloat32(half_bias, scratch.bias.data(), n);
         } else {
-          detail::ConvertBFloat16ToFloat32(half_bias, scratch.bias.data(), n);
+          ml_cpu_compute::detail::ConvertBFloat16ToFloat32(half_bias, scratch.bias.data(), n);
         }
         float_bias = scratch.bias.data();
       }
-      MatMulNBitsAccuracy4Float32(scratch.a.data(), prepared_weights, prepared_weight_sums,
-                                  prepared_scales, float_bias, scratch.y.data(), rows, k, n,
-                                  prepared_max_participants);
+      ml_cpu_compute::MatMulNBitsAccuracy4Float32(
+          scratch.a.data(), prepared_weights, prepared_weight_sums, prepared_scales, float_bias,
+          scratch.y.data(), rows, k, n, prepared_max_participants);
       auto *half_y = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
       if (data_type == RuntimeDataType::FLOAT16) {
-        detail::ConvertFloat32ToFloat16(scratch.y.data(), half_y, output_count);
+        ml_cpu_compute::detail::ConvertFloat32ToFloat16(scratch.y.data(), half_y, output_count);
       } else {
-        detail::ConvertFloat32ToBFloat16(scratch.y.data(), half_y, output_count);
+        ml_cpu_compute::detail::ConvertFloat32ToBFloat16(scratch.y.data(), half_y, output_count);
       }
       return y;
     }
-    MatMulNBitsAccuracy4Float32(
+    ml_cpu_compute::MatMulNBitsAccuracy4Float32(
         reinterpret_cast<const float *>(a.bytes()), prepared_weights, prepared_weight_sums,
         prepared_scales, bias == nullptr ? nullptr : reinterpret_cast<const float *>(bias->bytes()),
         reinterpret_cast<float *>(y.mutable_bytes()), rows, k, n, prepared_max_participants);
     return y;
   }
-  MatMulNBits(a.bytes(), b.bytes(), scales.bytes(), bias == nullptr ? nullptr : bias->bytes(),
-              y.mutable_bytes(), static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n,
-              static_cast<std::size_t>(attributes_.bits), block_size, tuning_,
-              zero_points == nullptr ? nullptr : zero_points->bytes(),
-              zero_points == nullptr ||
-                  zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8));
+  ml_cpu_compute::MatMulNBits(
+      a.bytes(), b.bytes(), scales.bytes(), bias == nullptr ? nullptr : bias->bytes(),
+      y.mutable_bytes(), static_cast<ml_cpu_compute::DataType>(a.data_type), rows, k, n,
+      static_cast<std::size_t>(attributes_.bits), block_size, tuning_,
+      zero_points == nullptr ? nullptr : zero_points->bytes(),
+      zero_points == nullptr ||
+          zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8));
   return y;
 }
 
 void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 6) {

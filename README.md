@@ -127,23 +127,78 @@ feature-masked CPU, rather than merely limiting dispatch on a modern host.
 
 ## C++ usage
 
+The numerical code lives in `ml_cpu_compute/`, next to the ONNX/Python
+adapters in `onnx_light_cpu/`. It is a standalone C++20 library: the directory
+can be copied and built without ONNX, onnx-light, Python, or a private thread
+pool. ISA-specific compilation and runtime dispatch are unchanged.
+
+```bash
+cmake -S ml_cpu_compute -B build-compute \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/path/to/install
+cmake --build build-compute --parallel 6
+cmake --install build-compute
+```
+
 ```cpp
-#include <onnx_light_cpu/impl/math/math_kernels.h>
+#include <ml_cpu_compute/math/math.h>
 
 int main() {
     float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};
     float output[4];
-    onnx_light_cpu::AbsFloat32(input, output, 4);
+    ml_cpu_compute::AbsFloat32(input, output, 4);
     // output = {1.0f, 2.0f, 3.0f, 4.0f}
 }
 ```
 
-Link against `onnx_light_cpu::lib_onnx_light_cpu`:
+Link against the installed computation package:
+
+```cmake
+find_package(ml_cpu_compute CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE ml_cpu_compute::ml_cpu_compute)
+```
+
+Alternatively, use `add_subdirectory(path/to/ml_cpu_compute)` and the
+same target. `BUILD_SHARED_LIBS=ON` selects a shared standalone library; the
+default is static. Headers are under `include/ml_cpu_compute/`, sources
+under `src/`, and the C++ namespace is `ml_cpu_compute`. The CMake configuration
+is in `cmake/ComputeLibrary.cmake`; standalone build options use the
+`ML_CPU_COMPUTE_` prefix, including `ML_CPU_COMPUTE_MAX_SIMD_LEVEL`,
+`ML_CPU_COMPUTE_HARDENING`, and `ML_CPU_COMPUTE_BUILD_TESTS`.
+
+The independent directory includes its own C++ unit tests for the borrowed-executor
+contract, including thread isolation, nesting, error propagation, and actual numerical
+dispatch. Enable them without building the runtime:
+
+```bash
+cmake -S ml_cpu_compute -B build-compute -DML_CPU_COMPUTE_BUILD_TESTS=ON
+cmake --build build-compute --parallel 6
+ctest --test-dir build-compute --output-on-failure
+```
+
+Only the tests require GoogleTest (downloaded by CMake). The root project's
+`ONNX_LIGHT_CPU_BUILD_TESTS=ON` also enables these tests.
+
+Direct numerical calls run serially unless the caller borrows its own synchronous
+executor through `ExecutionExecutorView` and `ExecutionExecutorScope` from
+`<ml_cpu_compute/execution.h>`. ONNX kernel entry points adapt the
+session's executor in `onnx_light_cpu/kernels/execution.cc`; the computation
+library has no runtime dependency.
+
+An explicit `ExecutionExecutorScope(nullptr)` forces serial execution even when
+an ONNX session executor is active. Adapters distinguish this override from an
+absent binding with `HasExecutionExecutorScope()` and restore the previous
+binding when the scope exits.
+
+The full runtime project also exports the computation target:
 
 ```cmake
 find_package(onnx_light_cpu REQUIRED)
-target_link_libraries(my_app PRIVATE onnx_light_cpu::lib_onnx_light_cpu)
+target_link_libraries(my_app PRIVATE onnx_light_cpu::ml_cpu_compute)
 ```
+
+The previous `onnx_light_cpu::lib_onnx_light_cpu` target remains available as a
+compatibility alias in that package. Runtime adapter classes and registration
+functions keep their `onnx_light_cpu` namespace.
 
 ## Python usage
 

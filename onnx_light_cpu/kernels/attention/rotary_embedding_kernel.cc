@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/execution.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -31,9 +32,11 @@ using rt_ns::Tensor;
 }
 
 std::size_t Count(const Tensor &tensor) {
-  const auto count = CheckedShapeIndexProduct(tensor.shape, RotaryEmbeddingKernel::kName, "shape");
-  const auto bytes = CheckedByteSize(static_cast<std::size_t>(count), tensor.element_size(),
-                                     RotaryEmbeddingKernel::kName, "buffer");
+  const auto count =
+      ml_cpu_compute::CheckedShapeIndexProduct(tensor.shape, RotaryEmbeddingKernel::kName, "shape");
+  const auto bytes =
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(count), tensor.element_size(),
+                                      RotaryEmbeddingKernel::kName, "buffer");
   if (tensor.size_bytes() != bytes || (bytes && tensor.bytes() == nullptr)) {
     Invalid("buffer size does not match shape.");
   }
@@ -59,7 +62,7 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
   auto *y = output.mutable_bytes();
   const std::size_t half = rotate_dim / 2;
   const bool rank4 = input.shape.size() == 4;
-  ExecuteRanges(
+  ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(batch * seq), static_cast<double>(heads * head_size),
       [&](std::int64_t begin, std::int64_t end) {
         for (auto row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
@@ -103,6 +106,7 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
                                          const Tensor *positions, bool interleaved,
                                          std::int64_t rotary_dim, std::int64_t num_heads,
                                          bool microsoft, rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto type = static_cast<DataType>(input.data_type);
   if (type != DataType::FLOAT && type != DataType::FLOAT16 && type != DataType::BFLOAT16) {
     Invalid("input must be FLOAT, FLOAT16, or BFLOAT16.");
@@ -113,13 +117,13 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
   if (input.shape.size() != 3 && input.shape.size() != 4) {
     Invalid("input must have rank 3 or 4.");
   }
-  const auto batch = CheckedDimension(input.shape[0], kName, "batch");
-  const auto seq =
-      CheckedDimension(input.shape[input.shape.size() == 4 ? 2 : 1], kName, "sequence");
+  const auto batch = ml_cpu_compute::CheckedDimension(input.shape[0], kName, "batch");
+  const auto seq = ml_cpu_compute::CheckedDimension(input.shape[input.shape.size() == 4 ? 2 : 1],
+                                                    kName, "sequence");
   std::size_t heads;
   std::size_t head_size;
   if (input.shape.size() == 3) {
-    const auto hidden = CheckedDimension(input.shape[2], kName, "hidden size");
+    const auto hidden = ml_cpu_compute::CheckedDimension(input.shape[2], kName, "hidden size");
     if (num_heads <= 0 && microsoft && rotary_dim == 0 && cos.shape.size() == 2 &&
         cos.shape[1] > 0 && static_cast<std::uint64_t>(cos.shape[1]) <= hidden / 2) {
       const auto inferred_head = static_cast<std::size_t>(cos.shape[1]) * 2;
@@ -137,8 +141,8 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
     }
     head_size = hidden / heads;
   } else {
-    heads = CheckedDimension(input.shape[1], kName, "heads");
-    head_size = CheckedDimension(input.shape[3], kName, "head size");
+    heads = ml_cpu_compute::CheckedDimension(input.shape[1], kName, "heads");
+    head_size = ml_cpu_compute::CheckedDimension(input.shape[3], kName, "head size");
   }
   if (rotary_dim < 0 || (rotary_dim != 0 && static_cast<std::uint64_t>(rotary_dim) > head_size)) {
     Invalid("rotary_embedding_dim must be between 0 and head size.");
@@ -147,8 +151,9 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
   if (rotate_dim == 0 || rotate_dim % 2 != 0) {
     Invalid("rotary dimension must be positive and even.");
   }
-  const std::size_t rows = CheckedProduct({batch, seq}, kName, "rows");
-  const std::size_t elements = CheckedProduct({rows, heads, head_size}, kName, "input elements");
+  const std::size_t rows = ml_cpu_compute::CheckedProduct({batch, seq}, kName, "rows");
+  const std::size_t elements =
+      ml_cpu_compute::CheckedProduct({rows, heads, head_size}, kName, "input elements");
   if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     Invalid("row count exceeds int64_t.");
   }
@@ -182,7 +187,8 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
     Invalid("cache sizes differ.");
   }
   if (positions != nullptr) {
-    const auto max_positions = CheckedDimension(cos.shape[0], kName, "cache length");
+    const auto max_positions =
+        ml_cpu_compute::CheckedDimension(cos.shape[0], kName, "cache length");
     for (std::size_t i = 0; i < (positions->shape.size() <= 1 ? 1 : rows); ++i) {
       const auto index = Position(*positions, i);
       if (index < 0 || static_cast<std::uint64_t>(index) >= max_positions ||
@@ -210,6 +216,7 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
 }
 
 void RotaryEmbeddingKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   const bool microsoft = node.domain() == kMicrosoftDomain;

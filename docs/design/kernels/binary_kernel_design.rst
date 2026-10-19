@@ -3,7 +3,7 @@ Binary Kernel Design
 
 Nineteen binary ONNX operators share one descriptor, broadcast-plan, and
 runtime-adapter architecture. The implementation is under
-``onnx_light_cpu/impl/math/binary`` and the registered adapter is
+``ml_cpu_compute/src/math/binary`` and the registered adapter is
 ``onnx_light_cpu/kernels/elementwise/binary_kernel.cc``.
 
 Prepared execution
@@ -14,7 +14,7 @@ Prepared execution
    NodeProto
       |
       v
-   BinaryKernelDescriptor
+   BinaryOperationDescriptor
    (operator, opset, attributes, typed adapters)
       |
       +---- concrete input shapes and types
@@ -28,7 +28,7 @@ Prepared execution
       v
    scalar or bulk typed function
 
-``BinaryKernelDescriptor`` is built once for the node. It validates
+``BinaryOperationDescriptor`` is built once for the node. It validates
 operator-specific attributes such as ``Mod.fmod`` and
 ``BitShift.direction``, resolves the output type, and binds scalar and optional
 bulk functions for the exact input/output type triple.

@@ -19,6 +19,10 @@ def test_project_version_consistency():
     for path, pattern in (
         ("setup.py", r'version="([^"]+)"'),
         ("CMakeLists.txt", r"project\(onnx_light_cpu VERSION ([\d.]+)"),
+        (
+            "ml_cpu_compute/CMakeLists.txt",
+            r"project\(ml_cpu_compute VERSION ([\d.]+)",
+        ),
         ("onnx_light_cpu/__init__.py", r'__version__ = "([^"]+)"'),
     ):
         text = (_ROOT / path).read_text(encoding="utf-8")

@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/slice_kernel.h"
+#include "ml_cpu_compute/tensor/slice.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -28,7 +29,7 @@ using rt_ns::Tensor;
 
 namespace {
 
-static_assert(Shape::kMaxRank <= SliceCopyPlan::kMaxRank);
+static_assert(Shape::kMaxRank <= ml_cpu_compute::SliceCopyPlan::kMaxRank);
 
 [[noreturn]] void Invalid(const char *message) {
   throw std::invalid_argument(std::string("onnx_light_cpu::Slice: ") + message);
@@ -126,7 +127,7 @@ int64_t Normalize(int64_t dim, int64_t &start, int64_t end, int64_t step) {
 
 struct SlicePlan {
   Shape shape;
-  SliceCopyPlan copy;
+  ml_cpu_compute::SliceCopyPlan copy;
   std::size_t bytes = 0;
 };
 
@@ -144,10 +145,10 @@ SlicePlan PrepareSlice(const Tensor &data, const Shape &starts, const Shape &end
   ValidateBuffer(data, Size(Multiply(Count(data.shape), width)));
   SlicePlan plan;
   plan.shape = data.shape;
-  std::array<int64_t, SliceCopyPlan::kMaxRank> first{};
-  std::array<int64_t, SliceCopyPlan::kMaxRank> step{};
+  std::array<int64_t, ml_cpu_compute::SliceCopyPlan::kMaxRank> first{};
+  std::array<int64_t, ml_cpu_compute::SliceCopyPlan::kMaxRank> step{};
   step.fill(1);
-  std::array<bool, SliceCopyPlan::kMaxRank> seen{};
+  std::array<bool, ml_cpu_compute::SliceCopyPlan::kMaxRank> seen{};
   for (std::size_t i = 0; i < starts.size(); ++i) {
     int64_t axis = axes ? (*axes)[i] : static_cast<int64_t>(i);
     const int64_t signed_rank = static_cast<int64_t>(rank);
@@ -224,7 +225,7 @@ void Copy(const Tensor &data, Tensor &output, const SlicePlan &plan) {
   }
   ValidateBuffer(output, plan.bytes);
   RejectOverlap(data, output);
-  SliceCopy(data.bytes(), output.mutable_bytes(), plan.copy);
+  ml_cpu_compute::SliceCopy(data.bytes(), output.mutable_bytes(), plan.copy);
 }
 
 Tensor Allocate(const Tensor &data, const SlicePlan &plan, rt_ns::RuntimeContext *rt,
@@ -244,6 +245,7 @@ SliceKernel::SliceKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                                const Tensor *axes, const Tensor *steps,
                                rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   Tensor output = Allocate(data, plan, rt, ctx_.allocator);
   Copy(data, output, plan);
@@ -252,6 +254,7 @@ Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const T
 
 void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                              const Tensor *axes, const Tensor *steps, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   for (const Tensor *input : {&starts, &ends, axes, steps}) {
     if (input) {
@@ -262,6 +265,7 @@ void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Ten
 }
 
 void SliceKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);

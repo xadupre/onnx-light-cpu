@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/elementwise_fusion_plan.h"
+#include "ml_cpu_compute/math/binary/elementwise_fusion_plan.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -18,15 +18,16 @@
 
 namespace {
 
-using BinaryDataType = onnx_light_cpu::DataType;
-using onnx_light_cpu::ElementwiseFusionGuards;
-using onnx_light_cpu::ElementwiseFusionPlan;
-using onnx_light_cpu::ExecutionBlockFn;
+using BinaryDataType = ml_cpu_compute::DataType;
+using ml_cpu_compute::ElementwiseFusionGuards;
+using ml_cpu_compute::ElementwiseFusionPlan;
+using ml_cpu_compute::ExecutionBlockFn;
 
 struct InlineExecutor {
   std::int64_t dispatches = 0;
 
-  static void Run(void *context, std::int64_t blocks, void *task_context, ExecutionBlockFn task) {
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
     ++static_cast<InlineExecutor *>(context)->dispatches;
     for (std::int64_t block = 0; block < blocks; ++block) {
       task(task_context, block);
@@ -34,15 +35,15 @@ struct InlineExecutor {
   }
 };
 
-ElementwiseFusionGuards Guards(std::span<const std::size_t> consumers) {
-  return ElementwiseFusionGuards{consumers, false, true, true};
+ml_cpu_compute::ElementwiseFusionGuards Guards(std::span<const std::size_t> consumers) {
+  return ml_cpu_compute::ElementwiseFusionGuards{consumers, false, true, true};
 }
 
 TEST(ElementwiseFusionPlan, SwiGLUFloat32PreservesOperationOrder) {
   const std::array<std::int64_t, 3> shape{1, 1, 3072};
   const std::array<std::size_t, 2> consumers{1, 1};
-  auto plan = ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::FLOAT, shape, shape, shape,
-                                                         shape, shape, Guards(consumers));
+  auto plan = ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::FLOAT, shape, shape, shape, shape, shape, Guards(consumers));
   ASSERT_TRUE(plan.has_value());
   EXPECT_EQ(plan->workspace_bytes(), 0u);
 
@@ -64,8 +65,8 @@ TEST(ElementwiseFusionPlan, SwiGLUFloat32PreservesOperationOrder) {
 TEST(ElementwiseFusionPlan, SwiGLUBFloat16RoundsEveryGraphIntermediate) {
   const std::array<std::int64_t, 3> shape{1, 1, 3072};
   const std::array<std::size_t, 2> consumers{1, 1};
-  auto plan = ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::BFLOAT16, shape, shape,
-                                                         shape, shape, shape, Guards(consumers));
+  auto plan = ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::BFLOAT16, shape, shape, shape, shape, shape, Guards(consumers));
   ASSERT_TRUE(plan.has_value());
 
   std::vector<float> source(plan->element_count());
@@ -75,20 +76,20 @@ TEST(ElementwiseFusionPlan, SwiGLUBFloat16RoundsEveryGraphIntermediate) {
   for (std::size_t i = 0; i < source.size(); ++i) {
     source[i] = static_cast<float>(static_cast<int>(i % 19) - 9) / 7.0f;
   }
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(source.data(), gate.data(), source.size());
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(source.data(), gate.data(), source.size());
   std::reverse(source.begin(), source.end());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(source.data(), up.data(), source.size());
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(source.data(), up.data(), source.size());
   plan->Execute(gate.data(), up.data(), nullptr, output.data());
 
   for (std::size_t i = 0; i < output.size(); ++i) {
-    const float g = onnx_light_cpu::detail::Bfloat16BitsToFloat(gate[i]);
-    const float u = onnx_light_cpu::detail::Bfloat16BitsToFloat(up[i]);
+    const float g = ml_cpu_compute::detail::Bfloat16BitsToFloat(gate[i]);
+    const float u = ml_cpu_compute::detail::Bfloat16BitsToFloat(up[i]);
     const auto sigmoid_bits =
-        onnx_light_cpu::detail::FloatToBFloat16Bits(1.0f / (1.0f + std::exp(-g)));
-    const float sigmoid = onnx_light_cpu::detail::Bfloat16BitsToFloat(sigmoid_bits);
-    const auto inner_bits = onnx_light_cpu::detail::FloatToBFloat16Bits(g * sigmoid);
-    const float inner = onnx_light_cpu::detail::Bfloat16BitsToFloat(inner_bits);
-    EXPECT_EQ(output[i], onnx_light_cpu::detail::FloatToBFloat16Bits(inner * u)) << i;
+        ml_cpu_compute::detail::FloatToBFloat16Bits(1.0f / (1.0f + std::exp(-g)));
+    const float sigmoid = ml_cpu_compute::detail::Bfloat16BitsToFloat(sigmoid_bits);
+    const auto inner_bits = ml_cpu_compute::detail::FloatToBFloat16Bits(g * sigmoid);
+    const float inner = ml_cpu_compute::detail::Bfloat16BitsToFloat(inner_bits);
+    EXPECT_EQ(output[i], ml_cpu_compute::detail::FloatToBFloat16Bits(inner * u)) << i;
   }
 }
 
@@ -96,7 +97,7 @@ TEST(ElementwiseFusionPlan, ScaledMaskedScoresBroadcastsMaskInOneTraversal) {
   const std::array<std::int64_t, 4> scores_shape{1, 16, 32, 1024};
   const std::array<std::int64_t, 4> mask_shape{1, 1, 32, 1024};
   const std::array<std::size_t, 1> consumers{1};
-  auto plan = ElementwiseFusionPlan::TryCreateScaledMaskedScores(
+  auto plan = ml_cpu_compute::ElementwiseFusionPlan::TryCreateScaledMaskedScores(
       BinaryDataType::FLOAT, scores_shape, std::span<const std::int64_t>{}, mask_shape,
       scores_shape, scores_shape, Guards(consumers));
   ASSERT_TRUE(plan.has_value());
@@ -112,9 +113,9 @@ TEST(ElementwiseFusionPlan, ScaledMaskedScoresBroadcastsMaskInOneTraversal) {
     mask[i] = static_cast<float>(i) / 32.0f;
   }
   InlineExecutor executor;
-  const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     plan->Execute(scores.data(), &scale, mask.data(), output.data());
   }
   EXPECT_EQ(executor.dispatches, 1);
@@ -128,25 +129,25 @@ TEST(ElementwiseFusionPlan, RejectsUnsupportedGraphAndSafetyGuards) {
   const std::array<std::int64_t, 3> wrong_shape{1, 2, 3072};
   const std::array<std::size_t, 2> exclusive{1, 1};
   const std::array<std::size_t, 2> shared{1, 2};
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::FLOAT, shape, shape,
-                                                          shape, shape, shape, Guards(shared)));
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::FLOAT, shape, shape, shape, shape, shape, Guards(shared)));
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
       BinaryDataType::FLOAT, shape, shape, shape, wrong_shape, shape, Guards(exclusive)));
 
   auto alias = Guards(exclusive);
   alias.has_unsafe_alias = true;
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::FLOAT, shape, shape,
-                                                          shape, shape, shape, alias));
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::FLOAT, shape, shape, shape, shape, shape, alias));
   auto dynamic = Guards(exclusive);
   dynamic.has_static_shapes = false;
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::FLOAT, shape, shape,
-                                                          shape, shape, shape, dynamic));
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::FLOAT, shape, shape, shape, shape, shape, dynamic));
   auto numerical = Guards(exclusive);
   numerical.numerical_contract_matches = false;
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::FLOAT, shape, shape,
-                                                          shape, shape, shape, numerical));
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateSwiGLUGate(BinaryDataType::INT32, shape, shape,
-                                                          shape, shape, shape, Guards(exclusive)));
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::FLOAT, shape, shape, shape, shape, shape, numerical));
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateSwiGLUGate(
+      BinaryDataType::INT32, shape, shape, shape, shape, shape, Guards(exclusive)));
 }
 
 TEST(ElementwiseFusionPlan, RejectsOutOfScopeScaledMaskVariantsAndRuntimeAliasing) {
@@ -154,14 +155,14 @@ TEST(ElementwiseFusionPlan, RejectsOutOfScopeScaledMaskVariantsAndRuntimeAliasin
   const std::array<std::int64_t, 4> mask_shape{1, 1, 1, 128};
   const std::array<std::int64_t, 1> vector_scale{1};
   const std::array<std::size_t, 1> consumers{1};
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateScaledMaskedScores(
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateScaledMaskedScores(
       BinaryDataType::FLOAT, scores_shape, vector_scale, mask_shape, scores_shape, scores_shape,
       Guards(consumers)));
-  EXPECT_FALSE(ElementwiseFusionPlan::TryCreateScaledMaskedScores(
+  EXPECT_FALSE(ml_cpu_compute::ElementwiseFusionPlan::TryCreateScaledMaskedScores(
       BinaryDataType::BFLOAT16, scores_shape, std::span<const std::int64_t>{}, mask_shape,
       scores_shape, scores_shape, Guards(consumers)));
 
-  auto plan = ElementwiseFusionPlan::TryCreateScaledMaskedScores(
+  auto plan = ml_cpu_compute::ElementwiseFusionPlan::TryCreateScaledMaskedScores(
       BinaryDataType::FLOAT, scores_shape, std::span<const std::int64_t>{}, mask_shape,
       scores_shape, scores_shape, Guards(consumers));
   ASSERT_TRUE(plan.has_value());

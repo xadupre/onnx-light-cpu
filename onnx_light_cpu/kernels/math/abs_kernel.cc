@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -78,30 +79,30 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   }
 }
 
-const UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
+const ml_cpu_compute::UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
   switch (static_cast<DataType>(element_type)) {
   case DataType::FLOAT:
-    return DefaultAbsFloat32ExecutionTuning();
+    return ml_cpu_compute::DefaultAbsFloat32ExecutionTuning();
   case DataType::DOUBLE:
-    return kDefaultAbs64ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbs64ExecutionTuning;
   case DataType::FLOAT16:
   case DataType::BFLOAT16:
-    return kDefaultAbs16ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbs16ExecutionTuning;
   case DataType::INT8:
-    return kDefaultAbsInt8ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbsInt8ExecutionTuning;
   case DataType::INT16:
-    return kDefaultAbsInt16ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbsInt16ExecutionTuning;
   case DataType::INT32:
-    return kDefaultAbsInt32ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbsInt32ExecutionTuning;
   case DataType::INT64:
-    return kDefaultAbsInt64ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbsInt64ExecutionTuning;
   default:
-    return kDefaultAbs32ExecutionTuning;
+    return ml_cpu_compute::kDefaultAbs32ExecutionTuning;
   }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
-  const UnaryExecutionTuning &defaults = DefaultTuning(element_type);
+  const ml_cpu_compute::UnaryExecutionTuning &defaults = DefaultTuning(element_type);
   return {MakeTuningKey(element_type),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
@@ -115,7 +116,7 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
 } // namespace
 
 struct AbsKernel::Tuning {
-  UnaryExecutionTuning value;
+  ml_cpu_compute::UnaryExecutionTuning value;
 };
 
 AbsKernel::AbsKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
@@ -156,9 +157,10 @@ void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
-  const std::size_t y_n_bytes =
-      CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Abs input")),
-                      x.element_size(), "Abs", "output byte size");
+  const RuntimeExecutionScope execution_scope;
+  const std::size_t y_n_bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Abs input")), x.element_size(),
+      "Abs", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
                            : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
   (*this)(x, y);
@@ -166,6 +168,7 @@ rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   if (output.data_type != x.data_type) {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output dtype must match input dtype.");
   }
@@ -176,38 +179,44 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output buffer size mismatch.");
   }
   const std::int64_t n = x.element_count();
-  const UnaryExecutionTuning &tuning =
+  const ml_cpu_compute::UnaryExecutionTuning &tuning =
       tuning_configured_ ? tuning_->value : DefaultTuning(x.data_type);
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    AbsFloat32WithTuning(x.AsFloat(), output.AsFloat(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsFloat32WithTuning(x.AsFloat(), output.AsFloat(), static_cast<std::size_t>(n),
+                                         tuning);
     return;
   case DataType::DOUBLE:
-    AbsFloat64WithTuning(x.AsDouble(), output.AsDouble(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsFloat64WithTuning(x.AsDouble(), output.AsDouble(),
+                                         static_cast<std::size_t>(n), tuning);
     return;
   case DataType::INT32:
-    AbsInt32WithTuning(x.AsInt32(), output.AsInt32(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsInt32WithTuning(x.AsInt32(), output.AsInt32(), static_cast<std::size_t>(n),
+                                       tuning);
     return;
   case DataType::INT64:
-    AbsInt64WithTuning(x.AsInt64(), output.AsInt64(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsInt64WithTuning(x.AsInt64(), output.AsInt64(), static_cast<std::size_t>(n),
+                                       tuning);
     return;
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
     return;
   }
   case DataType::BFLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
     return;
   }
   case DataType::INT8:
-    AbsInt8WithTuning(x.AsInt8(), output.AsInt8(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsInt8WithTuning(x.AsInt8(), output.AsInt8(), static_cast<std::size_t>(n),
+                                      tuning);
     return;
   case DataType::INT16: {
-    AbsInt16WithTuning(x.AsInt16(), output.AsInt16(), static_cast<std::size_t>(n), tuning);
+    ml_cpu_compute::AbsInt16WithTuning(x.AsInt16(), output.AsInt16(), static_cast<std::size_t>(n),
+                                       tuning);
     return;
   }
   default:
@@ -218,6 +227,7 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void AbsKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

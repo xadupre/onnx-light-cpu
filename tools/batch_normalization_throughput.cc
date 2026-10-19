@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/simd_level.h"
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 
 #include <algorithm>
@@ -99,8 +99,8 @@ int main(int argc, char **argv) {
     samples << "dtype,batch,channels,spatial,mode,sample,seconds\n";
   }
   std::fprintf(stderr, "detected_simd_level=%d effective_threads=%lld\n",
-               static_cast<int>(onnx_light_cpu::DetectSimdLevel()),
-               static_cast<long long>(onnx_light_cpu::ExecutionThreadCount()));
+               static_cast<int>(ml_cpu_compute::DetectSimdLevel()),
+               static_cast<long long>(ml_cpu_compute::ExecutionThreadCount()));
   std::puts("dtype,batch,channels,spatial,mode,median_s,p25_s,p75_s");
   for (const auto &[batch, channels, spatial] :
        {std::tuple<std::int64_t, std::int64_t, std::int64_t>{1, 1, 1},

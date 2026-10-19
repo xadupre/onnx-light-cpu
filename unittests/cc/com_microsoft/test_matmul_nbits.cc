@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int8_tile.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "ml_cpu_compute/com_microsoft/matmul_nbits.h"
+#include "ml_cpu_compute/com_microsoft/matmul_nbits_int8_tile.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <gtest/gtest.h>
 
@@ -16,21 +16,21 @@
 #include <thread>
 #include <vector>
 
-namespace onnx_light_cpu {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-void MatMulNBitsInt8TileAvx2(const MatMulNBitsInt8Tile &tile);
+namespace ml_cpu_compute {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+void MatMulNBitsInt8TileAvx2(const ml_cpu_compute::MatMulNBitsInt8Tile &tile);
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-void MatMulNBitsInt8TileAvxVnni(const MatMulNBitsInt8Tile &tile);
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+void MatMulNBitsInt8TileAvxVnni(const ml_cpu_compute::MatMulNBitsInt8Tile &tile);
 #endif
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-void MatMulNBitsInt8TileAvx512Vnni(const MatMulNBitsInt8Tile &tile);
+#if defined(ML_CPU_COMPUTE_HAVE_AVX512VNNI) && defined(ML_CPU_COMPUTE_HAVE_AVX512BW)
+void MatMulNBitsInt8TileAvx512Vnni(const ml_cpu_compute::MatMulNBitsInt8Tile &tile);
 #endif
-} // namespace onnx_light_cpu
+} // namespace ml_cpu_compute
 
 namespace {
 
-using namespace onnx_light_cpu;
+using namespace ml_cpu_compute;
 
 template <typename Storage, typename Encode, typename Decode>
 void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode,
@@ -88,13 +88,14 @@ void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode,
         for (bool with_bias : {false, true}) {
           output.back() = encode(-42);
           for (int repeat = 0; repeat < (block_size == 32 ? 2 : 1); ++repeat) {
-            MatMulNBits(a.data(), packed.data(), scales.data(), with_bias ? bias.data() : nullptr,
-                        output.data(), type, m, k, n, bits, block_size,
-                        kDefaultMatMulNBitsExecutionTuning,
-                        zero_mode == 1   ? static_cast<const void *>(packed_zeros.data())
-                        : zero_mode == 2 ? static_cast<const void *>(float_zeros.data())
-                                         : nullptr,
-                        zero_mode != 2);
+            ml_cpu_compute::MatMulNBits(
+                a.data(), packed.data(), scales.data(), with_bias ? bias.data() : nullptr,
+                output.data(), type, m, k, n, bits, block_size,
+                ml_cpu_compute::kDefaultMatMulNBitsExecutionTuning,
+                zero_mode == 1   ? static_cast<const void *>(packed_zeros.data())
+                : zero_mode == 2 ? static_cast<const void *>(float_zeros.data())
+                                 : nullptr,
+                zero_mode != 2);
             for (std::size_t r = 0; r < m; ++r) {
               for (std::size_t c = 0; c < n; ++c) {
                 float expected = with_bias ? decode(bias[c]) : 0;
@@ -124,10 +125,11 @@ void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode,
 TEST(MatMulNBits, PanelTailsAndRepeatedPackedConstantsAllTypes) {
   for (std::size_t bits : {2u, 4u, 8u}) {
     CheckPanels<float>(DataType::FLOAT, bits, [](float x) { return x; }, [](float x) { return x; });
-    CheckPanels<std::uint16_t>(DataType::FLOAT16, bits, detail::FloatToFloat16Bits,
-                               detail::Float16BitsToFloat);
-    CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits, detail::FloatToBFloat16Bits,
-                               detail::Bfloat16BitsToFloat);
+    CheckPanels<std::uint16_t>(DataType::FLOAT16, bits, ml_cpu_compute::detail::FloatToFloat16Bits,
+                               ml_cpu_compute::detail::Float16BitsToFloat);
+    CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits,
+                               ml_cpu_compute::detail::FloatToBFloat16Bits,
+                               ml_cpu_compute::detail::Bfloat16BitsToFloat);
   }
 }
 
@@ -139,10 +141,12 @@ TEST(MatMulNBits, Non32GroupsAndExplicitZeroPointsAllTypes) {
         CheckPanels<float>(
             DataType::FLOAT, bits, [](float x) { return x; }, [](float x) { return x; }, block_size,
             zero_mode);
-        CheckPanels<std::uint16_t>(DataType::FLOAT16, bits, detail::FloatToFloat16Bits,
-                                   detail::Float16BitsToFloat, block_size, zero_mode);
-        CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits, detail::FloatToBFloat16Bits,
-                                   detail::Bfloat16BitsToFloat, block_size, zero_mode);
+        CheckPanels<std::uint16_t>(
+            DataType::FLOAT16, bits, ml_cpu_compute::detail::FloatToFloat16Bits,
+            ml_cpu_compute::detail::Float16BitsToFloat, block_size, zero_mode);
+        CheckPanels<std::uint16_t>(
+            DataType::BFLOAT16, bits, ml_cpu_compute::detail::FloatToBFloat16Bits,
+            ml_cpu_compute::detail::Bfloat16BitsToFloat, block_size, zero_mode);
       }
     }
   }
@@ -169,8 +173,8 @@ TEST(MatMulNBits, EncodedInt3DirectAffineMatchesReferenceAtByteAndBlockBoundarie
   }
   for (bool asymmetric : {false, true}) {
     const std::uint8_t *zeros = asymmetric ? zero_points.data() : nullptr;
-    MatMulNBitsEncodedInt3(a.data(), packed.data(), scales.data(), zeros, nullptr, output.data(),
-                           DataType::FLOAT, 1, k, n);
+    ml_cpu_compute::MatMulNBitsEncodedInt3(a.data(), packed.data(), scales.data(), zeros, nullptr,
+                                           output.data(), DataType::FLOAT, 1, k, n);
     for (std::size_t column = 0; column < n; ++column) {
       float expected = 0;
       for (std::size_t p = 0; p < k; ++p) {
@@ -206,8 +210,8 @@ TEST(MatMulNBits, WidePanelRowBoundariesMatchReference) {
         packed[i] = static_cast<std::uint8_t>(i * 37 + i / 11);
       }
 
-      MatMulNBits(a.data(), packed.data(), scales.data(), nullptr, output.data(), DataType::FLOAT,
-                  rows, k, n, bits, 32);
+      ml_cpu_compute::MatMulNBits(a.data(), packed.data(), scales.data(), nullptr, output.data(),
+                                  DataType::FLOAT, rows, k, n, bits, 32);
 
       for (std::size_t row = 0; row < rows; ++row) {
         for (std::size_t column = 0; column < n; ++column) {
@@ -231,7 +235,8 @@ TEST(MatMulNBits, WidePanelRowBoundariesMatchReference) {
 struct InlineExecutor {
   int dispatches = 0;
   std::int64_t blocks = 0;
-  static void Run(void *context, std::int64_t count, void *task_context, ExecutionBlockFn task) {
+  static void Run(void *context, std::int64_t count, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -244,7 +249,8 @@ struct InlineExecutor {
 struct ConcurrentExecutor {
   int dispatches = 0;
   std::int64_t blocks = 0;
-  static void Run(void *context, std::int64_t count, void *task_context, ExecutionBlockFn task) {
+  static void Run(void *context, std::int64_t count, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ConcurrentExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -281,17 +287,17 @@ TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
     for (std::size_t i = 0; i < n; ++i) {
       bias[i] = static_cast<float>(i % 5) / 16;
     }
-    PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(),
-                        k, n);
+    ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                        packed_scales.data(), k, n);
     for (std::int64_t threads : {1, 2, 4, 8}) {
       for (bool with_bias : {false, true}) {
         ConcurrentExecutor executor;
-        ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
+        ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
         {
-          ExecutionExecutorScope scope(&view);
-          MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
-                                 with_bias ? bias.data() : nullptr, y.data(), rows, k, n,
-                                 {1, 16, threads});
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ml_cpu_compute::MatMulNBitsInt8Float32(
+              a.data(), packed.data(), sums.data(), packed_scales.data(),
+              with_bias ? bias.data() : nullptr, y.data(), rows, k, n, {1, 16, threads});
         }
         EXPECT_EQ(executor.dispatches > 0, threads > 1);
         if (threads > 1) {
@@ -349,24 +355,24 @@ TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
     for (std::size_t i = 0; i < n; ++i) {
       bias[i] = static_cast<float>(i % 5) / 16;
     }
-    PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(), packed_scales.data(),
-                        k, n);
+    ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
+                                        packed_scales.data(), k, n);
     const auto original_weights = weights;
     for (std::size_t rows : {1u, 2u, 4u}) {
       std::vector<float> a(rows * k), y(rows * n, -42.0f);
       for (std::size_t i = 0; i < a.size(); ++i) {
         a[i] = static_cast<float>(static_cast<int>(i * 17 % 127) - 63) / 63.0f;
       }
-      const auto scratch_size = MatMulNBitsInt8WorkspaceElements(rows, k, n);
+      const auto scratch_size = ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, k, n);
       EXPECT_EQ(scratch_size * sizeof(double), rows * (k + blocks * sizeof(double)));
       std::vector<double> scratch(scratch_size + 1, -42.0);
       ConcurrentExecutor executor;
-      ExecutionExecutorView view{&executor, 4, &ConcurrentExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &ConcurrentExecutor::Run};
       for (int repeat = 0; repeat < 2; ++repeat) {
-        ExecutionExecutorScope scope(&view);
-        MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(),
-                               bias.data(), y.data(), rows, k, n, {1, 1, 4},
-                               {scratch.data(), scratch_size});
+        ml_cpu_compute::ExecutionExecutorScope scope(&view);
+        ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
+                                               packed_scales.data(), bias.data(), y.data(), rows, k,
+                                               n, {1, 1, 4}, {scratch.data(), scratch_size});
         for (std::size_t row = 0; row < rows; ++row) {
           for (std::size_t col : {0u, 7u, 8u, 12u, 127u, 511u, 1023u, 1375u, 31999u}) {
             if (col >= n) {
@@ -402,10 +408,10 @@ TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
         EXPECT_LE(executor.blocks, 4);
         const auto dispatches = executor.dispatches;
         {
-          ExecutionExecutorScope scope(&view);
-          MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(),
-                                 bias.data(), y.data(), rows, k, n, {rows * n + 1, 1, 4},
-                                 {scratch.data(), scratch_size});
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ml_cpu_compute::MatMulNBitsInt8Float32(
+              a.data(), weights.data(), sums.data(), packed_scales.data(), bias.data(), y.data(),
+              rows, k, n, {rows * n + 1, 1, 4}, {scratch.data(), scratch_size});
         }
         EXPECT_EQ(executor.dispatches, dispatches);
       }
@@ -424,14 +430,15 @@ TEST(MatMulNBits, PreparedInt8DecodeHonorsActualOutputThresholdWithColumnTails) 
           y(rows * n + 1, -42.0f);
       std::vector<std::uint8_t> b(n * k, 129), weights(slots * 32);
       std::vector<std::int32_t> sums(slots);
-      PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
-                          packed_scales.data(), k, n);
+      ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
+                                          packed_scales.data(), k, n);
       InlineExecutor executor;
-      ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-      ExecutionExecutorScope scope(&view);
+      ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
       const auto run = [&](std::size_t threshold) {
-        MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(), nullptr,
-                               y.data(), rows, k, n, {threshold, 1, 4});
+        ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
+                                               packed_scales.data(), nullptr, y.data(), rows, k, n,
+                                               {threshold, 1, 4});
         for (std::size_t index = 0; index < rows * n; ++index) {
           EXPECT_FLOAT_EQ(y[index], 64.0f);
         }
@@ -444,7 +451,7 @@ TEST(MatMulNBits, PreparedInt8DecodeHonorsActualOutputThresholdWithColumnTails) 
       EXPECT_GT(executor.blocks, 1);
       EXPECT_LE(executor.blocks, 4);
       {
-        detail::ExecutionRegionScope nested;
+        ml_cpu_compute::detail::ExecutionRegionScope nested;
         run(rows * n);
       }
       EXPECT_EQ(executor.dispatches, 1);
@@ -454,8 +461,8 @@ TEST(MatMulNBits, PreparedInt8DecodeHonorsActualOutputThresholdWithColumnTails) 
 
 TEST(MatMulNBits, PreparedInt8ZeroReductionReturnsBiasWithoutDispatch) {
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   for (std::size_t rows : {1u, 2u, 4u, 5u}) {
     for (std::size_t n : {1u, 13u, 512u}) {
       SCOPED_TRACE(::testing::Message() << rows << ',' << n);
@@ -463,10 +470,11 @@ TEST(MatMulNBits, PreparedInt8ZeroReductionReturnsBiasWithoutDispatch) {
       for (std::size_t column = 0; column < n; ++column) {
         bias[column] = static_cast<float>(column) - 7.0f;
       }
-      EXPECT_EQ(MatMulNBitsInt8WorkspaceElements(rows, 0, n), 0U);
+      EXPECT_EQ(ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, 0, n), 0U);
       for (bool with_bias : {false, true}) {
-        MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr,
-                               with_bias ? bias.data() : nullptr, y.data(), rows, 0, n);
+        ml_cpu_compute::MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr,
+                                               with_bias ? bias.data() : nullptr, y.data(), rows, 0,
+                                               n);
         for (std::size_t index = 0; index < rows * n; ++index) {
           EXPECT_FLOAT_EQ(y[index], with_bias ? bias[index % n] : 0.0f);
         }
@@ -481,15 +489,16 @@ TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {
   std::vector<float> a(9 * 32, 0.5f), scales(8, 0.25f), y(9 * 8);
   std::vector<std::uint8_t> b(8 * 32, 129), packed(8 * 32);
   std::vector<std::int32_t> sums(8);
-  PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), scales.data(), 32, 8);
+  ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                      scales.data(), 32, 8);
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  ExecutionExecutorScope scope(&view);
-  MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(), nullptr, y.data(), 1,
-                         32, 8, {1, 16, 4});
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(),
+                                         nullptr, y.data(), 1, 32, 8, {1, 16, 4});
   EXPECT_EQ(executor.dispatches, 0);
-  MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(), nullptr, y.data(), 9,
-                         32, 8, {1, 16, 4});
+  ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(),
+                                         nullptr, y.data(), 9, 32, 8, {1, 16, 4});
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
   for (float value : y) {
@@ -497,16 +506,16 @@ TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {
   }
   std::fill(y.begin(), y.end(), -1.0f);
   {
-    detail::ExecutionRegionScope nested;
-    MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(), nullptr, y.data(),
-                           9, 32, 8, {1, 16, 4});
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(),
+                                           nullptr, y.data(), 9, 32, 8, {1, 16, 4});
   }
   EXPECT_EQ(executor.dispatches, 1);
   for (float value : y) {
     EXPECT_FLOAT_EQ(value, 4.0f);
   }
-  MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 32, 8,
-                         {1, 16, 4});
+  ml_cpu_compute::MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0,
+                                         32, 8, {1, 16, 4});
   EXPECT_EQ(executor.dispatches, 1);
 }
 
@@ -526,8 +535,8 @@ TEST(MatMulNBits, PreparedInt8PreservesExtremeScaleProducts) {
         y(rows * n, -1.0f);
     std::vector<std::uint8_t> b(n * k, test.weight), packed(2 * 256);
     std::vector<std::int32_t> sums(16);
-    PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(),
-                        k, n);
+    ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                        packed_scales.data(), k, n);
     const float expected =
         static_cast<float>(static_cast<double>(test.activation) *
                            (static_cast<int>(test.weight) - 128) * test.scale * k);
@@ -536,10 +545,11 @@ TEST(MatMulNBits, PreparedInt8PreservesExtremeScaleProducts) {
     }
     for (std::int64_t threads : {1, 4}) {
       ConcurrentExecutor executor;
-      ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
-      ExecutionExecutorScope scope(&view);
-      MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(), nullptr,
-                             y.data(), rows, k, n, {1, 16, threads});
+      ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
+      ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(),
+                                             packed_scales.data(), nullptr, y.data(), rows, k, n,
+                                             {1, 16, threads});
       for (float value : y) {
         EXPECT_EQ(value, expected);
       }
@@ -558,10 +568,10 @@ TEST(MatMulNBits, PreparedInt8HandlesNonFiniteAndTinyActivations) {
   a[k] = std::numeric_limits<float>::quiet_NaN();
   std::fill_n(a.data() + 2 * k, k, 0.5f);
   a[2 * k] = std::numeric_limits<float>::infinity();
-  PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(), k,
-                      n);
-  MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(), nullptr,
-                         y.data(), 3, k, n, {1, 16, 2});
+  ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                      packed_scales.data(), k, n);
+  ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
+                                         nullptr, y.data(), 3, k, n, {1, 16, 2});
   for (std::size_t column = 0; column < n; ++column) {
     EXPECT_NEAR(y[column], 32e-10f, 1e-10f);
     EXPECT_TRUE(std::isnan(y[n + column]));
@@ -587,16 +597,17 @@ TEST(MatMulNBits, PreparedInt8PreservesNonFiniteScalesAndBiasedOverflow) {
           b[column * k] = 128;
         }
       }
-      MatMulNBits(a.data(), b.data(), scales.data(), bias.data(), expected.data(), DataType::FLOAT,
-                  rows, k, n, 8, 32);
-      PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(),
-                          k, n);
+      ml_cpu_compute::MatMulNBits(a.data(), b.data(), scales.data(), bias.data(), expected.data(),
+                                  DataType::FLOAT, rows, k, n, 8, 32);
+      ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                          packed_scales.data(), k, n);
       for (std::int64_t threads : {1, 4}) {
         ConcurrentExecutor executor;
-        ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
-        ExecutionExecutorScope scope(&view);
-        MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
-                               bias.data(), y.data(), rows, k, n, {1, 16, threads});
+        ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
+        ml_cpu_compute::ExecutionExecutorScope scope(&view);
+        ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(),
+                                               packed_scales.data(), bias.data(), y.data(), rows, k,
+                                               n, {1, 16, threads});
         for (std::size_t i = 0; i < y.size(); ++i) {
           if (std::isnan(expected[i])) {
             EXPECT_TRUE(std::isnan(y[i]));
@@ -613,20 +624,20 @@ TEST(MatMulNBits, PreparedInt8PreservesNonFiniteScalesAndBiasedOverflow) {
 }
 
 TEST(MatMulNBits, PreparedInt8FullRangeAcrossEveryAvailableIsa) {
-  using TileFn = void (*)(const MatMulNBitsInt8Tile &);
+  using TileFn = void (*)(const ml_cpu_compute::MatMulNBitsInt8Tile &);
   std::vector<TileFn> kernels;
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
     kernels.push_back(MatMulNBitsInt8TileAvx2);
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-  if (CpuSupportsAvxVnni()) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVXVNNI
+  if (ml_cpu_compute::CpuSupportsAvxVnni()) {
     kernels.push_back(MatMulNBitsInt8TileAvxVnni);
   }
 #endif
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-  if (CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
+#if defined(ML_CPU_COMPUTE_HAVE_AVX512VNNI) && defined(ML_CPU_COMPUTE_HAVE_AVX512BW)
+  if (ml_cpu_compute::CpuSupportsAvx512Vnni() && ml_cpu_compute::CpuSupportsAvx512BW()) {
     kernels.push_back(MatMulNBitsInt8TileAvx512Vnni);
   }
 #endif
@@ -647,8 +658,8 @@ TEST(MatMulNBits, PreparedInt8FullRangeAcrossEveryAvailableIsa) {
     for (std::size_t i = 0; i < b.size(); ++i) {
       b[i] = i % 4 < 2 ? 255 : 0;
     }
-    PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(),
-                        k, n);
+    ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                        packed_scales.data(), k, n);
     for (const auto kernel : kernels) {
       for (std::size_t rows = 1; rows <= 4; ++rows) {
         for (std::size_t group = 0; group < 2; ++group) {
@@ -678,34 +689,36 @@ TEST(MatMulNBits, PreparedInt8WorkspaceIsCheckedBeforeDispatch) {
   std::vector<float> a(rows * k, 0.5f), scales(n, 0.25f), packed_scales(16), y(rows * n);
   std::vector<std::uint8_t> b(n * k, 129), packed(512);
   std::vector<std::int32_t> sums(16);
-  PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(), k,
-                      n);
+  ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(),
+                                      packed_scales.data(), k, n);
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  ExecutionExecutorScope scope(&view);
-  const MatMulNBitsExecutionTuning tuning{1, 16, 4};
-  const auto count = MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  const ml_cpu_compute::MatMulNBitsExecutionTuning tuning{1, 16, 4};
+  const auto count = ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning);
   EXPECT_EQ(count * sizeof(double), 4 * 5 * k);
   std::vector<double> workspace(count + 1, -42.0);
-  MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(), nullptr,
-                         y.data(), rows, k, n, tuning, {workspace.data(), count});
+  ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
+                                         nullptr, y.data(), rows, k, n, tuning,
+                                         {workspace.data(), count});
   EXPECT_EQ(workspace.back(), -42.0);
   for (float value : y) {
     EXPECT_EQ(value, 4.0f);
   }
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_THROW(MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
-                                      nullptr, y.data(), rows, k, n, tuning,
-                                      {workspace.data(), count - 1}),
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(),
+                                                      packed_scales.data(), nullptr, y.data(), rows,
+                                                      k, n, tuning, {workspace.data(), count - 1}),
                std::invalid_argument);
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_THROW(MatMulNBitsInt8WorkspaceElements(rows, k + 1, n, tuning), std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, k + 1, n, tuning),
+               std::invalid_argument);
   if constexpr (sizeof(std::size_t) >= sizeof(std::int64_t)) {
-    EXPECT_THROW(
-        MatMulNBitsInt8WorkspaceElements(std::numeric_limits<std::size_t>::max(), k, n, tuning),
-        std::invalid_argument);
+    EXPECT_THROW(ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(
+                     std::numeric_limits<std::size_t>::max(), k, n, tuning),
+                 std::invalid_argument);
   }
-  EXPECT_EQ(MatMulNBitsInt8WorkspaceElements(0, k, n, tuning), 0U);
+  EXPECT_EQ(ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(0, k, n, tuning), 0U);
 }
 
 TEST(MatMulNBits, PanelSchedulingAndNestedSuppression) {
@@ -714,31 +727,37 @@ TEST(MatMulNBits, PanelSchedulingAndNestedSuppression) {
   const std::vector<std::uint8_t> b(513 * 32, 0x99);
   std::vector<float> y(9 * 513);
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  ExecutionExecutorScope scope(&view);
-  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 1, 33, 2, 32);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 1, 33, 2,
+                                     32);
   EXPECT_EQ(executor.dispatches, 0);
-  MatMulNBitsExecutionTuning tuning;
+  ml_cpu_compute::MatMulNBitsExecutionTuning tuning;
   tuning.parallel_threshold_outputs = 513;
-  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33, 64, 32, tuning);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33,
+                                     64, 32, tuning);
   EXPECT_EQ(executor.dispatches, 0);
   tuning.parallel_threshold_outputs = 512;
-  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33, 64, 32, tuning);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33,
+                                     64, 32, tuning);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 2);
   executor = {};
   tuning.parallel_threshold_outputs = 577;
-  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33, 64, 32, tuning);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33,
+                                     64, 32, tuning);
   EXPECT_EQ(executor.dispatches, 0);
-  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33, 513, 32);
+  ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33,
+                                     513, 32);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
   for (float value : y) {
     EXPECT_EQ(value, 16.5f);
   }
   {
-    detail::ExecutionRegionScope nested;
-    MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33, 513, 32);
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
+    ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33,
+                                       513, 32);
   }
   EXPECT_EQ(executor.dispatches, 1);
 }
@@ -750,7 +769,8 @@ TEST(MatMulNBits, PanelSpecialValuesAndEmptyOutputs) {
        {std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::quiet_NaN()}) {
     a[32] = value;
-    MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 1, 33, 33, 32);
+    ml_cpu_compute::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 1, 33,
+                                       33, 32);
     for (float actual : y) {
       if (std::isnan(value)) {
         EXPECT_TRUE(std::isnan(actual));
@@ -759,31 +779,38 @@ TEST(MatMulNBits, PanelSpecialValuesAndEmptyOutputs) {
       }
     }
   }
-  MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, 0, 32);
-  EXPECT_NO_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 64));
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 24),
-               std::invalid_argument);
+  ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, 0, 32);
+  EXPECT_NO_THROW(
+      ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 64));
+  EXPECT_THROW(
+      ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 24),
+      std::invalid_argument);
 }
 
 TEST(MatMulNBits, RejectsOverflowBeforeDispatchOrBufferAccess) {
   const auto maximum = std::numeric_limits<std::size_t>::max();
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, maximum, 1, 32),
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1,
+                                                  maximum, 1, 32),
                std::invalid_argument);
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 33, 1, 32),
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                  maximum, 33, 1, 32),
                std::invalid_argument);
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, maximum, 32),
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1,
+                                                  33, maximum, 32),
                std::invalid_argument);
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 0, 2, 32),
+  EXPECT_THROW(ml_cpu_compute::MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                  maximum, 0, 2, 32),
                std::invalid_argument);
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   for (DataType type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
     SCOPED_TRACE(static_cast<int>(type));
     const std::size_t width = type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
     const auto check = [&](std::size_t rows, std::size_t k, std::size_t n) {
-      EXPECT_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                          type, rows, k, n, {1, 1, 4}),
+      EXPECT_THROW(ml_cpu_compute::MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr,
+                                                          nullptr, nullptr, type, rows, k, n,
+                                                          {1, 1, 4}),
                    std::invalid_argument);
     };
     check(maximum / 33 + 1, 33, 1);
@@ -792,10 +819,10 @@ TEST(MatMulNBits, RejectsOverflowBeforeDispatchOrBufferAccess) {
     check(maximum / width + 1, 0, 1);
     check(maximum, 0, 2);
     check(maximum, 0, 1);
-    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                           type, 0, maximum, maximum));
-    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                           type, maximum, maximum, 0));
+    EXPECT_NO_THROW(ml_cpu_compute::MatMulNBitsEncodedInt3(
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, type, 0, maximum, maximum));
+    EXPECT_NO_THROW(ml_cpu_compute::MatMulNBitsEncodedInt3(
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, type, maximum, maximum, 0));
   }
   EXPECT_EQ(executor.dispatches, 0);
 }

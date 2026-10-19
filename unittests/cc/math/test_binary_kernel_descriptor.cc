@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
-#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
-#include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/math/binary/binary_arithmetic.h"
+#include "ml_cpu_compute/math/binary/binary_comparison.h"
+#include "ml_cpu_compute/math/binary/binary_descriptor.h"
+#include "ml_cpu_compute/math/binary/binary_manifest.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -21,31 +21,31 @@
 
 namespace {
 
-using BinaryDataType = onnx_light_cpu::DataType;
-using onnx_light_cpu::BinaryComparisonKind;
-using onnx_light_cpu::BinaryKernelDescriptor;
-using onnx_light_cpu::BinaryOperator;
-using onnx_light_cpu::GetBinaryManifest;
-using onnx_light_cpu::GetBinaryManifestEntry;
+using BinaryDataType = ml_cpu_compute::DataType;
+using ml_cpu_compute::BinaryComparisonKind;
+using ml_cpu_compute::BinaryOperationDescriptor;
+using ml_cpu_compute::BinaryOperator;
+using ml_cpu_compute::GetBinaryManifest;
+using ml_cpu_compute::GetBinaryManifestEntry;
 
-bool ExpectedComparison(float left, float right, BinaryComparisonKind kind) {
+bool ExpectedComparison(float left, float right, ml_cpu_compute::BinaryComparisonKind kind) {
   switch (kind) {
-  case BinaryComparisonKind::kEqual:
+  case ml_cpu_compute::BinaryComparisonKind::kEqual:
     return left == right;
-  case BinaryComparisonKind::kGreater:
+  case ml_cpu_compute::BinaryComparisonKind::kGreater:
     return left > right;
-  case BinaryComparisonKind::kGreaterOrEqual:
+  case ml_cpu_compute::BinaryComparisonKind::kGreaterOrEqual:
     return left >= right;
-  case BinaryComparisonKind::kLess:
+  case ml_cpu_compute::BinaryComparisonKind::kLess:
     return left < right;
-  case BinaryComparisonKind::kLessOrEqual:
+  case ml_cpu_compute::BinaryComparisonKind::kLessOrEqual:
     return left <= right;
   }
   return false;
 }
 
 TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
-  const auto manifest = GetBinaryManifest();
+  const auto manifest = ml_cpu_compute::GetBinaryManifest();
   ASSERT_EQ(manifest.size(), 19u);
   std::vector<std::string> names;
   for (const auto &entry : manifest) {
@@ -58,47 +58,50 @@ TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
   }
   std::sort(names.begin(), names.end());
   EXPECT_EQ(std::unique(names.begin(), names.end()), names.end());
-  EXPECT_EQ(GetBinaryManifestEntry("Add").op, BinaryOperator::kAdd);
-  EXPECT_EQ(GetBinaryManifestEntry("PRelu").op, BinaryOperator::kPRelu);
+  EXPECT_EQ(ml_cpu_compute::GetBinaryManifestEntry("Add").op, ml_cpu_compute::BinaryOperator::kAdd);
+  EXPECT_EQ(ml_cpu_compute::GetBinaryManifestEntry("PRelu").op,
+            ml_cpu_compute::BinaryOperator::kPRelu);
 }
 
-TEST(BinaryKernelDescriptor, ValidatesOpsetAndAttributes) {
-  EXPECT_THROW((BinaryKernelDescriptor{"Add", 6, {}}), std::invalid_argument);
-  EXPECT_NO_THROW((BinaryKernelDescriptor{"Add", 7, {}}));
-  EXPECT_NO_THROW((BinaryKernelDescriptor{"Pow", 14, {}}));
-  EXPECT_NO_THROW((BinaryKernelDescriptor{"GreaterOrEqual", 13, {}}));
-  EXPECT_THROW((BinaryKernelDescriptor{"Equal", 7, {}}.ResolveOutputType(BinaryDataType::STRING,
-                                                                         BinaryDataType::STRING)),
+TEST(BinaryOperationDescriptor, ValidatesOpsetAndAttributes) {
+  EXPECT_THROW((ml_cpu_compute::BinaryOperationDescriptor{"Add", 6, {}}), std::invalid_argument);
+  EXPECT_NO_THROW((ml_cpu_compute::BinaryOperationDescriptor{"Add", 7, {}}));
+  EXPECT_NO_THROW((ml_cpu_compute::BinaryOperationDescriptor{"Pow", 14, {}}));
+  EXPECT_NO_THROW((ml_cpu_compute::BinaryOperationDescriptor{"GreaterOrEqual", 13, {}}));
+  EXPECT_THROW((ml_cpu_compute::BinaryOperationDescriptor{"Equal", 7, {}}.ResolveOutputType(
+                   BinaryDataType::STRING, BinaryDataType::STRING)),
                std::invalid_argument);
-  EXPECT_EQ(BinaryKernelDescriptor("Equal", 19, {})
+  EXPECT_EQ(ml_cpu_compute::BinaryOperationDescriptor("Equal", 19, {})
                 .ResolveOutputType(BinaryDataType::STRING, BinaryDataType::STRING),
             BinaryDataType::BOOL);
 
-  BinaryKernelDescriptor::Attributes invalid_mod;
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes invalid_mod;
   invalid_mod.mod_fmod = 2;
-  EXPECT_THROW((BinaryKernelDescriptor{"Mod", 13, invalid_mod}), std::invalid_argument);
+  EXPECT_THROW((ml_cpu_compute::BinaryOperationDescriptor{"Mod", 13, invalid_mod}),
+               std::invalid_argument);
 
-  BinaryKernelDescriptor::Attributes right_shift;
-  right_shift.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
-  EXPECT_NO_THROW((BinaryKernelDescriptor{"BitShift", 11, right_shift}));
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes right_shift;
+  right_shift.bitshift_direction =
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight;
+  EXPECT_NO_THROW((ml_cpu_compute::BinaryOperationDescriptor{"BitShift", 11, right_shift}));
 }
 
-TEST(BinaryKernelDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
-  BinaryKernelDescriptor::Attributes mod_int;
+TEST(BinaryOperationDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes mod_int;
   mod_int.mod_fmod = 0;
-  const BinaryKernelDescriptor int_mod("Mod", 13, mod_int);
+  const ml_cpu_compute::BinaryOperationDescriptor int_mod("Mod", 13, mod_int);
   EXPECT_EQ(int_mod.ResolveOutputType(BinaryDataType::INT32, BinaryDataType::INT32),
             BinaryDataType::INT32);
   EXPECT_THROW((int_mod.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT)),
                std::invalid_argument);
 
-  BinaryKernelDescriptor::Attributes mod_float;
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes mod_float;
   mod_float.mod_fmod = 1;
-  const BinaryKernelDescriptor float_mod("Mod", 13, mod_float);
+  const ml_cpu_compute::BinaryOperationDescriptor float_mod("Mod", 13, mod_float);
   EXPECT_EQ(float_mod.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
 
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
   EXPECT_EQ(
@@ -114,30 +117,31 @@ TEST(BinaryKernelDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
   EXPECT_THROW((pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::FLOAT16)),
                std::invalid_argument);
 
-  const BinaryKernelDescriptor prelu("PRelu", 16, {});
+  const ml_cpu_compute::BinaryOperationDescriptor prelu("PRelu", 16, {});
   EXPECT_THROW((prelu.ResolveOutputType(BinaryDataType::UINT16, BinaryDataType::UINT16)),
                std::invalid_argument);
 }
 
-TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
-  const BinaryKernelDescriptor first("Add", 14, {});
-  const BinaryKernelDescriptor second("Add", 14, {});
+TEST(BinaryOperationDescriptor, AssignsStableDistinctCacheIdentities) {
+  const ml_cpu_compute::BinaryOperationDescriptor first("Add", 14, {});
+  const ml_cpu_compute::BinaryOperationDescriptor second("Add", 14, {});
   EXPECT_NE(first.cache_identity(), 0u);
   EXPECT_NE(second.cache_identity(), 0u);
   EXPECT_NE(first.cache_identity(), second.cache_identity());
 }
 
-TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
-  using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
+TEST(BinaryOperationDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
+  using BulkFunctions = const ml_cpu_compute::BinaryArithmeticBulkFunctions &(*)();
   const std::array<std::pair<std::string_view, BulkFunctions>, 5> operations{{
-      {"Add", &onnx_light_cpu::BinaryAddFloat32BulkFunctions},
-      {"Sub", &onnx_light_cpu::BinarySubFloat32BulkFunctions},
-      {"Mul", &onnx_light_cpu::BinaryMulFloat32BulkFunctions},
-      {"Div", &onnx_light_cpu::BinaryDivFloat32BulkFunctions},
-      {"PRelu", &onnx_light_cpu::BinaryPReluFloat32BulkFunctions},
+      {"Add", &ml_cpu_compute::BinaryAddFloat32BulkFunctions},
+      {"Sub", &ml_cpu_compute::BinarySubFloat32BulkFunctions},
+      {"Mul", &ml_cpu_compute::BinaryMulFloat32BulkFunctions},
+      {"Div", &ml_cpu_compute::BinaryDivFloat32BulkFunctions},
+      {"PRelu", &ml_cpu_compute::BinaryPReluFloat32BulkFunctions},
   }};
   for (const auto &[op_type, resolve] : operations) {
-    const BinaryKernelDescriptor descriptor(std::string(op_type), op_type == "PRelu" ? 16 : 14, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(std::string(op_type),
+                                                               op_type == "PRelu" ? 16 : 14, {});
     const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT,
                                                     BinaryDataType::FLOAT);
     const auto &functions = resolve();
@@ -147,7 +151,7 @@ TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
   }
 }
 
-TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing) {
+TEST(BinaryOperationDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing) {
   const std::array<float, 11> values = {-std::numeric_limits<float>::infinity(),
                                         -7.0f,
                                         -1.0f,
@@ -159,8 +163,8 @@ TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing)
                                         std::numeric_limits<float>::quiet_NaN(),
                                         -0.125f,
                                         4.0f};
-  const auto encode = onnx_light_cpu::detail::FloatToBFloat16Bits;
-  const auto decode = onnx_light_cpu::detail::Bfloat16BitsToFloat;
+  const auto encode = ml_cpu_compute::detail::FloatToBFloat16Bits;
+  const auto decode = ml_cpu_compute::detail::Bfloat16BitsToFloat;
   const auto expect_equal = [&](std::uint16_t actual, std::uint16_t expected) {
     if (std::isnan(decode(expected))) {
       EXPECT_TRUE(std::isnan(decode(actual)));
@@ -170,7 +174,7 @@ TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing)
   };
 
   for (const std::string op_type : {"Add", "Sub", "Mul"}) {
-    const BinaryKernelDescriptor descriptor(op_type, 14, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(op_type, 14, {});
     const auto &adapter = descriptor.ResolveAdapter(
         BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
     const auto compute = [&](std::uint16_t left, std::uint16_t right) {
@@ -218,16 +222,16 @@ TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing)
 }
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
-  using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
+TEST(BinaryOperationDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
+  using BulkFunctions = const ml_cpu_compute::BinaryArithmeticBulkFunctions &(*)();
   const std::array<std::pair<std::string_view, BulkFunctions>, 4> operations{{
-      {"Add", &onnx_light_cpu::BinaryAddFloat16BulkFunctions},
-      {"Sub", &onnx_light_cpu::BinarySubFloat16BulkFunctions},
-      {"Mul", &onnx_light_cpu::BinaryMulFloat16BulkFunctions},
-      {"Div", &onnx_light_cpu::BinaryDivFloat16BulkFunctions},
+      {"Add", &ml_cpu_compute::BinaryAddFloat16BulkFunctions},
+      {"Sub", &ml_cpu_compute::BinarySubFloat16BulkFunctions},
+      {"Mul", &ml_cpu_compute::BinaryMulFloat16BulkFunctions},
+      {"Div", &ml_cpu_compute::BinaryDivFloat16BulkFunctions},
   }};
   for (const auto &[op_type, resolve] : operations) {
-    const BinaryKernelDescriptor descriptor(std::string(op_type), 14, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(std::string(op_type), 14, {});
     const auto &adapter = descriptor.ResolveAdapter(
         BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16);
     const auto &functions = resolve();
@@ -238,8 +242,8 @@ TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
 }
 #endif
 
-TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
-  const BinaryKernelDescriptor descriptor("PRelu", 16, {});
+TEST(BinaryOperationDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("PRelu", 16, {});
   const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::FLOAT16,
                                                   BinaryDataType::FLOAT16);
   const std::array<float, 13> values = {-std::numeric_limits<float>::infinity(),
@@ -257,10 +261,10 @@ TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
                                         0.5f};
   const std::array<float, 7> slopes = {
       -2.0f, -0.0f, 0.0f, 0.125f, 0.5f, 2.0f, std::numeric_limits<float>::quiet_NaN()};
-  const auto encode = [](float value) { return onnx_light_cpu::detail::FloatToFloat16Bits(value); };
+  const auto encode = [](float value) { return ml_cpu_compute::detail::FloatToFloat16Bits(value); };
   const auto expected = [&](std::uint16_t value_bits, std::uint16_t slope_bits) {
-    const float value = onnx_light_cpu::detail::Float16BitsToFloat(value_bits);
-    const float slope = onnx_light_cpu::detail::Float16BitsToFloat(slope_bits);
+    const float value = ml_cpu_compute::detail::Float16BitsToFloat(value_bits);
+    const float slope = ml_cpu_compute::detail::Float16BitsToFloat(slope_bits);
     return encode(value < 0.0f ? value * slope : value);
   };
   const auto expect_equal = [](std::uint16_t actual, std::uint16_t wanted) {
@@ -309,8 +313,8 @@ TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
   }
 }
 
-TEST(BinaryKernelDescriptor, BFloat16PReluBulkCoversBroadcastsTailsAndAliasing) {
-  const BinaryKernelDescriptor descriptor("PRelu", 16, {});
+TEST(BinaryOperationDescriptor, BFloat16PReluBulkCoversBroadcastsTailsAndAliasing) {
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("PRelu", 16, {});
   const auto &adapter = descriptor.ResolveAdapter(
       BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
   ASSERT_NE(adapter.bulk_contiguous, nullptr);
@@ -332,11 +336,11 @@ TEST(BinaryKernelDescriptor, BFloat16PReluBulkCoversBroadcastsTailsAndAliasing) 
   const std::array<float, 7> slopes = {
       -2.0f, -0.0f, 0.0f, 0.125f, 0.5f, 2.0f, std::numeric_limits<float>::quiet_NaN()};
   const auto encode = [](float value) {
-    return onnx_light_cpu::detail::FloatToBFloat16Bits(value);
+    return ml_cpu_compute::detail::FloatToBFloat16Bits(value);
   };
   const auto expected = [&](std::uint16_t value_bits, std::uint16_t slope_bits) {
-    const float value = onnx_light_cpu::detail::Bfloat16BitsToFloat(value_bits);
-    const float slope = onnx_light_cpu::detail::Bfloat16BitsToFloat(slope_bits);
+    const float value = ml_cpu_compute::detail::Bfloat16BitsToFloat(value_bits);
+    const float slope = ml_cpu_compute::detail::Bfloat16BitsToFloat(slope_bits);
     return encode(value < 0.0f ? value * slope : value);
   };
 
@@ -376,20 +380,25 @@ TEST(BinaryKernelDescriptor, BFloat16PReluBulkCoversBroadcastsTailsAndAliasing) 
   }
 }
 
-TEST(BinaryKernelDescriptor, Mod28EnablesFloatingRemainderWithoutChangingOlderOpsets) {
-  const auto &entry = GetBinaryManifestEntry("Mod");
+TEST(BinaryOperationDescriptor, Mod28EnablesFloatingRemainderWithoutChangingOlderOpsets) {
+  const auto &entry = ml_cpu_compute::GetBinaryManifestEntry("Mod");
   EXPECT_EQ(entry.since_version, 28);
   EXPECT_EQ(entry.minimum_version, 10);
   for (const auto type : {BinaryDataType::FLOAT, BinaryDataType::DOUBLE, BinaryDataType::FLOAT16,
                           BinaryDataType::BFLOAT16}) {
     for (const int version : {10, 13, 27}) {
-      EXPECT_THROW((BinaryKernelDescriptor("Mod", version, {}).ResolveOutputType(type, type)),
+      EXPECT_THROW((ml_cpu_compute::BinaryOperationDescriptor("Mod", version, {})
+                        .ResolveOutputType(type, type)),
                    std::invalid_argument);
-      BinaryKernelDescriptor::Attributes attrs;
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes attrs;
       attrs.mod_fmod = 1;
-      EXPECT_EQ(BinaryKernelDescriptor("Mod", version, attrs).ResolveOutputType(type, type), type);
+      EXPECT_EQ(ml_cpu_compute::BinaryOperationDescriptor("Mod", version, attrs)
+                    .ResolveOutputType(type, type),
+                type);
     }
-    EXPECT_EQ(BinaryKernelDescriptor("Mod", 28, {}).ResolveOutputType(type, type), type);
+    EXPECT_EQ(
+        ml_cpu_compute::BinaryOperationDescriptor("Mod", 28, {}).ResolveOutputType(type, type),
+        type);
   }
 }
 
@@ -432,9 +441,9 @@ void CheckFloatingModAdapters(BinaryDataType type, Encode encode, Decode decode)
       {-65504, 0.25, 0.0, -0.0},
   };
   for (const int fmod : {0, 1}) {
-    BinaryKernelDescriptor::Attributes attributes;
+    ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
     attributes.mod_fmod = fmod;
-    const BinaryKernelDescriptor descriptor("Mod", 28, attributes);
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor("Mod", 28, attributes);
     const auto &adapter = descriptor.ResolveAdapter(type, type, type);
     ASSERT_NE(adapter.bulk_contiguous, nullptr);
     ASSERT_NE(adapter.bulk_left_scalar, nullptr);
@@ -477,7 +486,7 @@ void CheckFloatingModAdapters(BinaryDataType type, Encode encode, Decode decode)
   }
 }
 
-TEST(BinaryKernelDescriptor, ModFloatingScalarBulkBroadcastAndTailsPreserveSpecialValues) {
+TEST(BinaryOperationDescriptor, ModFloatingScalarBulkBroadcastAndTailsPreserveSpecialValues) {
   CheckFloatingModAdapters<float>(
       BinaryDataType::FLOAT, [](double value) { return static_cast<float>(value); },
       [](float value) { return value; });
@@ -487,20 +496,20 @@ TEST(BinaryKernelDescriptor, ModFloatingScalarBulkBroadcastAndTailsPreserveSpeci
   CheckFloatingModAdapters<std::uint16_t>(
       BinaryDataType::FLOAT16,
       [](double value) {
-        return onnx_light_cpu::detail::FloatToFloat16Bits(static_cast<float>(value));
+        return ml_cpu_compute::detail::FloatToFloat16Bits(static_cast<float>(value));
       },
-      onnx_light_cpu::detail::Float16BitsToFloat);
+      ml_cpu_compute::detail::Float16BitsToFloat);
   CheckFloatingModAdapters<std::uint16_t>(
       BinaryDataType::BFLOAT16,
       [](double value) {
-        return onnx_light_cpu::detail::FloatToBFloat16Bits(static_cast<float>(value));
+        return ml_cpu_compute::detail::FloatToBFloat16Bits(static_cast<float>(value));
       },
-      onnx_light_cpu::detail::Bfloat16BitsToFloat);
+      ml_cpu_compute::detail::Bfloat16BitsToFloat);
 }
 
-TEST(BinaryKernelDescriptor, ModFloatingRemainderAvoidsOverflowingQuotients) {
+TEST(BinaryOperationDescriptor, ModFloatingRemainderAvoidsOverflowingQuotients) {
   const auto check = []<typename T>(BinaryDataType type) {
-    const BinaryKernelDescriptor descriptor("Mod", 28, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor("Mod", 28, {});
     const auto &adapter = descriptor.ResolveAdapter(type, type, type);
     const T large = std::ldexp(T{1}, std::numeric_limits<T>::max_exponent - 1);
     const T small = std::numeric_limits<T>::min();
@@ -520,14 +529,14 @@ TEST(BinaryKernelDescriptor, ModFloatingRemainderAvoidsOverflowingQuotients) {
   check.operator()<double>(BinaryDataType::DOUBLE);
 }
 
-TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
-  for (const auto &entry : GetBinaryManifest()) {
-    BinaryKernelDescriptor::Attributes attributes;
-    if (entry.op == BinaryOperator::kMod) {
+TEST(BinaryOperationDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
+  for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
+    ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+    if (entry.op == ml_cpu_compute::BinaryOperator::kMod) {
       attributes.mod_fmod = 1;
     }
-    const BinaryKernelDescriptor descriptor(std::string(entry.op_type), entry.since_version,
-                                            attributes);
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(std::string(entry.op_type),
+                                                               entry.since_version, attributes);
     for (const auto &adapter : descriptor.adapters()) {
       if (adapter.signature.left != adapter.signature.right ||
           adapter.signature.left == BinaryDataType::STRING) {
@@ -540,7 +549,7 @@ TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
   }
 }
 
-TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsAndAliasing) {
+TEST(BinaryOperationDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsAndAliasing) {
   const std::array<std::pair<const char *, int>, 4> operations = {
       std::pair{"Add", 14},
       std::pair{"Sub", 14},
@@ -563,16 +572,16 @@ TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsA
       std::numeric_limits<float>::quiet_NaN(),
   };
   for (const auto &[name, version] : operations) {
-    const BinaryKernelDescriptor descriptor(name, version, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(name, version, {});
     const auto &adapter = descriptor.ResolveAdapter(
         BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16);
     for (const std::size_t count : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
       SCOPED_TRACE(::testing::Message() << name << " count=" << count);
       std::vector<std::uint16_t> left(count + 1), right(count + 1), expected(count);
-      const std::uint16_t sentinel = onnx_light_cpu::detail::FloatToFloat16Bits(42.0f);
+      const std::uint16_t sentinel = ml_cpu_compute::detail::FloatToFloat16Bits(42.0f);
       for (std::size_t i = 0; i < count; ++i) {
-        left[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[i % values.size()]);
-        right[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[(i * 5 + 3) % values.size()]);
+        left[i] = ml_cpu_compute::detail::FloatToFloat16Bits(values[i % values.size()]);
+        right[i] = ml_cpu_compute::detail::FloatToFloat16Bits(values[(i * 5 + 3) % values.size()]);
         adapter.scalar(left.data() + i, right.data() + i, expected.data() + i);
       }
       left[count] = sentinel;
@@ -581,8 +590,8 @@ TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsA
       const auto check = [&](const std::vector<std::uint16_t> &actual) {
         EXPECT_EQ(actual[count], sentinel);
         for (std::size_t i = 0; i < count; ++i) {
-          const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
-          const float value = onnx_light_cpu::detail::Float16BitsToFloat(actual[i]);
+          const float reference = ml_cpu_compute::detail::Float16BitsToFloat(expected[i]);
+          const float value = ml_cpu_compute::detail::Float16BitsToFloat(actual[i]);
           if (std::isnan(reference)) {
             EXPECT_TRUE(std::isnan(value)) << i;
           } else {
@@ -621,8 +630,8 @@ TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsA
   }
 }
 
-TEST(BinaryKernelDescriptor, BFloat16DivBulkPreservesScalarSemanticsTailsAndAliasing) {
-  const BinaryKernelDescriptor descriptor("Div", 14, {});
+TEST(BinaryOperationDescriptor, BFloat16DivBulkPreservesScalarSemanticsTailsAndAliasing) {
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Div", 14, {});
   const auto &adapter = descriptor.ResolveAdapter(
       BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
   constexpr std::array<std::uint16_t, 17> values = {
@@ -649,8 +658,8 @@ TEST(BinaryKernelDescriptor, BFloat16DivBulkPreservesScalarSemanticsTailsAndAlia
     const auto check = [&](const std::vector<std::uint16_t> &actual) {
       EXPECT_EQ(actual[count], sentinel);
       for (std::size_t i = 0; i < count; ++i) {
-        const float reference = onnx_light_cpu::detail::Bfloat16BitsToFloat(expected[i]);
-        const float value = onnx_light_cpu::detail::Bfloat16BitsToFloat(actual[i]);
+        const float reference = ml_cpu_compute::detail::Bfloat16BitsToFloat(expected[i]);
+        const float value = ml_cpu_compute::detail::Bfloat16BitsToFloat(actual[i]);
         if (std::isnan(reference)) {
           EXPECT_TRUE(std::isnan(value)) << i;
         } else {
@@ -684,18 +693,18 @@ TEST(BinaryKernelDescriptor, BFloat16DivBulkPreservesScalarSemanticsTailsAndAlia
   }
 }
 
-TEST(BinaryKernelDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails) {
+TEST(BinaryOperationDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails) {
   struct ComparisonCase {
     const char *name;
     int version;
-    BinaryComparisonKind kind;
+    ml_cpu_compute::BinaryComparisonKind kind;
   };
   constexpr std::array<ComparisonCase, 5> cases = {
-      ComparisonCase{"Equal", 19, BinaryComparisonKind::kEqual},
-      ComparisonCase{"Greater", 13, BinaryComparisonKind::kGreater},
-      ComparisonCase{"GreaterOrEqual", 16, BinaryComparisonKind::kGreaterOrEqual},
-      ComparisonCase{"Less", 13, BinaryComparisonKind::kLess},
-      ComparisonCase{"LessOrEqual", 16, BinaryComparisonKind::kLessOrEqual},
+      ComparisonCase{"Equal", 19, ml_cpu_compute::BinaryComparisonKind::kEqual},
+      ComparisonCase{"Greater", 13, ml_cpu_compute::BinaryComparisonKind::kGreater},
+      ComparisonCase{"GreaterOrEqual", 16, ml_cpu_compute::BinaryComparisonKind::kGreaterOrEqual},
+      ComparisonCase{"Less", 13, ml_cpu_compute::BinaryComparisonKind::kLess},
+      ComparisonCase{"LessOrEqual", 16, ml_cpu_compute::BinaryComparisonKind::kLessOrEqual},
   };
   constexpr std::array<float, 19> left_values = {
       0.0f,
@@ -742,12 +751,13 @@ TEST(BinaryKernelDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails
   std::array<std::uint16_t, left_values.size()> left{};
   std::array<std::uint16_t, right_values.size()> right{};
   for (std::size_t i = 0; i < left.size(); ++i) {
-    left[i] = onnx_light_cpu::detail::FloatToFloat16Bits(left_values[i]);
-    right[i] = onnx_light_cpu::detail::FloatToFloat16Bits(right_values[i]);
+    left[i] = ml_cpu_compute::detail::FloatToFloat16Bits(left_values[i]);
+    right[i] = ml_cpu_compute::detail::FloatToFloat16Bits(right_values[i]);
   }
 
   for (const auto &comparison : cases) {
-    const BinaryKernelDescriptor descriptor(comparison.name, comparison.version, {});
+    const ml_cpu_compute::BinaryOperationDescriptor descriptor(comparison.name, comparison.version,
+                                                               {});
     const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT16,
                                                     BinaryDataType::FLOAT16, BinaryDataType::BOOL);
     std::array<std::uint8_t, left.size()> output{};
@@ -775,8 +785,8 @@ TEST(BinaryKernelDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails
   }
 }
 
-TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
 
   const float float_base = 2.0f;
   const std::int64_t integer_exponent = 3;
@@ -792,12 +802,12 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
       .scalar(&integer_base, &integral_float_exponent, &integer_output);
   EXPECT_EQ(integer_output, 9);
 
-  const std::uint16_t half_base = onnx_light_cpu::detail::FloatToFloat16Bits(4.0f);
-  const std::uint16_t bfloat_exponent = onnx_light_cpu::detail::FloatToBFloat16Bits(0.5f);
+  const std::uint16_t half_base = ml_cpu_compute::detail::FloatToFloat16Bits(4.0f);
+  const std::uint16_t bfloat_exponent = ml_cpu_compute::detail::FloatToBFloat16Bits(0.5f);
   std::uint16_t half_output = 0;
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::FLOAT16)
       .scalar(&half_base, &bfloat_exponent, &half_output);
-  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_output), 2.0f);
+  EXPECT_FLOAT_EQ(ml_cpu_compute::detail::Float16BitsToFloat(half_output), 2.0f);
 
   const auto &float_mixed =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::INT64, BinaryDataType::FLOAT);
@@ -897,16 +907,16 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
       .scalar(&negative_one, &odd_exponent, &parity_output);
   EXPECT_FLOAT_EQ(parity_output, -1.0f);
 
-  const std::uint16_t half_negative_one = onnx_light_cpu::detail::FloatToFloat16Bits(-1.0f);
+  const std::uint16_t half_negative_one = ml_cpu_compute::detail::FloatToFloat16Bits(-1.0f);
   std::uint16_t half_parity_output = 0;
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16)
       .scalar(&half_negative_one, &odd_exponent, &half_parity_output);
-  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+  EXPECT_FLOAT_EQ(ml_cpu_compute::detail::Float16BitsToFloat(half_parity_output), -1.0f);
 
   const std::int64_t large_odd_exponent = (std::int64_t{1} << 53) + 1;
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT64, BinaryDataType::FLOAT16)
       .scalar(&half_negative_one, &large_odd_exponent, &half_parity_output);
-  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+  EXPECT_FLOAT_EQ(ml_cpu_compute::detail::Float16BitsToFloat(half_parity_output), -1.0f);
 
   const auto &half_integer =
       pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
@@ -914,17 +924,17 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   ASSERT_NE(half_integer.bulk_left_scalar, nullptr);
   ASSERT_NE(half_integer.bulk_right_scalar, nullptr);
   const std::array<std::uint16_t, 5> half_bases = {
-      onnx_light_cpu::detail::FloatToFloat16Bits(2.0f),
-      onnx_light_cpu::detail::FloatToFloat16Bits(-2.0f),
-      onnx_light_cpu::detail::FloatToFloat16Bits(3.0f),
-      onnx_light_cpu::detail::FloatToFloat16Bits(0.5f), half_negative_one};
+      ml_cpu_compute::detail::FloatToFloat16Bits(2.0f),
+      ml_cpu_compute::detail::FloatToFloat16Bits(-2.0f),
+      ml_cpu_compute::detail::FloatToFloat16Bits(3.0f),
+      ml_cpu_compute::detail::FloatToFloat16Bits(0.5f), half_negative_one};
   const std::array<std::int32_t, 5> integer_exponents = {2, 3, 4, -2, odd_exponent};
   std::array<std::uint16_t, 5> half_outputs = {};
   half_integer.bulk_contiguous(half_bases.data(), integer_exponents.data(), half_outputs.data(),
                                half_outputs.size());
   const std::array<float, 5> expected_half_outputs = {4.0f, -8.0f, 81.0f, 4.0f, -1.0f};
   for (std::size_t i = 0; i < half_outputs.size(); ++i) {
-    EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_outputs[i]),
+    EXPECT_FLOAT_EQ(ml_cpu_compute::detail::Float16BitsToFloat(half_outputs[i]),
                     expected_half_outputs[i]);
   }
 
@@ -939,8 +949,8 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   }
 }
 
-TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecialValues) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecialValues) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const std::array<float, 12> base_values = {
       0.0f,
       -0.0f,
@@ -959,7 +969,7 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
     std::vector<std::uint16_t> bases(count + 2);
     for (std::size_t i = 0; i < count; ++i) {
       bases[i + 1] =
-          onnx_light_cpu::detail::FloatToFloat16Bits(base_values[i % base_values.size()]);
+          ml_cpu_compute::detail::FloatToFloat16Bits(base_values[i % base_values.size()]);
     }
 
     const auto check_right_scalar = [&](BinaryDataType exponent_type, const void *exponent) {
@@ -974,8 +984,8 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
       EXPECT_EQ(output.front(), 0x3555);
       EXPECT_EQ(output.back(), 0x3555);
       for (std::size_t i = 0; i < count; ++i) {
-        const float actual = onnx_light_cpu::detail::Float16BitsToFloat(output[i + 1]);
-        const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
+        const float actual = ml_cpu_compute::detail::Float16BitsToFloat(output[i + 1]);
+        const float reference = ml_cpu_compute::detail::Float16BitsToFloat(expected[i]);
         if (std::isnan(reference)) {
           EXPECT_TRUE(std::isnan(actual)) << i;
         } else {
@@ -985,7 +995,7 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
       }
     };
 
-    const std::uint16_t half_exponent = onnx_light_cpu::detail::FloatToFloat16Bits(3.0f);
+    const std::uint16_t half_exponent = ml_cpu_compute::detail::FloatToFloat16Bits(3.0f);
     const float float_exponent = 3.0f;
     const float fractional_exponent = 1.375f;
     const std::int32_t integer_exponent = 3;
@@ -996,7 +1006,7 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
 
     const auto &left_scalar_adapter =
         pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
-    const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+    const std::uint16_t scalar_base = ml_cpu_compute::detail::FloatToFloat16Bits(-1.5f);
     std::vector<std::int32_t> exponents(count);
     std::vector<std::uint16_t> expected(count);
     std::vector<std::uint16_t> output(count + 2, 0x3555);
@@ -1014,7 +1024,7 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
 
   const auto &left_scalar_adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
-  const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+  const std::uint16_t scalar_base = ml_cpu_compute::detail::FloatToFloat16Bits(-1.5f);
   const std::array<std::int32_t, 5> exponents = {-3, 0, 5, 6, 17};
   std::array<std::uint16_t, 5> expected = {};
   std::array<std::uint16_t, 5> output = {};
@@ -1026,8 +1036,8 @@ TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecia
   EXPECT_EQ(output, expected);
 }
 
-TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
   const float input = 6981463572480.0f;
@@ -1037,8 +1047,8 @@ TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
   EXPECT_EQ(output, std::pow(input, exponent));
 }
 
-TEST(BinaryKernelDescriptor, PowFixedScalarBulkPreservesScalarRoundingAndInPlaceTails) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowFixedScalarBulkPreservesScalarRoundingAndInPlaceTails) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
   const std::vector<float> values = {0.0f,
@@ -1097,8 +1107,8 @@ TEST(BinaryKernelDescriptor, PowFixedScalarBulkPreservesScalarRoundingAndInPlace
   }
 }
 
-TEST(BinaryKernelDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
   std::vector<float> bases(35);
@@ -1129,8 +1139,8 @@ TEST(BinaryKernelDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
   }
 }
 
-TEST(BinaryKernelDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter = pow.ResolveAdapter(BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16,
                                            BinaryDataType::BFLOAT16);
   adapter.bulk_contiguous(nullptr, nullptr, nullptr, 0);
@@ -1141,16 +1151,16 @@ TEST(BinaryKernelDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing
     std::vector<std::uint16_t> exponents(count + 2, sentinel);
     for (std::size_t i = 0; i < count; ++i) {
       bases[i + 1] =
-          onnx_light_cpu::detail::FloatToBFloat16Bits(0.25f + static_cast<float>(i % 29) * 0.125f);
+          ml_cpu_compute::detail::FloatToBFloat16Bits(0.25f + static_cast<float>(i % 29) * 0.125f);
       exponents[i + 1] =
-          onnx_light_cpu::detail::FloatToBFloat16Bits(-2.0f + static_cast<float>(i % 17) * 0.25f);
+          ml_cpu_compute::detail::FloatToBFloat16Bits(-2.0f + static_cast<float>(i % 17) * 0.25f);
     }
-    bases[1] = onnx_light_cpu::detail::FloatToBFloat16Bits(-2.0f);
-    exponents[1] = onnx_light_cpu::detail::FloatToBFloat16Bits(3.0f);
-    bases[2] = onnx_light_cpu::detail::FloatToBFloat16Bits(0.0f);
-    exponents[2] = onnx_light_cpu::detail::FloatToBFloat16Bits(-1.0f);
-    bases[3] = onnx_light_cpu::detail::FloatToBFloat16Bits(std::numeric_limits<float>::infinity());
-    exponents[3] = onnx_light_cpu::detail::FloatToBFloat16Bits(0.0f);
+    bases[1] = ml_cpu_compute::detail::FloatToBFloat16Bits(-2.0f);
+    exponents[1] = ml_cpu_compute::detail::FloatToBFloat16Bits(3.0f);
+    bases[2] = ml_cpu_compute::detail::FloatToBFloat16Bits(0.0f);
+    exponents[2] = ml_cpu_compute::detail::FloatToBFloat16Bits(-1.0f);
+    bases[3] = ml_cpu_compute::detail::FloatToBFloat16Bits(std::numeric_limits<float>::infinity());
+    exponents[3] = ml_cpu_compute::detail::FloatToBFloat16Bits(0.0f);
 
     std::vector<std::uint16_t> output(count + 2, sentinel);
     auto base_alias = bases;
@@ -1170,10 +1180,10 @@ TEST(BinaryKernelDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(base_alias[i + 1], output[i + 1]) << i;
       EXPECT_EQ(exponent_alias[i + 1], output[i + 1]) << i;
-      const float base = onnx_light_cpu::detail::Bfloat16BitsToFloat(bases[i + 1]);
-      const float exponent = onnx_light_cpu::detail::Bfloat16BitsToFloat(exponents[i + 1]);
+      const float base = ml_cpu_compute::detail::Bfloat16BitsToFloat(bases[i + 1]);
+      const float exponent = ml_cpu_compute::detail::Bfloat16BitsToFloat(exponents[i + 1]);
       const float expected = std::pow(base, exponent);
-      const float actual = onnx_light_cpu::detail::Bfloat16BitsToFloat(output[i + 1]);
+      const float actual = ml_cpu_compute::detail::Bfloat16BitsToFloat(output[i + 1]);
       if (std::isnan(expected)) {
         EXPECT_TRUE(std::isnan(actual)) << i;
       } else if (std::isinf(expected)) {
@@ -1185,8 +1195,8 @@ TEST(BinaryKernelDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing
   }
 }
 
-TEST(BinaryKernelDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
   const float base = 1.75f;
@@ -1212,8 +1222,8 @@ TEST(BinaryKernelDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues)
   }
 }
 
-TEST(BinaryKernelDescriptor, PowRightScalarBulkMatchesFractionalAndSpecialValues) {
-  const BinaryKernelDescriptor pow("Pow", 15, {});
+TEST(BinaryOperationDescriptor, PowRightScalarBulkMatchesFractionalAndSpecialValues) {
+  const ml_cpu_compute::BinaryOperationDescriptor pow("Pow", 15, {});
   const auto &adapter =
       pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
   const float exponent = 1.375f;
@@ -1241,8 +1251,8 @@ TEST(BinaryKernelDescriptor, PowRightScalarBulkMatchesFractionalAndSpecialValues
   }
 }
 
-TEST(BinaryKernelDescriptor, IntegerPReluWrapsSignedMultiplication) {
-  const BinaryKernelDescriptor prelu("PRelu", 16, {});
+TEST(BinaryOperationDescriptor, IntegerPReluWrapsSignedMultiplication) {
+  const ml_cpu_compute::BinaryOperationDescriptor prelu("PRelu", 16, {});
   const auto &adapter =
       prelu.ResolveAdapter(BinaryDataType::INT32, BinaryDataType::INT32, BinaryDataType::INT32);
   const std::int32_t input = std::numeric_limits<std::int32_t>::min();

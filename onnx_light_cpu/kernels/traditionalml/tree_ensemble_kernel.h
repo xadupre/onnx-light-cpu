@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
+#include "ml_cpu_compute/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -33,8 +33,8 @@ public:
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
-  TreeEnsembleExecutionTuning tuning_;
-  std::unique_ptr<TreeEnsemblePlan> plan_;
+  ml_cpu_compute::TreeEnsembleExecutionTuning tuning_;
+  std::unique_ptr<ml_cpu_compute::TreeEnsemblePlan> plan_;
   std::int32_t input_data_type_ = 0;
   std::int64_t feature_count_ = 0;
 };

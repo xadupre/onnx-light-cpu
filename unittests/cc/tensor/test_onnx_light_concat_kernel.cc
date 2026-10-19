@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "ml_cpu_compute/execution.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
@@ -325,7 +325,7 @@ struct InlineExecutor {
   int64_t blocks = 0;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -340,7 +340,7 @@ struct ConcurrentExecutor {
   int64_t blocks = 0;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ConcurrentExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -357,8 +357,8 @@ struct ConcurrentExecutor {
 
 TEST(OnnxLightConcatKernel, LargeCopiesUseConcurrentDynamicTiles) {
   ConcurrentExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 16, &ConcurrentExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 16, &ConcurrentExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare({Payload(DataType::FLOAT, {1024, 256}), Payload(DataType::FLOAT, {1024, 768}, 19)}, -1);
   EXPECT_EQ(executor.dispatches, 2);
   EXPECT_EQ(executor.blocks, 10);
@@ -366,8 +366,8 @@ TEST(OnnxLightConcatKernel, LargeCopiesUseConcurrentDynamicTiles) {
 
 TEST(OnnxLightConcatKernel, SmallAxisZeroLargeRowsManyInputsAndNestedScheduling) {
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   Compare({Payload(DataType::FLOAT, {17}), Payload(DataType::FLOAT, {33})}, 0);
   EXPECT_EQ(executor.dispatches, 0);
   Compare({Payload(DataType::FLOAT, {400000}), Payload(DataType::FLOAT, {700001})}, 0);
@@ -394,9 +394,9 @@ TEST(OnnxLightConcatKernel, SmallAxisZeroLargeRowsManyInputsAndNestedScheduling)
   EXPECT_EQ(executor.dispatches, 12);
   EXPECT_EQ(executor.blocks, 6);
   {
-    onnx_light_cpu::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     Compare(many, 1);
-    EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
+    EXPECT_EQ(ml_cpu_compute::detail::ExecutionRegionDepth(), 1);
   }
   EXPECT_EQ(executor.dispatches, 12);
 }

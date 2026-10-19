@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -66,9 +67,11 @@ float ReadElementAsFloat(DataType dtype, const std::uint8_t *base, std::size_t i
   case DataType::FLOAT:
     return reinterpret_cast<const float *>(base)[index];
   case DataType::FLOAT16:
-    return detail::Float16BitsToFloat(reinterpret_cast<const std::uint16_t *>(base)[index]);
+    return ml_cpu_compute::detail::Float16BitsToFloat(
+        reinterpret_cast<const std::uint16_t *>(base)[index]);
   case DataType::BFLOAT16:
-    return detail::Bfloat16BitsToFloat(reinterpret_cast<const std::uint16_t *>(base)[index]);
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(
+        reinterpret_cast<const std::uint16_t *>(base)[index]);
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: unsupported floating-point element type.");
@@ -81,10 +84,12 @@ void WriteElementFromFloat(DataType dtype, std::uint8_t *base, std::size_t index
     reinterpret_cast<float *>(base)[index] = value;
     return;
   case DataType::FLOAT16:
-    reinterpret_cast<std::uint16_t *>(base)[index] = detail::FloatToFloat16Bits(value);
+    reinterpret_cast<std::uint16_t *>(base)[index] =
+        ml_cpu_compute::detail::FloatToFloat16Bits(value);
     return;
   case DataType::BFLOAT16:
-    reinterpret_cast<std::uint16_t *>(base)[index] = detail::FloatToBFloat16Bits(value);
+    reinterpret_cast<std::uint16_t *>(base)[index] =
+        ml_cpu_compute::detail::FloatToBFloat16Bits(value);
     return;
   default:
     throw std::invalid_argument(
@@ -312,10 +317,13 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: query, key, and value must have rank 3.");
   }
-  CheckedShapeIndexProduct(args.query->shape, "NaiveGroupQueryAttention", "query shape");
+  ml_cpu_compute::CheckedShapeIndexProduct(args.query->shape, "NaiveGroupQueryAttention",
+                                           "query shape");
   if (!args.packed_qkv) {
-    CheckedShapeIndexProduct(args.key->shape, "NaiveGroupQueryAttention", "key shape");
-    CheckedShapeIndexProduct(args.value->shape, "NaiveGroupQueryAttention", "value shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.key->shape, "NaiveGroupQueryAttention",
+                                             "key shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.value->shape, "NaiveGroupQueryAttention",
+                                             "value shape");
   }
   args.batch = args.query->shape[0];
   args.sequence_length = args.query->shape[1];
@@ -332,10 +340,11 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
   }
   const std::int64_t packed_heads =
       args.packed_qkv
-          ? CheckedIndexAdd(args.num_heads,
-                            CheckedIndexMultiply(2, args.kv_num_heads, "NaiveGroupQueryAttention",
-                                                 "packed head count"),
-                            "NaiveGroupQueryAttention", "packed head count")
+          ? ml_cpu_compute::CheckedIndexAdd(
+                args.num_heads,
+                ml_cpu_compute::CheckedIndexMultiply(
+                    2, args.kv_num_heads, "NaiveGroupQueryAttention", "packed head count"),
+                "NaiveGroupQueryAttention", "packed head count")
           : args.num_heads;
   if (args.query->shape[2] <= 0 || args.query->shape[2] % packed_heads != 0) {
     throw std::invalid_argument(
@@ -361,9 +370,10 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
       throw std::invalid_argument(
           "onnx_light_cpu::NaiveGroupQueryAttention: past_key/past_value must have rank 4.");
     }
-    CheckedShapeIndexProduct(args.past_key->shape, "NaiveGroupQueryAttention", "past key shape");
-    CheckedShapeIndexProduct(args.past_value->shape, "NaiveGroupQueryAttention",
-                             "past value shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.past_key->shape, "NaiveGroupQueryAttention",
+                                             "past key shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.past_value->shape, "NaiveGroupQueryAttention",
+                                             "past value shape");
     if (args.past_key->shape[0] != args.batch || args.past_value->shape[0] != args.batch ||
         args.past_key->shape[1] != args.kv_num_heads ||
         args.past_value->shape[1] != args.kv_num_heads) {
@@ -386,8 +396,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     }
     args.past_length = args.past_key->shape[2];
   }
-  args.total_length = CheckedIndexAdd(args.past_length, args.sequence_length,
-                                      "NaiveGroupQueryAttention", "total sequence length");
+  args.total_length = ml_cpu_compute::CheckedIndexAdd(
+      args.past_length, args.sequence_length, "NaiveGroupQueryAttention", "total sequence length");
 
   if (static_cast<DataType>(args.seqlens_k->data_type) != DataType::INT32 ||
       args.seqlens_k->shape.size() != 1 || args.seqlens_k->shape[0] != args.batch) {
@@ -420,10 +430,10 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
           "onnx_light_cpu::NaiveGroupQueryAttention: attention_bias must have at most 4 "
           "dimensions.");
     }
-    const std::int64_t attention_bias_count = CheckedShapeIndexProduct(
+    const std::int64_t attention_bias_count = ml_cpu_compute::CheckedShapeIndexProduct(
         args.attention_bias->shape, "NaiveGroupQueryAttention", "attention_bias shape");
-    CheckedStride(static_cast<std::size_t>(attention_bias_count), "NaiveGroupQueryAttention",
-                  "attention_bias shape");
+    ml_cpu_compute::CheckedStride(static_cast<std::size_t>(attention_bias_count),
+                                  "NaiveGroupQueryAttention", "attention_bias shape");
   }
 
   if (args.do_rotary) {
@@ -431,8 +441,10 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
       throw std::invalid_argument(
           "onnx_light_cpu::NaiveGroupQueryAttention: cos_cache/sin_cache must have rank 2.");
     }
-    CheckedShapeIndexProduct(args.cos_cache->shape, "NaiveGroupQueryAttention", "cos cache shape");
-    CheckedShapeIndexProduct(args.sin_cache->shape, "NaiveGroupQueryAttention", "sin cache shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.cos_cache->shape, "NaiveGroupQueryAttention",
+                                             "cos cache shape");
+    ml_cpu_compute::CheckedShapeIndexProduct(args.sin_cache->shape, "NaiveGroupQueryAttention",
+                                             "sin cache shape");
     const std::int64_t half = args.cos_cache->shape[1];
     if (args.cos_cache->shape != args.sin_cache->shape || half <= 0 || half > args.head_dim / 2) {
       throw std::invalid_argument(
@@ -478,7 +490,7 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
 }
 
 std::vector<std::int64_t> ResolveRotaryPositions(const GqaArgs &args) {
-  const std::size_t position_count = static_cast<std::size_t>(CheckedIndexMultiply(
+  const std::size_t position_count = static_cast<std::size_t>(ml_cpu_compute::CheckedIndexMultiply(
       args.batch, args.sequence_length, "NaiveGroupQueryAttention", "position count"));
   std::vector<std::int64_t> positions(position_count);
   const std::int64_t *position_ids_data =
@@ -511,10 +523,10 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
   const std::int64_t hidden = input.shape[2];
   const std::int64_t half = cos_cache.shape[1];
   const std::size_t element_bytes = ElementByteWidth(dtype);
-  const std::size_t total_bytes =
-      CheckedByteSize(static_cast<std::size_t>(input.shape.product(
-                          0, input.shape.size(), "NaiveGroupQueryAttention rotary")),
-                      element_bytes, "NaiveGroupQueryAttention", "rotary byte size");
+  const std::size_t total_bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(
+          input.shape.product(0, input.shape.size(), "NaiveGroupQueryAttention rotary")),
+      element_bytes, "NaiveGroupQueryAttention", "rotary byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeTemporaryTensor(input.data_type, input.shape, total_bytes)
                       : rt_ns::MakeOutputTensor(input.data_type, input.shape, total_bytes, nullptr);
@@ -563,14 +575,14 @@ Tensor ConcatenatePastAndCurrent(RuntimeContext *rt, int output_slot, DataType d
                                  std::int64_t batch, std::int64_t heads, std::int64_t past_length,
                                  std::int64_t sequence_length, std::int64_t dim, const Tensor *past,
                                  const Tensor &current) {
-  const std::int64_t total_length = CheckedIndexAdd(
+  const std::int64_t total_length = ml_cpu_compute::CheckedIndexAdd(
       past_length, sequence_length, "NaiveGroupQueryAttention", "total sequence length");
   const Shape shape{batch, heads, total_length, dim};
   const std::size_t element_bytes = ElementByteWidth(dtype);
-  const std::size_t total_bytes =
-      CheckedByteSize(static_cast<std::size_t>(
-                          shape.product(0, shape.size(), "NaiveGroupQueryAttention present cache")),
-                      element_bytes, "NaiveGroupQueryAttention", "present cache byte size");
+  const std::size_t total_bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(
+          shape.product(0, shape.size(), "NaiveGroupQueryAttention present cache")),
+      element_bytes, "NaiveGroupQueryAttention", "present cache byte size");
   Tensor result;
   if (output_slot >= 0 && rt != nullptr) {
     result =
@@ -583,10 +595,10 @@ Tensor ConcatenatePastAndCurrent(RuntimeContext *rt, int output_slot, DataType d
   std::uint8_t *dst = result.mutable_bytes();
   if (past_length > 0) {
     const std::uint8_t *past_bytes = past->bytes();
-    const std::size_t row_bytes =
-        CheckedByteSize(static_cast<std::size_t>(CheckedIndexMultiply(
-                            past_length, dim, "NaiveGroupQueryAttention", "past cache row size")),
-                        element_bytes, "NaiveGroupQueryAttention", "past cache row byte size");
+    const std::size_t row_bytes = ml_cpu_compute::CheckedByteSize(
+        static_cast<std::size_t>(ml_cpu_compute::CheckedIndexMultiply(
+            past_length, dim, "NaiveGroupQueryAttention", "past cache row size")),
+        element_bytes, "NaiveGroupQueryAttention", "past cache row byte size");
     for (std::int64_t b = 0; b < batch; ++b) {
       for (std::int64_t h = 0; h < heads; ++h) {
         const std::size_t src_offset =
@@ -598,11 +610,11 @@ Tensor ConcatenatePastAndCurrent(RuntimeContext *rt, int output_slot, DataType d
     }
   }
   const std::uint8_t *current_bytes = current.bytes();
-  const std::int64_t hidden =
-      CheckedIndexMultiply(heads, dim, "NaiveGroupQueryAttention", "current hidden size");
+  const std::int64_t hidden = ml_cpu_compute::CheckedIndexMultiply(
+      heads, dim, "NaiveGroupQueryAttention", "current hidden size");
   const std::size_t element_row_bytes =
-      CheckedByteSize(static_cast<std::size_t>(dim), element_bytes, "NaiveGroupQueryAttention",
-                      "current cache row byte size");
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(dim), element_bytes,
+                                      "NaiveGroupQueryAttention", "current cache row byte size");
   for (std::int64_t b = 0; b < batch; ++b) {
     for (std::int64_t s = 0; s < sequence_length; ++s) {
       for (std::int64_t h = 0; h < heads; ++h) {
@@ -707,10 +719,10 @@ Tensor ComputeNaiveAttention(const GqaArgs &args, RuntimeContext *rt, const Tens
   const std::int64_t out_hidden = num_heads * v_head_dim;
   const Shape output_shape{batch, sequence_length, out_hidden};
   const std::size_t element_bytes = ElementByteWidth(dtype);
-  const std::size_t output_bytes =
-      CheckedByteSize(static_cast<std::size_t>(output_shape.product(
-                          0, output_shape.size(), "NaiveGroupQueryAttention output")),
-                      element_bytes, "NaiveGroupQueryAttention", "output byte size");
+  const std::size_t output_bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(
+          output_shape.product(0, output_shape.size(), "NaiveGroupQueryAttention output")),
+      element_bytes, "NaiveGroupQueryAttention", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, static_cast<std::int32_t>(dtype),
                                                        output_shape, output_bytes)
                                 : rt_ns::MakeOutputTensor(static_cast<std::int32_t>(dtype),
@@ -812,14 +824,14 @@ Tensor ComputeNaiveAttention(const GqaArgs &args, RuntimeContext *rt, const Tens
 }
 
 void UnpackQkv(const GqaArgs &args, RuntimeContext *rt, Tensor &query, Tensor &key, Tensor &value) {
-  const std::int64_t q_hidden =
-      CheckedIndexMultiply(args.num_heads, args.head_dim, "NaiveGroupQueryAttention", "query size");
-  const std::int64_t kv_hidden =
-      CheckedIndexMultiply(args.kv_num_heads, args.head_dim, "NaiveGroupQueryAttention", "KV size");
+  const std::int64_t q_hidden = ml_cpu_compute::CheckedIndexMultiply(
+      args.num_heads, args.head_dim, "NaiveGroupQueryAttention", "query size");
+  const std::int64_t kv_hidden = ml_cpu_compute::CheckedIndexMultiply(
+      args.kv_num_heads, args.head_dim, "NaiveGroupQueryAttention", "KV size");
   const std::size_t element_bytes = ElementByteWidth(args.dtype);
   const auto make_tensor = [&](std::int64_t hidden) {
     Shape shape{args.batch, args.sequence_length, hidden};
-    const std::size_t bytes = CheckedByteSize(
+    const std::size_t bytes = ml_cpu_compute::CheckedByteSize(
         static_cast<std::size_t>(shape.product(0, shape.size(), "NaiveGroupQueryAttention unpack")),
         element_bytes, "NaiveGroupQueryAttention", "unpacked tensor byte size");
     return rt != nullptr ? rt->MakeTemporaryTensor(args.query->data_type, shape, bytes)
@@ -828,14 +840,16 @@ void UnpackQkv(const GqaArgs &args, RuntimeContext *rt, Tensor &query, Tensor &k
   query = make_tensor(q_hidden);
   key = make_tensor(kv_hidden);
   value = make_tensor(kv_hidden);
-  const std::size_t q_bytes = CheckedByteSize(static_cast<std::size_t>(q_hidden), element_bytes,
-                                              "NaiveGroupQueryAttention", "query row byte size");
-  const std::size_t kv_bytes = CheckedByteSize(static_cast<std::size_t>(kv_hidden), element_bytes,
-                                               "NaiveGroupQueryAttention", "KV row byte size");
+  const std::size_t q_bytes =
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(q_hidden), element_bytes,
+                                      "NaiveGroupQueryAttention", "query row byte size");
+  const std::size_t kv_bytes =
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(kv_hidden), element_bytes,
+                                      "NaiveGroupQueryAttention", "KV row byte size");
   const std::size_t packed_bytes =
-      CheckedByteSize(static_cast<std::size_t>(args.query->shape[2]), element_bytes,
-                      "NaiveGroupQueryAttention", "packed row byte size");
-  const std::size_t rows = static_cast<std::size_t>(CheckedIndexMultiply(
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(args.query->shape[2]), element_bytes,
+                                      "NaiveGroupQueryAttention", "packed row byte size");
+  const std::size_t rows = static_cast<std::size_t>(ml_cpu_compute::CheckedIndexMultiply(
       args.batch, args.sequence_length, "NaiveGroupQueryAttention", "packed row count"));
   for (std::size_t row = 0; row < rows; ++row) {
     const std::uint8_t *src = args.query->bytes() + row * packed_bytes;
@@ -901,6 +915,7 @@ NaiveGroupQueryAttentionKernel::NaiveGroupQueryAttentionKernel(const NodeProto &
 }
 
 void NaiveGroupQueryAttentionKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   const auto lookup = [&node, &rt](int index) -> const Tensor & {
@@ -924,6 +939,7 @@ Tensor NaiveGroupQueryAttentionKernel::operator()(
     const Tensor *past_value, const Tensor *cos_cache, const Tensor *sin_cache,
     const Tensor *position_ids, const Tensor *attention_bias, RuntimeContext *rt,
     Tensor *present_key, Tensor *present_value, const Tensor *head_sink) const {
+  const RuntimeExecutionScope execution_scope;
   std::array<const Tensor *, 12> inputs{};
   inputs[0] = &query;
   inputs[1] = &key;

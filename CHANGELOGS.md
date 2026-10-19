@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Improvements
 
+- Extracted numerical implementations into the independently buildable `ml_cpu_compute` C++20 library, without ONNX or Python dependencies; ONNX adapters retain session-owned scheduling.
 - Updated native kernel registration and immutable input preparation for the onnx-light 0.1.32 runtime API, and pinned CI and release builds to 0.1.32.
 - Supported encoded INT2/INT4/INT8 `MatMulNBits` weights with embedded scales, without repacking them for VNNI execution ([#895](https://github.com/xadupre/onnx-light-cpu/pull/895)).
 - Added interleaved rotary pairing for `GroupQueryAttention` query and key inputs ([#906](https://github.com/xadupre/onnx-light-cpu/pull/906)).

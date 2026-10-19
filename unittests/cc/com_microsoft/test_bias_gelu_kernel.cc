@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/com_microsoft/bias_gelu.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/com_microsoft/bias_gelu.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -14,12 +14,12 @@
 
 namespace {
 
-using onnx_light_cpu::BiasGeluBFloat16;
-using onnx_light_cpu::BiasGeluExecutionTuning;
-using onnx_light_cpu::BiasGeluFloat16;
-using onnx_light_cpu::BiasGeluFloat32;
-using onnx_light_cpu::BiasGeluFloat32WithTuning;
-using onnx_light_cpu::BiasGeluFloat64;
+using ml_cpu_compute::BiasGeluBFloat16;
+using ml_cpu_compute::BiasGeluExecutionTuning;
+using ml_cpu_compute::BiasGeluFloat16;
+using ml_cpu_compute::BiasGeluFloat32;
+using ml_cpu_compute::BiasGeluFloat32WithTuning;
+using ml_cpu_compute::BiasGeluFloat64;
 
 // Exact erf-based reference GELU, independent of the kernel's own
 // ``GeluExact``.
@@ -31,7 +31,7 @@ TEST(BiasGelu, Float32MatchesExactErfReference) {
   const std::vector<float> a = {-3.0f, -1.0f, 0.0f, 0.5f, 1.0f, 2.0f, -0.5f, 4.0f};
   const std::vector<float> bias = {0.1f, -0.2f, 0.3f, -0.4f};
   std::vector<float> output(outer * inner);
-  BiasGeluFloat32(a.data(), bias.data(), output.data(), outer, inner);
+  ml_cpu_compute::BiasGeluFloat32(a.data(), bias.data(), output.data(), outer, inner);
   for (std::size_t row = 0; row < outer; ++row) {
     for (std::size_t col = 0; col < inner; ++col) {
       const double z = static_cast<double>(a[row * inner + col]) + bias[col];
@@ -48,7 +48,7 @@ TEST(BiasGelu, Float32ApproximationStaysCloseToExactGeluAcrossVectorizedRange) {
     a[i] = -6.0f + 12.0f * static_cast<float>(i) / static_cast<float>(count - 1);
   }
   std::vector<float> output(count);
-  BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
+  ml_cpu_compute::BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
   for (std::size_t i = 0; i < count; ++i) {
     EXPECT_NEAR(output[i], ReferenceGelu(a[i]), 9e-6) << i << "," << a[i];
   }
@@ -63,7 +63,7 @@ TEST(BiasGelu, Float32VectorBoundariesUseTheSameApproximation) {
       bias[i] = static_cast<float>(static_cast<int>(i % 3) - 1) * 0.03125f;
     }
     std::vector<float> output(count + 1, -42.0f);
-    BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
+    ml_cpu_compute::BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_NEAR(output[i], ReferenceGelu(a[i] + bias[i]), 9e-6f) << count << "," << i;
     }
@@ -78,7 +78,7 @@ TEST(BiasGelu, Float32PreservesSpecialValues) {
   a[2] = std::numeric_limits<float>::quiet_NaN();
   const std::vector<float> bias(a.size(), 0.0f);
   std::vector<float> output(a.size());
-  BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, a.size());
+  ml_cpu_compute::BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, a.size());
   EXPECT_EQ(output[0], std::numeric_limits<float>::infinity());
   EXPECT_TRUE(std::isnan(output[1]));
   EXPECT_TRUE(std::isnan(output[2]));
@@ -93,7 +93,7 @@ TEST(BiasGelu, Float64MatchesExactErfReference) {
     a[i] = static_cast<double>(static_cast<int>(i % 11) - 5) * 0.3;
   }
   std::vector<double> output(outer * inner);
-  BiasGeluFloat64(a.data(), bias.data(), output.data(), outer, inner);
+  ml_cpu_compute::BiasGeluFloat64(a.data(), bias.data(), output.data(), outer, inner);
   for (std::size_t row = 0; row < outer; ++row) {
     for (std::size_t col = 0; col < inner; ++col) {
       const double z = a[row * inner + col] + bias[col];
@@ -115,17 +115,17 @@ TEST(BiasGelu, Float16MatchesConvertedReferenceWithinHalfTolerance) {
   }
   std::vector<std::uint16_t> a_bits(a_values.size());
   std::vector<std::uint16_t> bias_bits(bias_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToFloat16(a_values.data(), a_bits.data(), a_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToFloat16(bias_values.data(), bias_bits.data(),
+  ml_cpu_compute::detail::ConvertFloat32ToFloat16(a_values.data(), a_bits.data(), a_values.size());
+  ml_cpu_compute::detail::ConvertFloat32ToFloat16(bias_values.data(), bias_bits.data(),
                                                   bias_values.size());
   std::vector<std::uint16_t> output(outer * inner);
-  BiasGeluFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
+  ml_cpu_compute::BiasGeluFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
   for (std::size_t row = 0; row < outer; ++row) {
     for (std::size_t col = 0; col < inner; ++col) {
       const std::size_t index = row * inner + col;
-      const float rounded_a = onnx_light_cpu::detail::Float16BitsToFloat(a_bits[index]);
-      const float rounded_bias = onnx_light_cpu::detail::Float16BitsToFloat(bias_bits[col]);
-      const float actual = onnx_light_cpu::detail::Float16BitsToFloat(output[index]);
+      const float rounded_a = ml_cpu_compute::detail::Float16BitsToFloat(a_bits[index]);
+      const float rounded_bias = ml_cpu_compute::detail::Float16BitsToFloat(bias_bits[col]);
+      const float actual = ml_cpu_compute::detail::Float16BitsToFloat(output[index]);
       EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_bias), 5e-3) << row << "," << col;
     }
   }
@@ -144,17 +144,17 @@ TEST(BiasGelu, BFloat16MatchesConvertedReferenceWithinBFloat16Tolerance) {
   }
   std::vector<std::uint16_t> a_bits(a_values.size());
   std::vector<std::uint16_t> bias_bits(bias_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(), a_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(), a_values.size());
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
                                                    bias_values.size());
   std::vector<std::uint16_t> output(outer * inner);
-  BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
+  ml_cpu_compute::BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
   for (std::size_t row = 0; row < outer; ++row) {
     for (std::size_t col = 0; col < inner; ++col) {
       const std::size_t index = row * inner + col;
-      const float rounded_a = onnx_light_cpu::detail::Bfloat16BitsToFloat(a_bits[index]);
-      const float rounded_bias = onnx_light_cpu::detail::Bfloat16BitsToFloat(bias_bits[col]);
-      const float actual = onnx_light_cpu::detail::Bfloat16BitsToFloat(output[index]);
+      const float rounded_a = ml_cpu_compute::detail::Bfloat16BitsToFloat(a_bits[index]);
+      const float rounded_bias = ml_cpu_compute::detail::Bfloat16BitsToFloat(bias_bits[col]);
+      const float actual = ml_cpu_compute::detail::Bfloat16BitsToFloat(output[index]);
       EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_bias), 5e-2) << row << "," << col;
     }
   }
@@ -173,22 +173,23 @@ TEST(BiasGelu, BFloat16VectorBoundariesMatchFloat32PipelineBitExactly) {
     }
     std::vector<std::uint16_t> a_bits(a_values.size());
     std::vector<std::uint16_t> bias_bits(bias_values.size());
-    onnx_light_cpu::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(),
+    ml_cpu_compute::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(),
                                                      a_values.size());
-    onnx_light_cpu::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
+    ml_cpu_compute::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
                                                      bias_values.size());
     std::vector<std::uint16_t> output(outer * inner + 1, 0xdead);
-    BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
+    ml_cpu_compute::BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), outer, inner);
     std::vector<float> rounded_a(a_bits.size());
     std::vector<float> rounded_bias(bias_bits.size());
-    onnx_light_cpu::detail::ConvertBFloat16ToFloat32(a_bits.data(), rounded_a.data(),
+    ml_cpu_compute::detail::ConvertBFloat16ToFloat32(a_bits.data(), rounded_a.data(),
                                                      a_bits.size());
-    onnx_light_cpu::detail::ConvertBFloat16ToFloat32(bias_bits.data(), rounded_bias.data(),
+    ml_cpu_compute::detail::ConvertBFloat16ToFloat32(bias_bits.data(), rounded_bias.data(),
                                                      bias_bits.size());
     std::vector<float> expected_float(outer * inner);
-    BiasGeluFloat32(rounded_a.data(), rounded_bias.data(), expected_float.data(), outer, inner);
+    ml_cpu_compute::BiasGeluFloat32(rounded_a.data(), rounded_bias.data(), expected_float.data(),
+                                    outer, inner);
     std::vector<std::uint16_t> expected(outer * inner);
-    onnx_light_cpu::detail::ConvertFloat32ToBFloat16(expected_float.data(), expected.data(),
+    ml_cpu_compute::detail::ConvertFloat32ToBFloat16(expected_float.data(), expected.data(),
                                                      expected.size());
     for (std::size_t index = 0; index < expected.size(); ++index) {
       EXPECT_EQ(output[index], expected[index]) << inner << "," << index;
@@ -206,30 +207,32 @@ TEST(BiasGelu, BFloat16SpecialValuesMatchFloat32PipelineBitExactly) {
   const std::vector<float> bias_values(16, 0.0f);
   std::vector<std::uint16_t> a_bits(a_values.size());
   std::vector<std::uint16_t> bias_bits(bias_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(), a_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(a_values.data(), a_bits.data(), a_values.size());
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(bias_values.data(), bias_bits.data(),
                                                    bias_values.size());
   std::vector<std::uint16_t> output(a_values.size());
-  BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), 1, a_values.size());
+  ml_cpu_compute::BiasGeluBFloat16(a_bits.data(), bias_bits.data(), output.data(), 1,
+                                   a_values.size());
 
   std::vector<float> rounded_a(a_values.size());
   std::vector<float> rounded_bias(bias_values.size());
-  onnx_light_cpu::detail::ConvertBFloat16ToFloat32(a_bits.data(), rounded_a.data(), a_bits.size());
-  onnx_light_cpu::detail::ConvertBFloat16ToFloat32(bias_bits.data(), rounded_bias.data(),
+  ml_cpu_compute::detail::ConvertBFloat16ToFloat32(a_bits.data(), rounded_a.data(), a_bits.size());
+  ml_cpu_compute::detail::ConvertBFloat16ToFloat32(bias_bits.data(), rounded_bias.data(),
                                                    bias_bits.size());
   std::vector<float> expected_float(a_values.size());
-  BiasGeluFloat32(rounded_a.data(), rounded_bias.data(), expected_float.data(), 1, a_values.size());
+  ml_cpu_compute::BiasGeluFloat32(rounded_a.data(), rounded_bias.data(), expected_float.data(), 1,
+                                  a_values.size());
   std::vector<std::uint16_t> expected(a_values.size());
-  onnx_light_cpu::detail::ConvertFloat32ToBFloat16(expected_float.data(), expected.data(),
+  ml_cpu_compute::detail::ConvertFloat32ToBFloat16(expected_float.data(), expected.data(),
                                                    expected.size());
   EXPECT_EQ(output, expected);
 }
 
 TEST(BiasGelu, ZeroOuterOrInnerProducesNoWrites) {
   std::vector<float> sentinel(1, -42.0f);
-  BiasGeluFloat32(nullptr, nullptr, sentinel.data(), 0, 4);
+  ml_cpu_compute::BiasGeluFloat32(nullptr, nullptr, sentinel.data(), 0, 4);
   EXPECT_EQ(sentinel[0], -42.0f);
-  BiasGeluFloat32(nullptr, nullptr, sentinel.data(), 4, 0);
+  ml_cpu_compute::BiasGeluFloat32(nullptr, nullptr, sentinel.data(), 4, 0);
   EXPECT_EQ(sentinel[0], -42.0f);
 }
 
@@ -246,13 +249,14 @@ TEST(BiasGelu, TunedDispatchWithParallelThresholdMatchesUntuned) {
   }
   std::vector<float> serial(outer * inner);
   std::vector<float> parallel(outer * inner);
-  BiasGeluFloat32(a.data(), bias.data(), serial.data(), outer, inner);
+  ml_cpu_compute::BiasGeluFloat32(a.data(), bias.data(), serial.data(), outer, inner);
 
-  BiasGeluExecutionTuning tuning;
+  ml_cpu_compute::BiasGeluExecutionTuning tuning;
   tuning.parallel_threshold_bytes = 1;
   tuning.target_block_bytes = 1;
   tuning.use_cost_model = false;
-  BiasGeluFloat32WithTuning(a.data(), bias.data(), parallel.data(), outer, inner, tuning);
+  ml_cpu_compute::BiasGeluFloat32WithTuning(a.data(), bias.data(), parallel.data(), outer, inner,
+                                            tuning);
   for (std::size_t i = 0; i < serial.size(); ++i) {
     EXPECT_NEAR(serial[i], parallel[i], 1e-5f) << i;
   }

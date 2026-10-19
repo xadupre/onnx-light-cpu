@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/com_microsoft/matmul_nbits.h"
 
 #include <algorithm>
 #include <chrono>
@@ -39,9 +39,9 @@ int main(int argc, char **argv) {
   }
   using Clock = std::chrono::steady_clock;
   const auto start = Clock::now();
-  const auto blocks = onnx_light_cpu::CheckedAdd(k, 31, "benchmark", "blocks") / 32;
+  const auto blocks = ml_cpu_compute::CheckedAdd(k, 31, "benchmark", "blocks") / 32;
   const auto multiply = [](std::size_t a, std::size_t b) {
-    return onnx_light_cpu::CheckedMultiply(a, b, "benchmark", "elements");
+    return ml_cpu_compute::CheckedMultiply(a, b, "benchmark", "elements");
   };
   std::vector<float> a(multiply(m, k)), scales(multiply(n, blocks)), y(multiply(m, n));
   std::vector<std::uint8_t> b(multiply(scales.size(), bits == 8 ? 32 : 16));
@@ -62,18 +62,18 @@ int main(int argc, char **argv) {
   std::vector<float> packed_scales(slots);
   const auto first = Clock::now();
   if (bits == 8 && !generic) {
-    onnx_light_cpu::PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
+    ml_cpu_compute::PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
                                         packed_scales.data(), k, n);
   }
   const double first_use = std::chrono::duration<double>(Clock::now() - first).count();
   const auto run = [&] {
     if (bits == 8 && !generic) {
-      onnx_light_cpu::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
+      ml_cpu_compute::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
                                              packed_scales.data(), nullptr, y.data(), m, k, n,
                                              {256, 64, 1});
     } else {
-      onnx_light_cpu::MatMulNBits(a.data(), b.data(), scales.data(), nullptr, y.data(),
-                                  onnx_light_cpu::DataType::FLOAT, m, k, n, bits, 32, {256, 64, 1});
+      ml_cpu_compute::MatMulNBits(a.data(), b.data(), scales.data(), nullptr, y.data(),
+                                  ml_cpu_compute::DataType::FLOAT, m, k, n, bits, 32, {256, 64, 1});
     }
   };
   run();
@@ -94,12 +94,12 @@ int main(int argc, char **argv) {
                               packed_scales.size() * sizeof(float))
             << ','
             << (bits == 8 && !generic
-                    ? onnx_light_cpu::MatMulNBitsInt8WorkspaceElements(m, k, n, {256, 64, 1}) *
+                    ? ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(m, k, n, {256, 64, 1}) *
                           sizeof(double)
-                    : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
+                    : ml_cpu_compute::kMatMulNBitsInt4WorkspaceBytes)
             << ','
             << (generic     ? "generic"
-                : bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()
-                            : onnx_light_cpu::MatMulNBitsInt4Implementation())
+                : bits == 8 ? ml_cpu_compute::MatMulNBitsInt8Implementation()
+                            : ml_cpu_compute::MatMulNBitsInt4Implementation())
             << '\n';
 }

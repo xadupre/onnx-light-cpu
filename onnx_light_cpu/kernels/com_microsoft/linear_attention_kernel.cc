@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/linear_attention_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -56,11 +57,13 @@ void RegisterKernelImpl() {
 LinearAttentionResult MicrosoftLinearAttentionKernel::operator()(
     const Tensor &query, const Tensor &key, const Tensor &value, const Attributes &attributes,
     const Tensor *past_state, const Tensor *decay, const Tensor *beta, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return InvokeLinearAttentionKernel(Config(), query, key, value, attributes, past_state, decay,
                                      beta, rt, true);
 }
 
 void MicrosoftLinearAttentionKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   RunLinearAttentionKernelNode(Config(), *node_, rt);
 }
 

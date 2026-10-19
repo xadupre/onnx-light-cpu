@@ -17,11 +17,11 @@
 // dtype selects fp32 or fp64 and reports median seconds as well as throughput.
 // Its persistent executor reports the maximum block count used by each plan.
 
-#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "ml_cpu_compute/math/gemm/gemm_common.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <atomic>
@@ -40,8 +40,8 @@
 
 namespace {
 
-using onnx_light_cpu::GemmPlan;
-using onnx_light_cpu::GemmPlanOptions;
+using ml_cpu_compute::GemmPlan;
+using ml_cpu_compute::GemmPlanOptions;
 
 struct ThreadExecutor {
   explicit ThreadExecutor(std::size_t threads) {
@@ -64,7 +64,7 @@ struct ThreadExecutor {
   }
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadExecutor *>(context);
     self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
     {
@@ -102,7 +102,7 @@ struct ThreadExecutor {
     for (;;) {
       std::int64_t local_num_blocks;
       void *local_task_context;
-      onnx_light_cpu::ExecutionBlockFn local_task;
+      ml_cpu_compute::ExecutionBlockFn local_task;
       {
         std::unique_lock lock(mutex);
         start.wait(lock, [&] { return stopping || generation != observed_generation; });
@@ -144,7 +144,7 @@ struct ThreadExecutor {
   std::int64_t arrived_workers = 0;
   std::int64_t num_blocks = 0;
   void *task_context = nullptr;
-  onnx_light_cpu::ExecutionBlockFn task = nullptr;
+  ml_cpu_compute::ExecutionBlockFn task = nullptr;
   bool stopping = false;
   std::int64_t maximum_blocks = 1;
 };
@@ -218,7 +218,7 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
     value = static_cast<T>(dist(rng));
   }
 
-  GemmPlanOptions<T> options;
+  ml_cpu_compute::GemmPlanOptions<T> options;
   options.trans_a = c.trans_a;
   options.trans_b = c.trans_b;
   options.m = c.m;
@@ -229,7 +229,7 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
   if (c.constant_b) {
     options.constant_b = std::span<const T>(b.data(), b.size());
   }
-  const GemmPlan<T> plan(options);
+  const ml_cpu_compute::GemmPlan<T> plan(options);
   *useful_threads = plan.useful_threads();
   if (prepared_b != nullptr) {
     *prepared_b = plan.has_prepared_b();
@@ -279,8 +279,8 @@ double MeasureHalfGflops(const GemmCase &c, ThreadExecutor *executor, std::int64
   std::mt19937 rng(0x5eed5eedu);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   const auto narrow = [](float value) {
-    return Bfloat16 ? onnx_light_cpu::detail::FloatToBFloat16Bits(value)
-                    : onnx_light_cpu::detail::FloatToFloat16Bits(value);
+    return Bfloat16 ? ml_cpu_compute::detail::FloatToBFloat16Bits(value)
+                    : ml_cpu_compute::detail::FloatToFloat16Bits(value);
   };
   std::vector<std::uint16_t> a(c.m * c.k);
   std::vector<std::uint16_t> b(c.k * c.n);
@@ -293,18 +293,18 @@ double MeasureHalfGflops(const GemmCase &c, ThreadExecutor *executor, std::int64
     value = narrow(dist(rng));
   }
 
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
-  epilogue.output_conversion = Bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
-                                        : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = Bfloat16 ? ml_cpu_compute::GemmOutputConversion::kBFloat16
+                                        : ml_cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = out.data();
-  onnx_light_cpu::GemmHalfPlanOptions options;
+  ml_cpu_compute::GemmHalfPlanOptions options;
   options.is_bfloat16 = Bfloat16;
   options.trans_a = c.trans_a;
   options.trans_b = c.trans_b;
   options.m = c.m;
   options.n = c.n;
   options.k = c.k;
-  const onnx_light_cpu::GemmHalfPlan plan(options);
+  const ml_cpu_compute::GemmHalfPlan plan(options);
   executor->ResetMetrics();
 
   const auto run = [&]() { plan.Execute(a.data(), b.data(), epilogue, workspace.data()); };
@@ -333,29 +333,29 @@ double MeasureHalfGflops(const GemmCase &c, ThreadExecutor *executor, std::int64
   return operations / median / 1e9;
 }
 
-const char *SimdName(onnx_light_cpu::SimdLevel level) {
+const char *SimdName(ml_cpu_compute::SimdLevel level) {
   switch (level) {
-  case onnx_light_cpu::SimdLevel::kNone:
+  case ml_cpu_compute::SimdLevel::kNone:
     return "scalar";
-  case onnx_light_cpu::SimdLevel::kSSE2:
+  case ml_cpu_compute::SimdLevel::kSSE2:
     return "SSE2";
-  case onnx_light_cpu::SimdLevel::kAVX:
+  case ml_cpu_compute::SimdLevel::kAVX:
     return "AVX";
-  case onnx_light_cpu::SimdLevel::kAVX2:
+  case ml_cpu_compute::SimdLevel::kAVX2:
     return "AVX2";
-  case onnx_light_cpu::SimdLevel::kAVX512:
+  case ml_cpu_compute::SimdLevel::kAVX512:
     return "AVX-512";
   }
   return "unknown";
 }
 
-const char *MicroarchitectureName(onnx_light_cpu::GemmMicroarchitecture microarchitecture) {
+const char *MicroarchitectureName(ml_cpu_compute::GemmMicroarchitecture microarchitecture) {
   switch (microarchitecture) {
-  case onnx_light_cpu::GemmMicroarchitecture::kGeneric:
+  case ml_cpu_compute::GemmMicroarchitecture::kGeneric:
     return "generic";
-  case onnx_light_cpu::GemmMicroarchitecture::kIntelCore:
+  case ml_cpu_compute::GemmMicroarchitecture::kIntelCore:
     return "intel-core";
-  case onnx_light_cpu::GemmMicroarchitecture::kAmdZen:
+  case ml_cpu_compute::GemmMicroarchitecture::kAmdZen:
     return "amd-zen";
   }
   return "unknown";
@@ -371,15 +371,15 @@ int main(int argc, char **argv) {
     return 2;
   }
   ThreadExecutor executor(threads);
-  onnx_light_cpu::ExecutionExecutorView executor_view{&executor, static_cast<std::int64_t>(threads),
+  ml_cpu_compute::ExecutionExecutorView executor_view{&executor, static_cast<std::int64_t>(threads),
                                                       &ThreadExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope executor_scope(&executor_view);
-  const onnx_light_cpu::SimdLevel level = onnx_light_cpu::DetectSimdLevel();
-  const bool has_fma = onnx_light_cpu::CpuSupportsFma();
-  const onnx_light_cpu::GemmMicroarchitecture microarchitecture =
-      onnx_light_cpu::detail::DetectGemmMicroarchitecture();
+  ml_cpu_compute::ExecutionExecutorScope executor_scope(&executor_view);
+  const ml_cpu_compute::SimdLevel level = ml_cpu_compute::DetectSimdLevel();
+  const bool has_fma = ml_cpu_compute::CpuSupportsFma();
+  const ml_cpu_compute::GemmMicroarchitecture microarchitecture =
+      ml_cpu_compute::detail::DetectGemmMicroarchitecture();
   const std::size_t register_rows =
-      onnx_light_cpu::detail::SelectGemmRegisterRowsForMicroarchitecture(level, has_fma,
+      ml_cpu_compute::detail::SelectGemmRegisterRowsForMicroarchitecture(level, has_fma,
                                                                          microarchitecture);
 
   std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu  threads: %zu\n",

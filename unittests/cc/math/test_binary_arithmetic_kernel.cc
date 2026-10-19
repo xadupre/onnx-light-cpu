@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
+#include "ml_cpu_compute/math/binary/binary_arithmetic.h"
 
 #include <gtest/gtest.h>
 
@@ -38,8 +38,8 @@ void CheckRepeatedSquareDispatch(bool (*square)(const T *, T *, std::size_t), T 
 }
 
 TEST(BinaryArithmeticKernel, RepeatedCheckedSquareDispatch) {
-  CheckRepeatedSquareDispatch(onnx_light_cpu::BinarySquareInt32, std::int32_t{46340});
-  CheckRepeatedSquareDispatch(onnx_light_cpu::BinarySquareInt64, std::int64_t{3037000499});
+  CheckRepeatedSquareDispatch(ml_cpu_compute::BinarySquareInt32, std::int32_t{46340});
+  CheckRepeatedSquareDispatch(ml_cpu_compute::BinarySquareInt64, std::int64_t{3037000499});
 }
 
 // Binary PR02 -- exercises every FP32/FP64 Add/Sub/Mul/Div SIMD dispatch
@@ -61,52 +61,52 @@ template <typename T> std::vector<BinaryArithSpec<T>> AllOps();
 // Explicit per-type instantiation avoids depending on template argument
 // deduction picking the float overloads above for double.
 template <> std::vector<BinaryArithSpec<float>> AllOps<float>() {
-  using onnx_light_cpu::BinaryAddFloat32Contiguous;
-  using onnx_light_cpu::BinaryAddFloat32LeftScalar;
-  using onnx_light_cpu::BinaryAddFloat32RightScalar;
-  using onnx_light_cpu::BinaryDivFloat32Contiguous;
-  using onnx_light_cpu::BinaryDivFloat32LeftScalar;
-  using onnx_light_cpu::BinaryDivFloat32RightScalar;
-  using onnx_light_cpu::BinaryMulFloat32Contiguous;
-  using onnx_light_cpu::BinaryMulFloat32LeftScalar;
-  using onnx_light_cpu::BinaryMulFloat32RightScalar;
-  using onnx_light_cpu::BinarySubFloat32Contiguous;
-  using onnx_light_cpu::BinarySubFloat32LeftScalar;
-  using onnx_light_cpu::BinarySubFloat32RightScalar;
+  using ml_cpu_compute::BinaryAddFloat32Contiguous;
+  using ml_cpu_compute::BinaryAddFloat32LeftScalar;
+  using ml_cpu_compute::BinaryAddFloat32RightScalar;
+  using ml_cpu_compute::BinaryDivFloat32Contiguous;
+  using ml_cpu_compute::BinaryDivFloat32LeftScalar;
+  using ml_cpu_compute::BinaryDivFloat32RightScalar;
+  using ml_cpu_compute::BinaryMulFloat32Contiguous;
+  using ml_cpu_compute::BinaryMulFloat32LeftScalar;
+  using ml_cpu_compute::BinaryMulFloat32RightScalar;
+  using ml_cpu_compute::BinarySubFloat32Contiguous;
+  using ml_cpu_compute::BinarySubFloat32LeftScalar;
+  using ml_cpu_compute::BinarySubFloat32RightScalar;
   return {
-      {"Add", [](float a, float b) { return a + b; }, BinaryAddFloat32Contiguous,
-       BinaryAddFloat32LeftScalar, BinaryAddFloat32RightScalar},
-      {"Sub", [](float a, float b) { return a - b; }, BinarySubFloat32Contiguous,
-       BinarySubFloat32LeftScalar, BinarySubFloat32RightScalar},
-      {"Mul", [](float a, float b) { return a * b; }, BinaryMulFloat32Contiguous,
-       BinaryMulFloat32LeftScalar, BinaryMulFloat32RightScalar},
-      {"Div", [](float a, float b) { return a / b; }, BinaryDivFloat32Contiguous,
-       BinaryDivFloat32LeftScalar, BinaryDivFloat32RightScalar},
+      {"Add", [](float a, float b) { return a + b; }, ml_cpu_compute::BinaryAddFloat32Contiguous,
+       ml_cpu_compute::BinaryAddFloat32LeftScalar, ml_cpu_compute::BinaryAddFloat32RightScalar},
+      {"Sub", [](float a, float b) { return a - b; }, ml_cpu_compute::BinarySubFloat32Contiguous,
+       ml_cpu_compute::BinarySubFloat32LeftScalar, ml_cpu_compute::BinarySubFloat32RightScalar},
+      {"Mul", [](float a, float b) { return a * b; }, ml_cpu_compute::BinaryMulFloat32Contiguous,
+       ml_cpu_compute::BinaryMulFloat32LeftScalar, ml_cpu_compute::BinaryMulFloat32RightScalar},
+      {"Div", [](float a, float b) { return a / b; }, ml_cpu_compute::BinaryDivFloat32Contiguous,
+       ml_cpu_compute::BinaryDivFloat32LeftScalar, ml_cpu_compute::BinaryDivFloat32RightScalar},
   };
 }
 
 template <> std::vector<BinaryArithSpec<double>> AllOps<double>() {
-  using onnx_light_cpu::BinaryAddFloat64Contiguous;
-  using onnx_light_cpu::BinaryAddFloat64LeftScalar;
-  using onnx_light_cpu::BinaryAddFloat64RightScalar;
-  using onnx_light_cpu::BinaryDivFloat64Contiguous;
-  using onnx_light_cpu::BinaryDivFloat64LeftScalar;
-  using onnx_light_cpu::BinaryDivFloat64RightScalar;
-  using onnx_light_cpu::BinaryMulFloat64Contiguous;
-  using onnx_light_cpu::BinaryMulFloat64LeftScalar;
-  using onnx_light_cpu::BinaryMulFloat64RightScalar;
-  using onnx_light_cpu::BinarySubFloat64Contiguous;
-  using onnx_light_cpu::BinarySubFloat64LeftScalar;
-  using onnx_light_cpu::BinarySubFloat64RightScalar;
+  using ml_cpu_compute::BinaryAddFloat64Contiguous;
+  using ml_cpu_compute::BinaryAddFloat64LeftScalar;
+  using ml_cpu_compute::BinaryAddFloat64RightScalar;
+  using ml_cpu_compute::BinaryDivFloat64Contiguous;
+  using ml_cpu_compute::BinaryDivFloat64LeftScalar;
+  using ml_cpu_compute::BinaryDivFloat64RightScalar;
+  using ml_cpu_compute::BinaryMulFloat64Contiguous;
+  using ml_cpu_compute::BinaryMulFloat64LeftScalar;
+  using ml_cpu_compute::BinaryMulFloat64RightScalar;
+  using ml_cpu_compute::BinarySubFloat64Contiguous;
+  using ml_cpu_compute::BinarySubFloat64LeftScalar;
+  using ml_cpu_compute::BinarySubFloat64RightScalar;
   return {
-      {"Add", [](double a, double b) { return a + b; }, BinaryAddFloat64Contiguous,
-       BinaryAddFloat64LeftScalar, BinaryAddFloat64RightScalar},
-      {"Sub", [](double a, double b) { return a - b; }, BinarySubFloat64Contiguous,
-       BinarySubFloat64LeftScalar, BinarySubFloat64RightScalar},
-      {"Mul", [](double a, double b) { return a * b; }, BinaryMulFloat64Contiguous,
-       BinaryMulFloat64LeftScalar, BinaryMulFloat64RightScalar},
-      {"Div", [](double a, double b) { return a / b; }, BinaryDivFloat64Contiguous,
-       BinaryDivFloat64LeftScalar, BinaryDivFloat64RightScalar},
+      {"Add", [](double a, double b) { return a + b; }, ml_cpu_compute::BinaryAddFloat64Contiguous,
+       ml_cpu_compute::BinaryAddFloat64LeftScalar, ml_cpu_compute::BinaryAddFloat64RightScalar},
+      {"Sub", [](double a, double b) { return a - b; }, ml_cpu_compute::BinarySubFloat64Contiguous,
+       ml_cpu_compute::BinarySubFloat64LeftScalar, ml_cpu_compute::BinarySubFloat64RightScalar},
+      {"Mul", [](double a, double b) { return a * b; }, ml_cpu_compute::BinaryMulFloat64Contiguous,
+       ml_cpu_compute::BinaryMulFloat64LeftScalar, ml_cpu_compute::BinaryMulFloat64RightScalar},
+      {"Div", [](double a, double b) { return a / b; }, ml_cpu_compute::BinaryDivFloat64Contiguous,
+       ml_cpu_compute::BinaryDivFloat64LeftScalar, ml_cpu_compute::BinaryDivFloat64RightScalar},
   };
 }
 
@@ -219,20 +219,20 @@ TEST(BinaryArithmeticKernel, Float32PReluMatchesScalarReferenceAcrossTailSizes) 
       right[i] = special[(i + 3) % special.size()];
     }
 
-    onnx_light_cpu::BinaryPReluFloat32Contiguous(left.data(), right.data(), actual.data(), count);
+    ml_cpu_compute::BinaryPReluFloat32Contiguous(left.data(), right.data(), actual.data(), count);
     for (std::size_t i = 0; i < count; ++i) {
       ExpectBitwiseOrNaNEqual(actual[i], reference(left[i], right[i]), i);
     }
 
     for (const float left_scalar : special) {
-      onnx_light_cpu::BinaryPReluFloat32LeftScalar(left_scalar, right.data(), actual.data(), count);
+      ml_cpu_compute::BinaryPReluFloat32LeftScalar(left_scalar, right.data(), actual.data(), count);
       for (std::size_t i = 0; i < count; ++i) {
         ExpectBitwiseOrNaNEqual(actual[i], reference(left_scalar, right[i]), i);
       }
     }
 
     const float right_scalar = 3.5f;
-    onnx_light_cpu::BinaryPReluFloat32RightScalar(left.data(), right_scalar, actual.data(), count);
+    ml_cpu_compute::BinaryPReluFloat32RightScalar(left.data(), right_scalar, actual.data(), count);
     for (std::size_t i = 0; i < count; ++i) {
       ExpectBitwiseOrNaNEqual(actual[i], reference(left[i], right_scalar), i);
     }
@@ -249,9 +249,9 @@ TEST(BinaryArithmeticKernel, PreservesOperandOrderForNonCommutativeOps) {
   std::vector<float> right = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
   std::vector<float> sub_out(left.size());
   std::vector<float> div_out(left.size());
-  onnx_light_cpu::BinarySubFloat32Contiguous(left.data(), right.data(), sub_out.data(),
+  ml_cpu_compute::BinarySubFloat32Contiguous(left.data(), right.data(), sub_out.data(),
                                              left.size());
-  onnx_light_cpu::BinaryDivFloat32Contiguous(left.data(), right.data(), div_out.data(),
+  ml_cpu_compute::BinaryDivFloat32Contiguous(left.data(), right.data(), div_out.data(),
                                              left.size());
   for (std::size_t i = 0; i < left.size(); ++i) {
     EXPECT_FLOAT_EQ(sub_out[i], left[i] - right[i]) << "index=" << i;
@@ -260,9 +260,9 @@ TEST(BinaryArithmeticKernel, PreservesOperandOrderForNonCommutativeOps) {
 
   std::vector<float> left_scalar_out(right.size());
   std::vector<float> right_scalar_out(left.size());
-  onnx_light_cpu::BinarySubFloat32LeftScalar(100.0f, right.data(), left_scalar_out.data(),
+  ml_cpu_compute::BinarySubFloat32LeftScalar(100.0f, right.data(), left_scalar_out.data(),
                                              right.size());
-  onnx_light_cpu::BinarySubFloat32RightScalar(left.data(), 100.0f, right_scalar_out.data(),
+  ml_cpu_compute::BinarySubFloat32RightScalar(left.data(), 100.0f, right_scalar_out.data(),
                                               left.size());
   for (std::size_t i = 0; i < right.size(); ++i) {
     EXPECT_FLOAT_EQ(left_scalar_out[i], 100.0f - right[i]) << "index=" << i;

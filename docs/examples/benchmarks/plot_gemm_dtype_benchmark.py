@@ -24,7 +24,7 @@ This example benchmarks all three element types the kernel supports --
 ``float32``, ``float16`` and ``bfloat16`` -- on one representative shape per
 code path. ``float16``/``bfloat16`` have **no dedicated SIMD micro-kernel**:
 ``GemmKernel`` widens them to ``float32``, calls the same SIMD-accelerated
-``GemmFloat32`` routine used for the ``float32`` case, and rounds the result
+``GemmFloat32`` kernel used for the ``float32`` case, and rounds the result
 back down (see ``onnx_light_cpu/kernels/math/gemm_kernel.cc``). The extra
 widen/round-trip is therefore pure overhead on top of the ``float32`` compute,
 and this example shows how that overhead shrinks (relatively) as the shape
@@ -180,7 +180,7 @@ def measure(func, repeat, warmup, max_duration):
 # -----------------------------------------------
 #
 # ``kGemmTileM == 64``, ``kGemmTileN == 256`` and ``kGemmTileK == 256`` (see
-# ``onnx_light_cpu/impl/math/gemm_kernel.cc``); every shape below is picked to
+# ``ml_cpu_compute/src/math/gemm.cc``); every shape below is picked to
 # sit clearly on one side of those thresholds.
 
 SHAPES = (

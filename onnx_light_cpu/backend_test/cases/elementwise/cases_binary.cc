@@ -4,9 +4,9 @@
 
 #include "onnx_light_cpu/backend_test/cases/elementwise/include_elementwise_cases.h"
 
-#include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
-#include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
+#include "ml_cpu_compute/math/binary/binary_broadcast_plan.h"
+#include "ml_cpu_compute/math/binary/binary_descriptor.h"
+#include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 
 #include "onnx_core/backend_test/expect.h"
@@ -34,7 +34,7 @@ using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
-using CpuDataType = onnx_light_cpu::DataType;
+using CpuDataType = ml_cpu_compute::DataType;
 using rt_ns::DataType;
 using rt_ns::KernelContext;
 using rt_ns::OpsetId;
@@ -77,16 +77,16 @@ const std::vector<ShapePair> &BinaryBenchmarkShapePairs() {
   return kPairs;
 }
 
-bool IsNonCommutative(BinaryOperator op) {
+bool IsNonCommutative(ml_cpu_compute::BinaryOperator op) {
   switch (op) {
-  case BinaryOperator::kSub:
-  case BinaryOperator::kDiv:
-  case BinaryOperator::kPow:
-  case BinaryOperator::kGreater:
-  case BinaryOperator::kGreaterOrEqual:
-  case BinaryOperator::kLess:
-  case BinaryOperator::kLessOrEqual:
-  case BinaryOperator::kBitShift:
+  case ml_cpu_compute::BinaryOperator::kSub:
+  case ml_cpu_compute::BinaryOperator::kDiv:
+  case ml_cpu_compute::BinaryOperator::kPow:
+  case ml_cpu_compute::BinaryOperator::kGreater:
+  case ml_cpu_compute::BinaryOperator::kGreaterOrEqual:
+  case ml_cpu_compute::BinaryOperator::kLess:
+  case ml_cpu_compute::BinaryOperator::kLessOrEqual:
+  case ml_cpu_compute::BinaryOperator::kBitShift:
     return true;
   default:
     return false;
@@ -155,7 +155,8 @@ std::size_t BroadcastElementCount(const rt_ns::Shape &left, const rt_ns::Shape &
   return ElementCount(BroadcastShape(left, right));
 }
 
-NodeProto MakeNode(std::string_view op_type, const BinaryKernelDescriptor::Attributes &attributes) {
+NodeProto MakeNode(std::string_view op_type,
+                   const ml_cpu_compute::BinaryOperationDescriptor::Attributes &attributes) {
   NodeProto node;
   node.set_op_type(std::string(op_type));
   node.add_input("a");
@@ -169,10 +170,11 @@ NodeProto MakeNode(std::string_view op_type, const BinaryKernelDescriptor::Attri
   } else if (op_type == "BitShift") {
     auto *attr = node.add_attribute();
     attr->set_name("direction");
-    attr->set_s(attributes.bitshift_direction ==
-                        BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft
-                    ? "LEFT"
-                    : "RIGHT");
+    attr->set_s(
+        attributes.bitshift_direction ==
+                ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft
+            ? "LEFT"
+            : "RIGHT");
     attr->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::STRING);
   }
   return node;
@@ -279,28 +281,31 @@ Tensor MakeTypedTensor(CpuDataType type, const rt_ns::Shape &shape,
   }
 }
 
-BinaryKernelDescriptor::Attributes DefaultAttributes(const BinaryManifestEntry &entry,
-                                                     CpuDataType left_type) {
-  BinaryKernelDescriptor::Attributes attributes;
-  if (entry.op == BinaryOperator::kMod) {
+ml_cpu_compute::BinaryOperationDescriptor::Attributes
+DefaultAttributes(const ml_cpu_compute::BinaryManifestEntry &entry, CpuDataType left_type) {
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+  if (entry.op == ml_cpu_compute::BinaryOperator::kMod) {
     const bool is_float = left_type == CpuDataType::FLOAT || left_type == CpuDataType::DOUBLE ||
                           left_type == CpuDataType::FLOAT16 || left_type == CpuDataType::BFLOAT16;
     attributes.mod_fmod = is_float ? 1 : 0;
-  } else if (entry.op == BinaryOperator::kBitShift) {
-    attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft;
+  } else if (entry.op == ml_cpu_compute::BinaryOperator::kBitShift) {
+    attributes.bitshift_direction =
+        ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft;
   }
   return attributes;
 }
 
-IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignature &signature,
+IoData MakeBinaryIoData(const ml_cpu_compute::BinaryManifestEntry &entry,
+                        const ml_cpu_compute::BinaryTypeSignature &signature,
                         const ShapePair &shape_pair,
-                        const BinaryKernelDescriptor::Attributes &attributes, bool swap_operands,
-                        bool generate_expected_outputs = true) {
-  const bool division_like = entry.op == BinaryOperator::kDiv || entry.op == BinaryOperator::kMod;
-  const bool pow_like = entry.op == BinaryOperator::kPow;
-  const bool shift_like = entry.op == BinaryOperator::kBitShift;
+                        const ml_cpu_compute::BinaryOperationDescriptor::Attributes &attributes,
+                        bool swap_operands, bool generate_expected_outputs = true) {
+  const bool division_like = entry.op == ml_cpu_compute::BinaryOperator::kDiv ||
+                             entry.op == ml_cpu_compute::BinaryOperator::kMod;
+  const bool pow_like = entry.op == ml_cpu_compute::BinaryOperator::kPow;
+  const bool shift_like = entry.op == ml_cpu_compute::BinaryOperator::kBitShift;
   Tensor left = MakeTypedTensor(signature.left, swap_operands ? shape_pair.right : shape_pair.left,
-                                {}, entry.op == BinaryOperator::kBitShift,
+                                {}, entry.op == ml_cpu_compute::BinaryOperator::kBitShift,
                                 division_like || shift_like, pow_like || shift_like);
   Tensor right =
       MakeTypedTensor(signature.right, swap_operands ? shape_pair.left : shape_pair.right, {}, true,
@@ -315,10 +320,11 @@ IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignat
   return IoData{{std::move(left), std::move(right)}, {std::move(output)}};
 }
 
-std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature &signature,
+std::string CaseName(const ml_cpu_compute::BinaryManifestEntry &entry,
+                     const ml_cpu_compute::BinaryTypeSignature &signature,
                      const ShapePair &shape_pair,
-                     const BinaryKernelDescriptor::Attributes &attributes, bool swap_operands,
-                     bool benchmark, std::int64_t size_override = -1,
+                     const ml_cpu_compute::BinaryOperationDescriptor::Attributes &attributes,
+                     bool swap_operands, bool benchmark, std::int64_t size_override = -1,
                      std::string_view profile = "") {
   std::string op = std::string(entry.op_type);
   for (char &c : op) {
@@ -332,12 +338,12 @@ std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature
   name += "v" + std::to_string(entry.since_version) + "_" + shape_pair.tag + "_" +
           DataTypeSuffix(signature.left) + "x" + DataTypeSuffix(signature.right) + "_to_" +
           DataTypeSuffix(signature.output);
-  if (entry.op == BinaryOperator::kMod) {
+  if (entry.op == ml_cpu_compute::BinaryOperator::kMod) {
     name += attributes.mod_fmod == 0 ? "_fmod0" : "_fmod1";
   }
-  if (entry.op == BinaryOperator::kBitShift) {
+  if (entry.op == ml_cpu_compute::BinaryOperator::kBitShift) {
     name += attributes.bitshift_direction ==
-                    BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft
+                    ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft
                 ? "_left"
                 : "_right";
   }
@@ -349,13 +355,16 @@ std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature
   return name;
 }
 
-void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestEntry &entry,
-                          const BinaryTypeSignature &signature, const ShapePair &shape_pair) {
+void RegisterLlmBenchmark(std::vector<TestCase> &registry,
+                          const ml_cpu_compute::BinaryManifestEntry &entry,
+                          const ml_cpu_compute::BinaryTypeSignature &signature,
+                          const ShapePair &shape_pair) {
   const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
   const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
   const std::int64_t output_count =
       static_cast<std::int64_t>(BroadcastElementCount(shape_pair.left, shape_pair.right));
-  const BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
+  const ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes =
+      DefaultAttributes(entry, signature.left);
   const NodeProto node = MakeNode(entry.op_type, attributes);
   const OpsetId opset(std::string(), entry.since_version);
   const std::string name =
@@ -371,15 +380,16 @@ void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestE
 }
 
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
-                                    const BinaryManifestEntry &entry,
-                                    const BinaryTypeSignature &signature) {
+                                    const ml_cpu_compute::BinaryManifestEntry &entry,
+                                    const ml_cpu_compute::BinaryTypeSignature &signature) {
   const std::vector<ShapePair> &shape_pairs = BinaryBenchmarkShapePairs();
   for (const ShapePair &shape_pair : shape_pairs) {
     const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
     const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
     const std::int64_t output_count =
         static_cast<std::int64_t>(BroadcastElementCount(shape_pair.left, shape_pair.right));
-    BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
+    ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes =
+        DefaultAttributes(entry, signature.left);
     const NodeProto node = MakeNode(entry.op_type, attributes);
     const OpsetId opset(std::string(), entry.since_version);
     const std::string name =
@@ -404,8 +414,9 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
                                     BroadcastShape(shape_pair.left, shape_pair.right))});
     }
-    if (entry.op == BinaryOperator::kBitShift) {
-      attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
+    if (entry.op == ml_cpu_compute::BinaryOperator::kBitShift) {
+      attributes.bitshift_direction =
+          ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight;
       const NodeProto right_node = MakeNode(entry.op_type, attributes);
       const std::string right_name =
           CaseName(entry, signature, shape_pair, attributes, false, true, output_count);
@@ -425,23 +436,25 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
 
 void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &op_type,
                             TestMode mode) {
-  const BinaryManifestEntry &entry = GetBinaryManifestEntry(op_type);
+  const ml_cpu_compute::BinaryManifestEntry &entry =
+      ml_cpu_compute::GetBinaryManifestEntry(op_type);
   if (mode == TestMode::BENCHMARK) {
-    for (const BinaryTypeSignature &signature : entry.signatures) {
+    for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
       if (signature.left == CpuDataType::STRING) {
         continue;
       }
       auto benchmark_entry = entry;
-      if (entry.op == BinaryOperator::kMod && signature.left != CpuDataType::FLOAT &&
-          signature.left != CpuDataType::DOUBLE && signature.left != CpuDataType::FLOAT16 &&
-          signature.left != CpuDataType::BFLOAT16) {
+      if (entry.op == ml_cpu_compute::BinaryOperator::kMod &&
+          signature.left != CpuDataType::FLOAT && signature.left != CpuDataType::DOUBLE &&
+          signature.left != CpuDataType::FLOAT16 && signature.left != CpuDataType::BFLOAT16) {
         // Integer semantics are unchanged in Mod-28; keep ORT parity fixtures
         // on the released schema. Correctness fixtures still use the latest.
         benchmark_entry.since_version = 13;
       }
       RegisterBenchmarksForSignature(registry, benchmark_entry, signature);
-      if (entry.op == BinaryOperator::kMul && signature.left == CpuDataType::FLOAT16 &&
-          signature.right == CpuDataType::FLOAT16 && signature.output == CpuDataType::FLOAT16) {
+      if (entry.op == ml_cpu_compute::BinaryOperator::kMul &&
+          signature.left == CpuDataType::FLOAT16 && signature.right == CpuDataType::FLOAT16 &&
+          signature.output == CpuDataType::FLOAT16) {
         for (std::int64_t sequence_length :
              {std::int64_t{1}, std::int64_t{128}, std::int64_t{512}}) {
           RegisterLlmBenchmark(registry, entry, signature,
@@ -449,15 +462,16 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                                 {1, sequence_length, 12288},
                                 {1, sequence_length, 12288}});
         }
-      } else if (entry.op == BinaryOperator::kSub && signature.left == CpuDataType::INT64 &&
-                 signature.right == CpuDataType::INT64 && signature.output == CpuDataType::INT64) {
+      } else if (entry.op == ml_cpu_compute::BinaryOperator::kSub &&
+                 signature.left == CpuDataType::INT64 && signature.right == CpuDataType::INT64 &&
+                 signature.output == CpuDataType::INT64) {
         RegisterLlmBenchmark(registry, entry, signature, {"right_scalar_batch1", {1}, {}});
       }
     }
     return;
   }
 
-  if (entry.op == BinaryOperator::kMod) {
+  if (entry.op == ml_cpu_compute::BinaryOperator::kMod) {
     for (const auto type :
          {CpuDataType::FLOAT, CpuDataType::DOUBLE, CpuDataType::FLOAT16, CpuDataType::BFLOAT16}) {
       const NodeProto node = MakeNode(entry.op_type, {});
@@ -474,9 +488,10 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
     }
   }
 
-  for (const BinaryTypeSignature &signature : entry.signatures) {
+  for (const ml_cpu_compute::BinaryTypeSignature &signature : entry.signatures) {
     for (const ShapePair &shape_pair : BinaryShapePairs()) {
-      BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes =
+          DefaultAttributes(entry, signature.left);
       const NodeProto node = MakeNode(entry.op_type, attributes);
       const OpsetId opset(std::string(), entry.since_version);
       const std::string name = CaseName(entry, signature, shape_pair, attributes, false, false);
@@ -491,9 +506,9 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                  return MakeBinaryIoData(entry, signature, shape_pair, attributes, true);
                });
       }
-      if (entry.op == BinaryOperator::kBitShift) {
+      if (entry.op == ml_cpu_compute::BinaryOperator::kBitShift) {
         attributes.bitshift_direction =
-            BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
+            ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight;
         const NodeProto right_node = MakeNode(entry.op_type, attributes);
         const std::string right_name =
             CaseName(entry, signature, shape_pair, attributes, false, false);
@@ -502,7 +517,7 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                  return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
                });
       }
-      if (entry.op == BinaryOperator::kMod &&
+      if (entry.op == ml_cpu_compute::BinaryOperator::kMod &&
           !(signature.left == CpuDataType::FLOAT || signature.left == CpuDataType::DOUBLE ||
             signature.left == CpuDataType::FLOAT16 || signature.left == CpuDataType::BFLOAT16)) {
         attributes.mod_fmod = 1;

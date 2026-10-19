@@ -8,4 +8,10 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/onnx_light_cpuTargets.cmake")
 
+if(NOT TARGET onnx_light_cpu::lib_onnx_light_cpu)
+  add_library(onnx_light_cpu::lib_onnx_light_cpu INTERFACE IMPORTED)
+  set_target_properties(onnx_light_cpu::lib_onnx_light_cpu PROPERTIES
+      INTERFACE_LINK_LIBRARIES onnx_light_cpu::ml_cpu_compute)
+endif()
+
 check_required_components(onnx_light_cpu)

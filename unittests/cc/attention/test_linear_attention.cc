@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/attention/linear_attention.h"
+#include "ml_cpu_compute/attention/linear_attention.h"
 
 #include <gtest/gtest.h>
 
@@ -11,14 +11,14 @@
 namespace {
 
 TEST(LinearAttention, GqaSharesStateAcrossQueryHeads) {
-  onnx_light_cpu::LinearAttentionParameters parameters;
+  ml_cpu_compute::LinearAttentionParameters parameters;
   parameters.batch_size = 1;
   parameters.sequence_length = 1;
   parameters.query_heads = 2;
   parameters.key_value_heads = 1;
   parameters.key_head_size = 2;
   parameters.value_head_size = 1;
-  parameters.rule = onnx_light_cpu::LinearAttentionRule::kLinear;
+  parameters.rule = ml_cpu_compute::LinearAttentionRule::kLinear;
   parameters.scale = 1.0f;
 
   const std::array<float, 4> query{2.0f, 3.0f, 1.0f, 2.0f};
@@ -27,7 +27,7 @@ TEST(LinearAttention, GqaSharesStateAcrossQueryHeads) {
   std::array<float, 2> state{};
   std::array<float, 2> output{};
 
-  onnx_light_cpu::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
+  ml_cpu_compute::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
                                          nullptr, nullptr, state.data(), output.data());
 
   EXPECT_EQ(state, (std::array<float, 2>{24.0f, 30.0f}));
@@ -43,14 +43,14 @@ TEST(LinearAttention, GqaSharesStateAcrossQueryHeads) {
 // decomposition, so these tests would catch a regression in either grouping
 // direction without exercising the same code path as the implementation.
 TEST(LinearAttention, InverseGroupingSharesQueryAcrossStateHeads) {
-  onnx_light_cpu::LinearAttentionParameters parameters;
+  ml_cpu_compute::LinearAttentionParameters parameters;
   parameters.batch_size = 1;
   parameters.sequence_length = 1;
   parameters.query_heads = 1;     // Hq
   parameters.key_value_heads = 2; // Hkv > Hq: inverse grouping.
   parameters.key_head_size = 2;
   parameters.value_head_size = 1;
-  parameters.rule = onnx_light_cpu::LinearAttentionRule::kLinear;
+  parameters.rule = ml_cpu_compute::LinearAttentionRule::kLinear;
   parameters.scale = 1.0f;
 
   const std::array<float, 2> query{2.0f, 3.0f};
@@ -60,7 +60,7 @@ TEST(LinearAttention, InverseGroupingSharesQueryAcrossStateHeads) {
   std::array<float, 4> state{};
   std::array<float, 2> output{};
 
-  onnx_light_cpu::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
+  ml_cpu_compute::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
                                          nullptr, nullptr, state.data(), output.data());
 
   // state_head 0: state = key[0:2] * value[0] = [5, 5]; output = 5*2+5*3=25.
@@ -70,7 +70,7 @@ TEST(LinearAttention, InverseGroupingSharesQueryAcrossStateHeads) {
 }
 
 TEST(LinearAttention, KeyHeadSharingBroadcastsPhysicalKeyAcrossStateHeads) {
-  onnx_light_cpu::LinearAttentionParameters parameters;
+  ml_cpu_compute::LinearAttentionParameters parameters;
   parameters.batch_size = 1;
   parameters.sequence_length = 1;
   parameters.query_heads = 2;     // Hq == Hkv: standard (1:1) query grouping.
@@ -78,7 +78,7 @@ TEST(LinearAttention, KeyHeadSharingBroadcastsPhysicalKeyAcrossStateHeads) {
   parameters.key_heads = 1;       // Hk < Hkv: both state heads share one key.
   parameters.key_head_size = 2;
   parameters.value_head_size = 1;
-  parameters.rule = onnx_light_cpu::LinearAttentionRule::kLinear;
+  parameters.rule = ml_cpu_compute::LinearAttentionRule::kLinear;
   parameters.scale = 1.0f;
 
   const std::array<float, 4> query{1.0f, 2.0f, 2.0f, 1.0f};
@@ -87,7 +87,7 @@ TEST(LinearAttention, KeyHeadSharingBroadcastsPhysicalKeyAcrossStateHeads) {
   std::array<float, 4> state{};
   std::array<float, 2> output{};
 
-  onnx_light_cpu::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
+  ml_cpu_compute::LinearAttentionFloat32(parameters, query.data(), key.data(), value.data(),
                                          nullptr, nullptr, state.data(), output.data());
 
   // state_head 0: state = key * value[0] = [12, 8]; output = 12*1+8*2=28.

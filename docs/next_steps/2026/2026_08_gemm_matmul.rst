@@ -477,13 +477,13 @@ extra full-matrix memory passes.
   ``vcvt_f32_f16`` (``FCVTL``) instruction for FLOAT16, both with an exact scalar
   tail matching the bit decode and a scalar fallback when the FP16 intrinsics are
   unavailable. Roadmap PR08.2 then adds the native NEON arithmetic kernels
-  (``GemmMicroKernel_NEON_BF16`` always, ``GemmMicroKernel_NEON_FP16`` when the
+  (``GemmMicroTile_NEON_BF16`` always, ``GemmMicroTile_NEON_FP16`` when the
   FP16 intrinsics compile): both keep the operands half-precision to the register
   file, widen each ``B`` vector on the fly (zero-extend/shift for BFLOAT16,
   ``FCVTL`` for FLOAT16) and accumulate in float32, and are dispatched from
   ``GemmHalfPlanned<kGeneral>`` for non-transposed ``B`` ahead of the converting
   float32 path, which stays the fallback. Roadmap PR08.3 then adds the native SVE
-  arithmetic kernels (``GemmMicroKernel_SVE_BF16`` / ``GemmMicroKernel_SVE_FP16``):
+  arithmetic kernels (``GemmMicroTile_SVE_BF16`` / ``GemmMicroTile_SVE_FP16``):
   they reuse the same drivers, keep the operands half-precision to the register
   file, widen each ``B`` vector on the fly (``svld1uh_u32`` zero-extend/shift for
   BFLOAT16, the SVE ``FCVT`` ``svcvt_f32_f16`` for FLOAT16), accumulate in
@@ -684,7 +684,7 @@ require measurements on dedicated hardware.
    * - P1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
        ``GroupedGemm`` interfaces in
-       ``onnx_light_cpu/impl/math/gemm/gemm_plan.h``.
+       ``ml_cpu_compute/include/ml_cpu_compute/math/gemm/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
      - P0.
@@ -1015,14 +1015,14 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Implemented. A new ``CpuSupportsAvx512Fp16()`` CPUID gate
        (leaf 7 ``EDX[23]`` plus OS AVX-512 state) selects the native path at
        runtime. The ``gemm/avx512fp16`` translation unit is compiled with
-       ``-mavx512fp16`` and carries ``GemmMicroKernel_AVX512FP16``, which keeps
+       ``-mavx512fp16`` and carries ``GemmMicroTile_AVX512FP16``, which keeps
        both operands in FLOAT16 -- a packed FLOAT16 ``A`` panel and the
        non-transposed FLOAT16 ``B`` matrix -- widens each 16-lane ``B`` vector
        with ``vcvtph2psx`` (``_mm512_cvtxph_ps``), broadcasts each FLOAT16 ``A``
        element, and accumulates in float32, so the result matches the
        widen-then-float32 reference. Column counts that are not a multiple of
        sixteen finish through the shared scalar member
-       ``GemmMicroKernel_ScalarFp16`` (also the portable, always-built family
+       ``GemmMicroTile_ScalarFp16`` (also the portable, always-built family
        member). ``GemmHalfPlanned`` dispatches the general FLOAT16 algorithm to
        the native ``GemmFp16NativeGeneral`` driver when the CPU reports
        AVX-512FP16 and ``B`` is not transposed, halving the ``B`` traffic; every
@@ -1040,7 +1040,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Implemented. A new ``CpuSupportsAvx512Bf16()`` CPUID gate
        (leaf 7 subleaf 1 ``EAX[5]`` plus OS AVX-512 state) selects the native
        path at runtime. The ``gemm/avx512bf16`` translation unit is compiled
-       with ``-mavx512bf16`` and carries ``GemmMicroKernel_AVX512BF16``, which
+       with ``-mavx512bf16`` and carries ``GemmMicroTile_AVX512BF16``, which
        keeps both operands in BFLOAT16 -- a packed BFLOAT16 ``A`` panel and the
        non-transposed BFLOAT16 ``B`` matrix -- and reduces two ``k`` iterations
        at a time with the ``vdpbf16ps`` (``_mm512_dpbf16_ps``) dot-product,
@@ -1050,7 +1050,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        broadcasting the matching BFLOAT16 ``A`` pair; an odd ``K`` finishes with
        one pair whose second element is zeroed, and column counts that are not a
        multiple of sixteen finish through the shared scalar member
-       ``GemmMicroKernel_ScalarBf16`` (also the portable, always-built family
+       ``GemmMicroTile_ScalarBf16`` (also the portable, always-built family
        member). ``GemmHalfPlanned`` dispatches the general BFLOAT16 algorithm to
        the native ``GemmBf16NativeGeneral`` driver when the CPU reports
        AVX-512BF16 and ``B`` is not transposed; every other shape and ISA keeps
@@ -1094,9 +1094,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - PR07.4, PR07.5
      - Implemented. A dedicated ``gemm/amx/gemm_amx_bf16`` translation unit
        compiled with ``-mamx-tile -mamx-bf16`` (guarded by
-       ``ONNX_LIGHT_CPU_HAVE_AMX_BF16``) adds ``GemmMicroKernel_AMXBF16``, a
+       ``ML_CPU_COMPUTE_HAVE_AMX_BF16``) adds ``GemmMicroTile_AMXBF16``, a
        native member of the BFLOAT16 micro-kernel family sharing the
-       ``GemmBf16MicroKernel`` signature so the PR07.4
+       ``GemmBf16MicroTile`` signature so the PR07.4
        ``GemmBf16NativeGeneral`` driver, BFLOAT16 ``A`` packing (including
        ``trans_a``), and column-tail handling are reused. The kernel configures
        three AMX tiles through the PR07.5 lifecycle (``AmxTileConfig`` /
@@ -1123,7 +1123,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        -- a baseline zero-extend (``vmovl_u16``) and 16-bit left shift
        (``vshlq_n_u32``) -- and, when the ``vld1q_f16`` / ``vcvt_f32_f16``
        (``FCVTL``) intrinsics compile (probed as
-       ``ONNX_LIGHT_CPU_HAVE_NEON_FP16``), ``GemmConvertFloat16ToFloat32_NEON``.
+       ``ML_CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmConvertFloat16ToFloat32_NEON``.
        Both widen eight contiguous half-precision patterns per iteration with an
        exact scalar tail that reuses ``Bfloat16BitsToFloat`` /
        ``Float16BitsToFloat`` so the vectorized result is bit-identical to the
@@ -1143,11 +1143,11 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        differential corpus while retaining PR08.1 as fallback.
      - PR08.1
      - Implemented. The NEON translation unit (``gemm/arm/gemm_kernel_neon``)
-       adds ``GemmMicroKernel_NEON_BF16`` (always, baseline NEON) and, when the
+       adds ``GemmMicroTile_NEON_BF16`` (always, baseline NEON) and, when the
        FP16 vector load/convert intrinsics compile
-       (``ONNX_LIGHT_CPU_HAVE_NEON_FP16``), ``GemmMicroKernel_NEON_FP16`` -- new
+       (``ML_CPU_COMPUTE_HAVE_NEON_FP16``), ``GemmMicroTile_NEON_FP16`` -- new
        members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
-       ``GemmBf16MicroKernel`` / ``GemmFp16MicroKernel`` signatures so the PR07.4
+       ``GemmBf16MicroTile`` / ``GemmFp16MicroTile`` signatures so the PR07.4
        / PR07.3 ``GemmBf16NativeGeneral`` / ``GemmFp16NativeGeneral`` drivers,
        half-precision ``A`` packing (including ``trans_a``), and column-tail
        handling are reused. Unlike the PR08.1 convert-while-packing path, both
@@ -1157,7 +1157,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        ``FCVTL`` instruction) into ``float32x4`` vectors register-blocked over
        up to ``kGemmNeonMR`` rows, the dot products accumulate in float32, and
        ``alpha`` is applied in the epilogue; the eight-, four-, and scalar
-       (``GemmMicroKernel_ScalarBf16`` / ``ScalarFp16``) column paths keep the
+       (``GemmMicroTile_ScalarBf16`` / ``ScalarFp16``) column paths keep the
        result identical to the widen-then-float32 reference.
        ``GemmHalfPlanned<kGeneral>`` dispatches here for non-transposed ``B``
        (BFLOAT16 always on NEON, FLOAT16 only when the FP16 intrinsics are
@@ -1176,12 +1176,12 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        native hardware or QEMU, with NEON selected for short vector lengths.
      - PR08.2
      - Implemented. The SVE translation unit (``gemm/arm/gemm_kernel_sve``) adds
-       ``GemmMicroKernel_SVE_BF16`` and ``GemmMicroKernel_SVE_FP16`` -- new
+       ``GemmMicroTile_SVE_BF16`` and ``GemmMicroTile_SVE_FP16`` -- new
        members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
-       ``GemmBf16MicroKernel`` / ``GemmFp16MicroKernel`` signatures, so the
+       ``GemmBf16MicroTile`` / ``GemmFp16MicroTile`` signatures, so the
        PR07.4 / PR07.3 ``GemmBf16NativeGeneral`` / ``GemmFp16NativeGeneral``
        drivers, half-precision ``A`` packing (including ``trans_a``), and the
-       ``GemmMicroKernel_ScalarBf16`` / ``ScalarFp16`` row fallback are reused.
+       ``GemmMicroTile_ScalarBf16`` / ``ScalarFp16`` row fallback are reused.
        Like the PR08.2 NEON kernels both operands stay half-precision to the
        register file: each ``B`` row is widened on the fly (BFLOAT16 with a
        zero-extending halfword load ``svld1uh_u32`` plus a 16-bit shift, FLOAT16

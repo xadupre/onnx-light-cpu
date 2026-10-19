@@ -15,7 +15,7 @@ Execution flow
    example, elements for unary operations, output tiles for matrix
    multiplication, or rows for attention.
 #. The kernel calls ``ExecuteRanges`` or ``ExecuteCostedRanges`` from
-   `impl/execution.h <https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/execution.h>`_.
+   `execution.h <https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/execution.h>`_.
    Its schedule supplies minimum work and block sizes, a participant limit,
    and, where useful, a preferred participant count. Costed calls additionally
    describe bytes read, bytes written, and estimated compute cycles.
@@ -34,14 +34,20 @@ Obtaining the executor
 ----------------------
 
 During a normal ``onnx-light`` model run, the runtime places the session's
-``CpuExecutor`` on the calling thread. ``CurrentExecutionExecutor()`` adapts
-that executor into an ``ExecutionExecutorView`` and exposes its effective
-thread count, range runner, and optional cost planner. The adapter is
-implemented in
-`impl/execution.cc <https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/execution.cc>`_.
-If a low-level kernel is invoked directly rather than through a session, it
-can install an explicit ``ExecutionExecutorScope``; otherwise there is no
-current executor and execution is serial.
+``CpuExecutor`` on the calling thread. Each ONNX kernel entry point installs a
+``RuntimeExecutionScope`` that borrows that executor as an
+``ExecutionExecutorView`` with its effective thread count, range runner, and
+optional cost planner. The adapter is implemented in
+`kernels/execution.cc <https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/kernels/execution.cc>`_.
+It preserves an already installed explicit executor and restores the previous
+view when the call returns, including when validation throws.
+
+The independent ``ml_cpu_compute`` library knows only this generic
+executor view. ``CurrentExecutionExecutor()`` reads the installed view without
+discovering ONNX runtime state. A direct low-level caller can install its own
+``ExecutionExecutorScope``; without one, execution is serial even if an ONNX
+session executor exists on the thread. The standalone project can be copied,
+built, installed, and consumed with CMake without ONNX or Python.
 
 The public :doc:`registering_kernels` guide covers the equivalent
 ``onnx-light`` ``CpuExecutorScope`` requirement for direct ``KernelBase`` use.

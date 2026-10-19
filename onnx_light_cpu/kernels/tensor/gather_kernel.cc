@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/gather_kernel.h"
+#include "ml_cpu_compute/tensor/gather.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -126,11 +127,11 @@ void Copy(const Tensor &data, const Tensor &indices, Tensor &output, const Gathe
     Invalid("output must not overlap data or indices.");
   }
   if (indices.data_type == DataType::INT32) {
-    GatherSlices(data.bytes(), indices.As<int32_t>(), output.mutable_bytes(), plan.outer,
-                 plan.axis_size, plan.index_count, plan.slice_bytes);
+    ml_cpu_compute::GatherSlices(data.bytes(), indices.As<int32_t>(), output.mutable_bytes(),
+                                 plan.outer, plan.axis_size, plan.index_count, plan.slice_bytes);
   } else {
-    GatherSlices(data.bytes(), indices.As<int64_t>(), output.mutable_bytes(), plan.outer,
-                 plan.axis_size, plan.index_count, plan.slice_bytes);
+    ml_cpu_compute::GatherSlices(data.bytes(), indices.As<int64_t>(), output.mutable_bytes(),
+                                 plan.outer, plan.axis_size, plan.index_count, plan.slice_bytes);
   }
 }
 
@@ -147,6 +148,7 @@ GatherKernel::GatherKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor GatherKernel::operator()(const Tensor &data, const Tensor &indices,
                                 rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const GatherPlan plan = PrepareGather(data, indices, axis_);
   Tensor output =
       rt ? rt->MakeOutputTensor(0, data.data_type, plan.shape, plan.output_bytes)
@@ -156,6 +158,7 @@ Tensor GatherKernel::operator()(const Tensor &data, const Tensor &indices,
 }
 
 void GatherKernel::operator()(const Tensor &data, const Tensor &indices, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const GatherPlan plan = PrepareGather(data, indices, axis_);
   if (output.data_type != data.data_type || output.shape != plan.shape) {
     Invalid("output dtype or shape mismatch.");
@@ -165,6 +168,7 @@ void GatherKernel::operator()(const Tensor &data, const Tensor &indices, Tensor 
 }
 
 void GatherKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

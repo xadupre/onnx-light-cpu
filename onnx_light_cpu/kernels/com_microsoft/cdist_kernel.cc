@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/cdist.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/com_microsoft/cdist.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -76,18 +77,18 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   }
 }
 
-const CDistExecutionTuning &DefaultTuning(int32_t element_type) {
+const ml_cpu_compute::CDistExecutionTuning &DefaultTuning(int32_t element_type) {
   switch (static_cast<DataType>(element_type)) {
   case DataType::DOUBLE:
-    return kDefaultCDistFloat64ExecutionTuning;
+    return ml_cpu_compute::kDefaultCDistFloat64ExecutionTuning;
   case DataType::FLOAT:
   default:
-    return kDefaultCDistFloat32ExecutionTuning;
+    return ml_cpu_compute::kDefaultCDistFloat32ExecutionTuning;
   }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
-  const CDistExecutionTuning &defaults = DefaultTuning(element_type);
+  const ml_cpu_compute::CDistExecutionTuning &defaults = DefaultTuning(element_type);
   return {MakeTuningKey(element_type),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
@@ -96,12 +97,12 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
            {kCostModel, defaults.use_cost_model ? int64_t{1} : int64_t{0}}}};
 }
 
-CDistMetric ParseMetric(const std::string &metric) {
+ml_cpu_compute::CDistMetric ParseMetric(const std::string &metric) {
   if (metric == "sqeuclidean") {
-    return CDistMetric::kSqEuclidean;
+    return ml_cpu_compute::CDistMetric::kSqEuclidean;
   }
   if (metric == "euclidean") {
-    return CDistMetric::kEuclidean;
+    return ml_cpu_compute::CDistMetric::kEuclidean;
   }
   throw std::invalid_argument(
       "onnx_light_cpu::CDist: metric must be \"sqeuclidean\" or \"euclidean\", got \"" + metric +
@@ -169,11 +170,12 @@ void CDistKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 
 Tensor CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string &metric,
                                RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (a.shape.size() != 2 || b.shape.size() != 2) {
     throw std::invalid_argument("onnx_light_cpu::CDist: A and B must be rank-2 tensors.");
   }
   const rt_ns::Shape output_shape{a.shape[0], b.shape[0]};
-  const std::size_t bytes = CheckedByteSize(
+  const std::size_t bytes = ml_cpu_compute::CheckedByteSize(
       static_cast<std::size_t>(output_shape.product(0, output_shape.size(), "CDist output")),
       a.element_size(), "CDist", "output byte size");
   Tensor output = rt != nullptr
@@ -185,20 +187,22 @@ Tensor CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::stri
 
 void CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string &metric,
                              Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(a, b, output);
-  const CDistMetric parsed_metric = ParseMetric(metric);
-  const std::size_t m = CheckedDimension(a.shape[0], "CDist", "A shape");
-  const std::size_t k = CheckedDimension(b.shape[0], "CDist", "B shape");
-  const std::size_t n = CheckedDimension(a.shape[1], "CDist", "A shape");
-  const CDistExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
+  const ml_cpu_compute::CDistMetric parsed_metric = ParseMetric(metric);
+  const std::size_t m = ml_cpu_compute::CheckedDimension(a.shape[0], "CDist", "A shape");
+  const std::size_t k = ml_cpu_compute::CheckedDimension(b.shape[0], "CDist", "B shape");
+  const std::size_t n = ml_cpu_compute::CheckedDimension(a.shape[1], "CDist", "A shape");
+  const ml_cpu_compute::CDistExecutionTuning &tuning =
+      tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT:
-    CDistFloat32WithTuning(a.AsFloat(), b.AsFloat(), output.AsFloat(), m, k, n, parsed_metric,
-                           tuning);
+    ml_cpu_compute::CDistFloat32WithTuning(a.AsFloat(), b.AsFloat(), output.AsFloat(), m, k, n,
+                                           parsed_metric, tuning);
     return;
   case DataType::DOUBLE:
-    CDistFloat64WithTuning(a.AsDouble(), b.AsDouble(), output.AsDouble(), m, k, n, parsed_metric,
-                           tuning);
+    ml_cpu_compute::CDistFloat64WithTuning(a.AsDouble(), b.AsDouble(), output.AsDouble(), m, k, n,
+                                           parsed_metric, tuning);
     return;
   default:
     throw std::invalid_argument("onnx_light_cpu::CDist: unsupported data type " +
@@ -208,6 +212,7 @@ void CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string
 }
 
 void CDistKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

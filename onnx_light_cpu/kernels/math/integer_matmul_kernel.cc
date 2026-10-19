@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-#include "onnx_light_cpu/impl/simd_level.h"
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+#include "ml_cpu_compute/simd_level.h"
 #endif
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -106,14 +107,14 @@ struct BatchWorkItem {
 Shape ComputeStrides(const Shape &shape) {
   Shape strides(std::vector<int64_t>(shape.size(), 1));
   for (std::size_t index = shape.size(); index > 1; --index) {
-    strides[index - 2] = CheckedIndexMultiply(strides[index - 1], shape[index - 1],
-                                              "integer MatMul", "input stride");
+    strides[index - 2] = ml_cpu_compute::CheckedIndexMultiply(strides[index - 1], shape[index - 1],
+                                                              "integer MatMul", "input stride");
   }
   return strides;
 }
 
 int64_t ElementCount(const Shape &shape) {
-  return CheckedShapeIndexProduct(shape, "integer MatMul", "shape element count");
+  return ml_cpu_compute::CheckedShapeIndexProduct(shape, "integer MatMul", "shape element count");
 }
 
 MatMulLayout ResolveLayout(const Tensor &a, const Tensor &b) {
@@ -300,9 +301,9 @@ template <typename T> T Requantize(int64_t accumulator, float scale, int32_t zer
 
 void RequantizeInt32Buffer(const int32_t *src, int8_t *dst, int64_t count, float scale,
                            int32_t zero_point) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    detail::RequantizeInt32ToInt8Avx2(src, dst, count, scale, zero_point);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+    ml_cpu_compute::detail::RequantizeInt32ToInt8Avx2(src, dst, count, scale, zero_point);
     return;
   }
 #endif
@@ -313,9 +314,9 @@ void RequantizeInt32Buffer(const int32_t *src, int8_t *dst, int64_t count, float
 
 void RequantizeInt32Buffer(const int32_t *src, uint8_t *dst, int64_t count, float scale,
                            int32_t zero_point) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    detail::RequantizeInt32ToUint8Avx2(src, dst, count, scale, zero_point);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+    ml_cpu_compute::detail::RequantizeInt32ToUint8Avx2(src, dst, count, scale, zero_point);
     return;
   }
 #endif
@@ -328,6 +329,7 @@ void RequantizeInt32Buffer(const int32_t *src, uint8_t *dst, int64_t count, floa
 
 Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *a_zero_point,
                                        const Tensor *b_zero_point, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (!IsInt8OrUint8(a.data_type) || !IsInt8OrUint8(b.data_type)) {
     throw std::invalid_argument("MatMulInteger inputs must have INT8 or UINT8 dtype.");
   }
@@ -335,8 +337,8 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
   const IntegerZeroPoints a_zp = ReadZeroPoints(a_zero_point, a, true, "a_zero_point");
   const IntegerZeroPoints b_zp = ReadZeroPoints(b_zero_point, b, false, "b_zero_point");
   const std::size_t output_bytes =
-      CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)), sizeof(int32_t),
-                      "MatMulInteger", "output byte size");
+      ml_cpu_compute::CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)),
+                                      sizeof(int32_t), "MatMulInteger", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, static_cast<int32_t>(DataType::INT32),
                                              layout.output_shape, output_bytes)
@@ -356,23 +358,25 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
     const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
     if (layout.batch_count == 1) {
-      IntegerMatMul2D(a_bytes, a_signed, b_bytes, b_signed, values, layout.m, layout.n, layout.k,
-                      a_zp.data(), static_cast<int64_t>(a_zp.size()), b_zp.data(),
-                      static_cast<int64_t>(b_zp.size()));
+      ml_cpu_compute::IntegerMatMul2D(
+          a_bytes, a_signed, b_bytes, b_signed, values, layout.m, layout.n, layout.k, a_zp.data(),
+          static_cast<int64_t>(a_zp.size()), b_zp.data(), static_cast<int64_t>(b_zp.size()));
       return output;
     }
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
     const double cost = static_cast<double>(layout.m) * static_cast<double>(layout.n) *
                         static_cast<double>(std::max<int64_t>(layout.k, 1));
-    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
-      for (int64_t index = begin; index < end; ++index) {
-        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
-        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
-                        values + item.output_base, layout.m, layout.n, layout.k,
-                        a_zp.data(item.a_base), static_cast<int64_t>(a_zp.size()),
-                        b_zp.data(item.b_base), static_cast<int64_t>(b_zp.size()));
-      }
-    });
+    ml_cpu_compute::ExecuteRanges(
+        static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+          for (int64_t index = begin; index < end; ++index) {
+            const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+            ml_cpu_compute::IntegerMatMul2D(
+                a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
+                values + item.output_base, layout.m, layout.n, layout.k, a_zp.data(item.a_base),
+                static_cast<int64_t>(a_zp.size()), b_zp.data(item.b_base),
+                static_cast<int64_t>(b_zp.size()));
+          }
+        });
     return output;
   }
 
@@ -399,6 +403,7 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
 }
 
 void MatMulIntegerKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireMinInputCount(node, 2);
@@ -418,6 +423,7 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
                                        const Tensor &b_scale, const Tensor &b_zero_point,
                                        const Tensor &y_scale, const Tensor &y_zero_point,
                                        RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (!IsInt8OrUint8(a.data_type) || !IsInt8OrUint8(b.data_type) ||
       !IsInt8OrUint8(y_zero_point.data_type)) {
     throw std::invalid_argument(
@@ -454,26 +460,28 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
     const std::int32_t a_zp[1] = {az};
     const std::int32_t b_zp[1] = {bz};
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
-    const int64_t matrix_size =
-        CheckedIndexMultiply(layout.m, layout.n, "QLinearMatMul", "matrix element count");
+    const int64_t matrix_size = ml_cpu_compute::CheckedIndexMultiply(
+        layout.m, layout.n, "QLinearMatMul", "matrix element count");
     const double cost =
         static_cast<double>(matrix_size) * static_cast<double>(std::max<int64_t>(layout.k, 1));
-    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
-      thread_local std::vector<std::int32_t> accum;
-      accum.resize(static_cast<std::size_t>(matrix_size));
-      for (int64_t index = begin; index < end; ++index) {
-        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
-        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
-                        accum.data(), layout.m, layout.n, layout.k, a_zp, 1, b_zp, 1);
-        if (output.data_type == static_cast<int32_t>(DataType::INT8)) {
-          RequantizeInt32Buffer(accum.data(), output.AsInt8() + item.output_base, matrix_size,
-                                combined_scale, yz);
-        } else {
-          RequantizeInt32Buffer(accum.data(), output.AsUint8() + item.output_base, matrix_size,
-                                combined_scale, yz);
-        }
-      }
-    });
+    ml_cpu_compute::ExecuteRanges(
+        static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+          thread_local std::vector<std::int32_t> accum;
+          accum.resize(static_cast<std::size_t>(matrix_size));
+          for (int64_t index = begin; index < end; ++index) {
+            const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+            ml_cpu_compute::IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base,
+                                            b_signed, accum.data(), layout.m, layout.n, layout.k,
+                                            a_zp, 1, b_zp, 1);
+            if (output.data_type == static_cast<int32_t>(DataType::INT8)) {
+              RequantizeInt32Buffer(accum.data(), output.AsInt8() + item.output_base, matrix_size,
+                                    combined_scale, yz);
+            } else {
+              RequantizeInt32Buffer(accum.data(), output.AsUint8() + item.output_base, matrix_size,
+                                    combined_scale, yz);
+            }
+          }
+        });
     return output;
   }
 
@@ -501,6 +509,7 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
 }
 
 void QLinearMatMulKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 8);

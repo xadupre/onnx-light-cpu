@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
-#include "onnx_light_cpu/impl/math/rms_normalization.h"
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/normalization.h"
+#include "ml_cpu_compute/math/rms_normalization.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
@@ -89,16 +90,17 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
     const Acc mean_square = [&]() -> Acc {
       if (aligned_x) {
         if constexpr (XType == DataType::FLOAT && std::is_same_v<Acc, float>) {
-          return ComputeNormalizationMeanSquareFloat32(input + base, width);
+          return ml_cpu_compute::ComputeNormalizationMeanSquareFloat32(input + base, width);
         } else if constexpr (XType == DataType::FLOAT16 && std::is_same_v<Acc, float>) {
-          return ComputeNormalizationMeanSquareFloat16(input + base, width);
+          return ml_cpu_compute::ComputeNormalizationMeanSquareFloat16(input + base, width);
         } else if constexpr (XType == DataType::BFLOAT16 && std::is_same_v<Acc, float>) {
-          return ComputeNormalizationMeanSquareBFloat16(input + base, width);
+          return ml_cpu_compute::ComputeNormalizationMeanSquareBFloat16(input + base, width);
         } else if constexpr (XType == DataType::DOUBLE) {
           if constexpr (std::is_same_v<Acc, float>) {
-            return ComputeNormalizationMeanSquareFloat64StashFloat32(input + base, width);
+            return ml_cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(input + base,
+                                                                                     width);
           } else {
-            return ComputeNormalizationMeanSquareFloat64(input + base, width);
+            return ml_cpu_compute::ComputeNormalizationMeanSquareFloat64(input + base, width);
           }
         }
       }
@@ -122,27 +124,31 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
       if (aligned_x && aligned_scale && !layout.scalar_row && block > 1) {
         if constexpr (XType == DataType::FLOAT && VType == DataType::FLOAT &&
                       std::is_same_v<Acc, float>) {
-          ApplyNormalizationAffineFloat32(input + base + start, weights + scale_position, nullptr,
-                                          output + base + start, block, 0.0F, inverse);
+          ml_cpu_compute::ApplyNormalizationAffineFloat32(
+              input + base + start, weights + scale_position, nullptr, output + base + start, block,
+              0.0F, inverse);
           continue;
         } else if constexpr (XType == DataType::FLOAT16 && VType == DataType::FLOAT16 &&
                              std::is_same_v<Acc, float>) {
-          ApplyNormalizationAffineFloat16(input + base + start, weights + scale_position,
-                                          output + base + start, block, inverse);
+          ml_cpu_compute::ApplyNormalizationAffineFloat16(input + base + start,
+                                                          weights + scale_position,
+                                                          output + base + start, block, inverse);
           continue;
         } else if constexpr (XType == DataType::BFLOAT16 && VType == DataType::BFLOAT16 &&
                              std::is_same_v<Acc, float>) {
-          ApplyNormalizationAffineBFloat16(input + base + start, weights + scale_position,
-                                           output + base + start, block, inverse);
+          ml_cpu_compute::ApplyNormalizationAffineBFloat16(input + base + start,
+                                                           weights + scale_position,
+                                                           output + base + start, block, inverse);
           continue;
         } else if constexpr (XType == DataType::DOUBLE && VType == DataType::DOUBLE) {
           if constexpr (std::is_same_v<Acc, float>) {
-            ApplyNormalizationAffineFloat64StashFloat32(input + base + start,
-                                                        weights + scale_position,
-                                                        output + base + start, block, inverse);
+            ml_cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(
+                input + base + start, weights + scale_position, output + base + start, block,
+                inverse);
           } else {
-            ApplyNormalizationAffineFloat64(input + base + start, weights + scale_position,
-                                            output + base + start, block, inverse);
+            ml_cpu_compute::ApplyNormalizationAffineFloat64(input + base + start,
+                                                            weights + scale_position,
+                                                            output + base + start, block, inverse);
           }
           continue;
         }
@@ -164,6 +170,7 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
 SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator()(
     const Tensor &x, const Tensor &scale, std::int64_t axis, float epsilon, std::int64_t stash_type,
     bool output_inv_std_var, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateInput(x, "X");
   ValidateInput(scale, "scale");
   if (stash_type != 1 && stash_type != 11) {
@@ -199,9 +206,9 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
     }
     auto *inverse =
         output_inv_std_var ? norm::MutableData<DataType::FLOAT>(result.inv_std_var) : nullptr;
-    RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
-                            norm::MutableData<DataType::FLOAT>(result.y), rows, width, epsilon,
-                            inverse);
+    ml_cpu_compute::RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
+                                            norm::MutableData<DataType::FLOAT>(result.y), rows,
+                                            width, epsilon, inverse);
     return result;
   }
   norm::DispatchFloatType(x.data_type, [&]<DataType XType>() {
@@ -216,14 +223,14 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
             }
           } else if constexpr (XType == DataType::FLOAT16) {
             if (stash_type == 1) {
-              path = NormalizationFloat16Path();
+              path = ml_cpu_compute::NormalizationFloat16Path();
             }
           } else if constexpr (XType == DataType::BFLOAT16) {
             if (stash_type == 1) {
-              path = NormalizationBFloat16Path();
+              path = ml_cpu_compute::NormalizationBFloat16Path();
             }
           } else if constexpr (XType == DataType::DOUBLE) {
-            path = NormalizationFloat64Path();
+            path = ml_cpu_compute::NormalizationFloat64Path();
           }
         }
         rt->RecordKernelUsage(std::string(kName) + "/" + path +
@@ -240,13 +247,15 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
                                              scale_by_inner, output_inv_std_var, begin, end);
         }
       };
-      ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(width), run);
+      ml_cpu_compute::ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(width),
+                                    run);
     });
   });
   return result;
 }
 
 void SimplifiedLayerNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

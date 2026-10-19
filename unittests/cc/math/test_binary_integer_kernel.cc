@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
+#include "ml_cpu_compute/math/binary/binary_broadcast_plan.h"
 
 #include <gtest/gtest.h>
 
@@ -18,9 +18,9 @@
 
 namespace {
 
-using onnx_light_cpu::BinaryBroadcastPlan;
-using BinaryDataType = onnx_light_cpu::DataType;
-using onnx_light_cpu::BinaryKernelDescriptor;
+using ml_cpu_compute::BinaryBroadcastPlan;
+using BinaryDataType = ml_cpu_compute::DataType;
+using ml_cpu_compute::BinaryOperationDescriptor;
 
 template <typename T> constexpr BinaryDataType DataTypeOf();
 template <> constexpr BinaryDataType DataTypeOf<std::int8_t>() { return BinaryDataType::INT8; }
@@ -49,10 +49,11 @@ std::int64_t Opset(std::string_view op) {
 }
 
 template <typename T, typename Out = T>
-std::vector<Out> Execute(std::string_view op, const std::vector<T> &left,
-                         const std::vector<T> &right,
-                         const BinaryKernelDescriptor::Attributes &attributes = {}) {
-  const BinaryKernelDescriptor descriptor(std::string(op), Opset(op), attributes);
+std::vector<Out>
+Execute(std::string_view op, const std::vector<T> &left, const std::vector<T> &right,
+        const ml_cpu_compute::BinaryOperationDescriptor::Attributes &attributes = {}) {
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor(std::string(op), Opset(op),
+                                                             attributes);
   const std::vector<std::int64_t> shape{static_cast<std::int64_t>(left.size())};
   const bool logical = op == "And" || op == "Or" || op == "Xor";
   const bool comparison = op == "Equal" || op == "Greater" || op == "GreaterOrEqual" ||
@@ -60,7 +61,8 @@ std::vector<Out> Execute(std::string_view op, const std::vector<T> &left,
   const BinaryDataType input_type = logical ? BinaryDataType::BOOL : DataTypeOf<T>();
   const BinaryDataType output_type =
       logical || comparison ? BinaryDataType::BOOL : DataTypeOf<Out>();
-  const BinaryBroadcastPlan plan(descriptor, input_type, input_type, output_type, shape, shape);
+  const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, input_type, input_type, output_type,
+                                                 shape, shape);
   std::vector<Out> output(left.size());
   plan.Execute(left.data(), right.data(), output.data());
   return output;
@@ -162,15 +164,18 @@ template <typename T> void CheckIntegerKernels() {
     std::vector<T> shifts(count);
     for (std::size_t i = 0; i < count; ++i)
       shifts[i] = static_cast<T>(i % (sizeof(T) * 8));
-    for (auto direction : {BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft,
-                           BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight}) {
-      BinaryKernelDescriptor::Attributes attributes;
+    for (auto direction :
+         {ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft,
+          ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kRight}) {
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
       attributes.bitshift_direction = direction;
       const std::vector<T> actual = Execute<T>("BitShift", left, shifts, attributes);
       for (std::size_t i = 0; i < count; ++i) {
-        const T expected = direction == BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft
-                               ? static_cast<T>(left[i] << shifts[i])
-                               : static_cast<T>(left[i] >> shifts[i]);
+        const T expected =
+            direction ==
+                    ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft
+                ? static_cast<T>(left[i] << shifts[i])
+                : static_cast<T>(left[i] >> shifts[i]);
         EXPECT_EQ(actual[i], expected) << "index=" << i;
       }
     }
@@ -181,16 +186,18 @@ template <typename T> void CheckValidationFailures() {
   const BinaryDataType type = DataTypeOf<T>();
   const std::vector<std::int64_t> left_shape{2, 1};
   const std::vector<std::int64_t> right_shape{1, 3};
-  const auto expect_unchanged = [&](std::string_view op, const std::vector<T> &left,
-                                    const std::vector<T> &right,
-                                    const BinaryKernelDescriptor::Attributes &attributes = {}) {
-    const BinaryKernelDescriptor descriptor(std::string(op), Opset(op), attributes);
-    const BinaryBroadcastPlan plan(descriptor, type, type, type, left_shape, right_shape);
-    std::vector<T> output(6, static_cast<T>(0x5A));
-    const std::vector<T> before = output;
-    EXPECT_THROW(plan.Execute(left.data(), right.data(), output.data()), std::invalid_argument);
-    EXPECT_EQ(output, before);
-  };
+  const auto expect_unchanged =
+      [&](std::string_view op, const std::vector<T> &left, const std::vector<T> &right,
+          const ml_cpu_compute::BinaryOperationDescriptor::Attributes &attributes = {}) {
+        const ml_cpu_compute::BinaryOperationDescriptor descriptor(std::string(op), Opset(op),
+                                                                   attributes);
+        const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, type, type, type, left_shape,
+                                                       right_shape);
+        std::vector<T> output(6, static_cast<T>(0x5A));
+        const std::vector<T> before = output;
+        EXPECT_THROW(plan.Execute(left.data(), right.data(), output.data()), std::invalid_argument);
+        EXPECT_EQ(output, before);
+      };
 
   expect_unchanged("Div", {T(1), T(2)}, {T(1), T(1), T(0)});
   expect_unchanged("Mod", {T(1), T(2)}, {T(1), T(1), T(0)});
@@ -198,17 +205,19 @@ template <typename T> void CheckValidationFailures() {
     expect_unchanged("Div", {T(1), std::numeric_limits<T>::min()}, {T(1), T(1), T(-1)});
     expect_unchanged("Mod", {T(1), std::numeric_limits<T>::min()}, {T(1), T(1), T(-1)});
   } else {
-    BinaryKernelDescriptor::Attributes attributes;
-    attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft;
+    ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+    attributes.bitshift_direction =
+        ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft;
     expect_unchanged("BitShift", {T(1), T(2)}, {T(0), T(1), static_cast<T>(sizeof(T) * 8)},
                      attributes);
   }
 }
 
 template <typename T> void CheckPhysicalShiftValidation() {
-  BinaryKernelDescriptor::Attributes attributes;
-  attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft;
-  const BinaryKernelDescriptor descriptor("BitShift", 11, attributes);
+  ml_cpu_compute::BinaryOperationDescriptor::Attributes attributes;
+  attributes.bitshift_direction =
+      ml_cpu_compute::BinaryOperationDescriptor::Attributes::BitShiftDirection::kLeft;
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("BitShift", 11, attributes);
   const BinaryDataType type = DataTypeOf<T>();
   const auto &adapter = descriptor.ResolveAdapter(type, type, type);
   ASSERT_NE(adapter.validate_right_bulk, nullptr);
@@ -272,11 +281,12 @@ TEST(BinaryIntegerKernel, ValidatesPhysicalShiftTensorWithoutExpandedPairScan) {
 }
 
 TEST(BinaryIntegerKernel, ValidatesSignedDivisionOverflowForActualPairsOnly) {
-  const BinaryKernelDescriptor descriptor("Div", 14, {});
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Div", 14, {});
   const std::vector<std::int64_t> left_shape{2, 2};
   const std::vector<std::int64_t> right_shape{2, 1};
-  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::INT32, BinaryDataType::INT32,
-                                 BinaryDataType::INT32, left_shape, right_shape);
+  const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, BinaryDataType::INT32,
+                                                 BinaryDataType::INT32, BinaryDataType::INT32,
+                                                 left_shape, right_shape);
   const std::vector<std::int32_t> left{std::numeric_limits<std::int32_t>::min(), 4, 1, 2};
   const std::vector<std::int32_t> right{1, -1};
   std::vector<std::int32_t> output(left.size());
@@ -294,31 +304,34 @@ TEST(BinaryLogicalKernel, EmitsCanonicalByteBool) {
 }
 
 TEST(BinaryComparisonKernel, BroadcastsBothOperandOrdersToByteBool) {
-  const BinaryKernelDescriptor descriptor("Less", 13, {});
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Less", 13, {});
   const std::vector<std::int64_t> left_shape{2, 1};
   const std::vector<std::int64_t> right_shape{1, 3};
-  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::INT32, BinaryDataType::INT32,
-                                 BinaryDataType::BOOL, left_shape, right_shape);
+  const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, BinaryDataType::INT32,
+                                                 BinaryDataType::INT32, BinaryDataType::BOOL,
+                                                 left_shape, right_shape);
   const std::vector<std::int32_t> left{1, 4};
   const std::vector<std::int32_t> right{2, 4, 0};
   std::vector<std::uint8_t> output(6, 0xFF);
   plan.Execute(left.data(), right.data(), output.data());
   EXPECT_EQ(output, (std::vector<std::uint8_t>{1, 1, 0, 0, 0, 0}));
 
-  const BinaryBroadcastPlan swapped(descriptor, BinaryDataType::INT32, BinaryDataType::INT32,
-                                    BinaryDataType::BOOL, right_shape, left_shape);
+  const ml_cpu_compute::BinaryBroadcastPlan swapped(descriptor, BinaryDataType::INT32,
+                                                    BinaryDataType::INT32, BinaryDataType::BOOL,
+                                                    right_shape, left_shape);
   swapped.Execute(right.data(), left.data(), output.data());
   EXPECT_EQ(output, (std::vector<std::uint8_t>{0, 0, 1, 1, 0, 1}));
 }
 
 TEST(BinaryEqualKernel, BroadcastsStringsToByteBool) {
-  const BinaryKernelDescriptor descriptor("Equal", 19, {});
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Equal", 19, {});
   EXPECT_EQ(descriptor.ResolveOutputType(BinaryDataType::STRING, BinaryDataType::STRING),
             BinaryDataType::BOOL);
   const std::vector<std::int64_t> left_shape{2, 1};
   const std::vector<std::int64_t> right_shape{1, 3};
-  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::STRING, BinaryDataType::STRING,
-                                 BinaryDataType::BOOL, left_shape, right_shape);
+  const ml_cpu_compute::BinaryBroadcastPlan plan(descriptor, BinaryDataType::STRING,
+                                                 BinaryDataType::STRING, BinaryDataType::BOOL,
+                                                 left_shape, right_shape);
   const std::vector<std::string> left{"a", "b"};
   const std::vector<std::string> right{"a", "b", "c"};
   std::vector<std::uint8_t> output(6);

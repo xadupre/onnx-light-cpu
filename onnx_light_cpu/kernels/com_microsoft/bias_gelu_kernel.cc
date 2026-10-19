@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/bias_gelu.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/com_microsoft/bias_gelu.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -77,21 +78,21 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   }
 }
 
-const BiasGeluExecutionTuning &DefaultTuning(int32_t element_type) {
+const ml_cpu_compute::BiasGeluExecutionTuning &DefaultTuning(int32_t element_type) {
   switch (static_cast<DataType>(element_type)) {
   case DataType::DOUBLE:
-    return kDefaultBiasGeluFloat64ExecutionTuning;
+    return ml_cpu_compute::kDefaultBiasGeluFloat64ExecutionTuning;
   case DataType::FLOAT16:
   case DataType::BFLOAT16:
-    return kDefaultBiasGeluHalfExecutionTuning;
+    return ml_cpu_compute::kDefaultBiasGeluHalfExecutionTuning;
   case DataType::FLOAT:
   default:
-    return kDefaultBiasGeluFloat32ExecutionTuning;
+    return ml_cpu_compute::kDefaultBiasGeluFloat32ExecutionTuning;
   }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
-  const BiasGeluExecutionTuning &defaults = DefaultTuning(element_type);
+  const ml_cpu_compute::BiasGeluExecutionTuning &defaults = DefaultTuning(element_type);
   return {MakeTuningKey(element_type),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
@@ -160,9 +161,10 @@ void BiasGeluKernel::Configure(const rt_ns::KernelTuningParameters &parameters) 
 }
 
 Tensor BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const std::size_t bytes =
-      CheckedByteSize(static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "BiasGelu A")),
-                      a.element_size(), "BiasGelu", "output byte size");
+  const RuntimeExecutionScope execution_scope;
+  const std::size_t bytes = ml_cpu_compute::CheckedByteSize(
+      static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "BiasGelu A")), a.element_size(),
+      "BiasGelu", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, a.shape, bytes)
                                 : rt_ns::MakeOutputTensor(a.data_type, a.shape, bytes, nullptr);
   (*this)(a, b, output);
@@ -170,31 +172,35 @@ Tensor BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeConte
 }
 
 void BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(a, b, output);
-  const std::size_t inner = CheckedDimension(b.shape[0], "BiasGelu", "B shape");
+  const std::size_t inner = ml_cpu_compute::CheckedDimension(b.shape[0], "BiasGelu", "B shape");
   const std::size_t outer =
       inner == 0
           ? 0
           : static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "BiasGelu A")) / inner;
-  const BiasGeluExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
+  const ml_cpu_compute::BiasGeluExecutionTuning &tuning =
+      tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT:
-    BiasGeluFloat32WithTuning(a.AsFloat(), b.AsFloat(), output.AsFloat(), outer, inner, tuning);
+    ml_cpu_compute::BiasGeluFloat32WithTuning(a.AsFloat(), b.AsFloat(), output.AsFloat(), outer,
+                                              inner, tuning);
     return;
   case DataType::DOUBLE:
-    BiasGeluFloat64WithTuning(a.AsDouble(), b.AsDouble(), output.AsDouble(), outer, inner, tuning);
+    ml_cpu_compute::BiasGeluFloat64WithTuning(a.AsDouble(), b.AsDouble(), output.AsDouble(), outer,
+                                              inner, tuning);
     return;
   case DataType::FLOAT16:
-    BiasGeluFloat16WithTuning(reinterpret_cast<const std::uint16_t *>(a.bytes()),
-                              reinterpret_cast<const std::uint16_t *>(b.bytes()),
-                              reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                              inner, tuning);
+    ml_cpu_compute::BiasGeluFloat16WithTuning(
+        reinterpret_cast<const std::uint16_t *>(a.bytes()),
+        reinterpret_cast<const std::uint16_t *>(b.bytes()),
+        reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, inner, tuning);
     return;
   case DataType::BFLOAT16:
-    BiasGeluBFloat16WithTuning(reinterpret_cast<const std::uint16_t *>(a.bytes()),
-                               reinterpret_cast<const std::uint16_t *>(b.bytes()),
-                               reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                               inner, tuning);
+    ml_cpu_compute::BiasGeluBFloat16WithTuning(
+        reinterpret_cast<const std::uint16_t *>(a.bytes()),
+        reinterpret_cast<const std::uint16_t *>(b.bytes()),
+        reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, inner, tuning);
     return;
   default:
     throw std::invalid_argument("onnx_light_cpu::BiasGelu: unsupported data type " +
@@ -204,6 +210,7 @@ void BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output
 }
 
 void BiasGeluKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

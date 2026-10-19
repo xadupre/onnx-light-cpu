@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -67,7 +68,7 @@ std::size_t ElementCount(std::span<const std::size_t> shape) {
 
 template <typename T>
 Tensor ComputeFloating(const Tensor &a, const Tensor &b, RuntimeContext *rt,
-                       const MatMulPlan<T> &plan) {
+                       const ml_cpu_compute::MatMulPlan<T> &plan) {
   const Shape output_shape = OutputShape(plan.output_shape());
   const std::size_t output_elements = ElementCount(plan.output_shape());
   const std::size_t bytes = output_elements * sizeof(T);
@@ -81,7 +82,7 @@ Tensor ComputeFloating(const Tensor &a, const Tensor &b, RuntimeContext *rt,
 }
 
 Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bfloat16,
-                   const MatMulPlan<float> &plan) {
+                   const ml_cpu_compute::MatMulPlan<float> &plan) {
   const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
   const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
   const Shape output_shape = OutputShape(plan.output_shape());
@@ -91,13 +92,13 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
                                         output_elements * sizeof(std::uint16_t))
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape,
                                            output_elements * sizeof(std::uint16_t), nullptr);
-  const GemmPlan<float> &float_plan = plan.gemm_plan();
-  const GemmHalfPlan half_plan(
-      GemmHalfPlanOptions{bfloat16, float_plan.trans_a(), float_plan.trans_b(), float_plan.m(),
-                          float_plan.n(), float_plan.k(), float_plan.alpha()});
-  GemmEpilogue<float> epilogue;
-  epilogue.output_conversion =
-      bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
+  const ml_cpu_compute::GemmPlan<float> &float_plan = plan.gemm_plan();
+  const ml_cpu_compute::GemmHalfPlan half_plan(ml_cpu_compute::GemmHalfPlanOptions{
+      bfloat16, float_plan.trans_a(), float_plan.trans_b(), float_plan.m(), float_plan.n(),
+      float_plan.k(), float_plan.alpha()});
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = bfloat16 ? ml_cpu_compute::GemmOutputConversion::kBFloat16
+                                        : ml_cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
   rt_ns::detail::TemporaryTypedBuffer<float> output(
       output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
@@ -112,19 +113,20 @@ struct MatMulKernel::MatMulPlanCache {
   int data_type = 0;
   std::vector<std::size_t> a_shape;
   std::vector<std::size_t> b_shape;
-  std::unique_ptr<MatMulPlan<float>> plan_f32;
-  std::unique_ptr<MatMulPlan<double>> plan_f64;
+  std::unique_ptr<ml_cpu_compute::MatMulPlan<float>> plan_f32;
+  std::unique_ptr<ml_cpu_compute::MatMulPlan<double>> plan_f64;
 
   template <typename T>
-  const MatMulPlan<T> &GetOrBuild(int type, std::span<const std::size_t> current_a_shape,
-                                  std::span<const std::size_t> current_b_shape) {
-    std::unique_ptr<MatMulPlan<T>> &slot = Slot<T>();
+  const ml_cpu_compute::MatMulPlan<T> &GetOrBuild(int type,
+                                                  std::span<const std::size_t> current_a_shape,
+                                                  std::span<const std::size_t> current_b_shape) {
+    std::unique_ptr<ml_cpu_compute::MatMulPlan<T>> &slot = Slot<T>();
     const bool shapes_match = a_shape.size() == current_a_shape.size() &&
                               b_shape.size() == current_b_shape.size() &&
                               std::equal(a_shape.begin(), a_shape.end(), current_a_shape.begin()) &&
                               std::equal(b_shape.begin(), b_shape.end(), current_b_shape.begin());
     if (slot == nullptr || data_type != type || !shapes_match) {
-      slot = std::make_unique<MatMulPlan<T>>(current_a_shape, current_b_shape);
+      slot = std::make_unique<ml_cpu_compute::MatMulPlan<T>>(current_a_shape, current_b_shape);
       data_type = type;
       a_shape.assign(current_a_shape.begin(), current_a_shape.end());
       b_shape.assign(current_b_shape.begin(), current_b_shape.end());
@@ -133,7 +135,7 @@ struct MatMulKernel::MatMulPlanCache {
   }
 
 private:
-  template <typename T> std::unique_ptr<MatMulPlan<T>> &Slot() {
+  template <typename T> std::unique_ptr<ml_cpu_compute::MatMulPlan<T>> &Slot() {
     if constexpr (std::is_same_v<T, float>) {
       return plan_f32;
     } else {
@@ -157,8 +159,8 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
   const auto b_shape = ShapeAsSize(b.shape);
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT: {
-    std::optional<MatMulPlan<float>> transient;
-    const MatMulPlan<float> *plan;
+    std::optional<ml_cpu_compute::MatMulPlan<float>> transient;
+    const ml_cpu_compute::MatMulPlan<float> *plan;
     if (cache == nullptr) {
       transient.emplace(a_shape, b_shape);
       plan = &*transient;
@@ -168,8 +170,8 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
     return ComputeFloating<float>(a, b, rt, *plan);
   }
   case DataType::DOUBLE: {
-    std::optional<MatMulPlan<double>> transient;
-    const MatMulPlan<double> *plan;
+    std::optional<ml_cpu_compute::MatMulPlan<double>> transient;
+    const ml_cpu_compute::MatMulPlan<double> *plan;
     if (cache == nullptr) {
       transient.emplace(a_shape, b_shape);
       plan = &*transient;
@@ -180,8 +182,8 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
   }
   case DataType::FLOAT16:
   case DataType::BFLOAT16: {
-    std::optional<MatMulPlan<float>> transient;
-    const MatMulPlan<float> *plan;
+    std::optional<ml_cpu_compute::MatMulPlan<float>> transient;
+    const ml_cpu_compute::MatMulPlan<float> *plan;
     if (cache == nullptr) {
       transient.emplace(a_shape, b_shape);
       plan = &*transient;
@@ -198,10 +200,12 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
 }
 
 Tensor MatMulKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return Compute(a, b, rt, nullptr);
 }
 
 void MatMulKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);

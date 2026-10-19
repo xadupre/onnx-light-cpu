@@ -6,6 +6,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "ml_cpu_compute/execution.h"
 #include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -13,7 +14,6 @@
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
 
 #include <gtest/gtest.h>
 
@@ -134,7 +134,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -197,8 +197,8 @@ TEST(OnnxLightCDistKernel, RegistersAndAppliesValidatedTuning) {
   const rt_ns::Tensor b =
       rt_ns::Tensor::FromFloat("B", {static_cast<int64_t>(k), static_cast<int64_t>(n)}, b_values);
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const rt_ns::Tensor c = kernel(a, b);
   const rt_ns::Tensor reference = onnx_light_cpu::NaiveCDistKernel(MakeCtx())(a, b);
   EXPECT_EQ(executor.dispatches, 1);

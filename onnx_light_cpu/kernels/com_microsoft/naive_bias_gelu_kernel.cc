@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -69,13 +70,13 @@ template <bool BFloat16>
 void ComputeHalf(const std::uint16_t *a, const std::uint16_t *bias, std::uint16_t *output,
                  std::size_t count, std::size_t inner) {
   for (std::size_t index = 0; index < count; ++index) {
-    const float av =
-        BFloat16 ? detail::Bfloat16BitsToFloat(a[index]) : detail::Float16BitsToFloat(a[index]);
-    const float bv = BFloat16 ? detail::Bfloat16BitsToFloat(bias[index % inner])
-                              : detail::Float16BitsToFloat(bias[index % inner]);
+    const float av = BFloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(a[index])
+                              : ml_cpu_compute::detail::Float16BitsToFloat(a[index]);
+    const float bv = BFloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(bias[index % inner])
+                              : ml_cpu_compute::detail::Float16BitsToFloat(bias[index % inner]);
     const float value = Gelu(av + bv);
-    output[index] =
-        BFloat16 ? detail::FloatToBFloat16Bits(value) : detail::FloatToFloat16Bits(value);
+    output[index] = BFloat16 ? ml_cpu_compute::detail::FloatToBFloat16Bits(value)
+                             : ml_cpu_compute::detail::FloatToFloat16Bits(value);
   }
 }
 
@@ -87,7 +88,8 @@ NaiveBiasGeluKernel::NaiveBiasGeluKernel(const NodeProto &node, const rt_ns::Ker
 }
 
 Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const std::size_t bytes = CheckedByteSize(
+  const RuntimeExecutionScope execution_scope;
+  const std::size_t bytes = ml_cpu_compute::CheckedByteSize(
       static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "NaiveBiasGelu A")),
       a.element_size(), "NaiveBiasGelu", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, a.shape, bytes)
@@ -97,6 +99,7 @@ Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Runtime
 }
 
 void NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(a, b, output);
   const std::size_t count = static_cast<std::size_t>(a.element_count());
   const std::size_t inner = static_cast<std::size_t>(b.shape[0]);
@@ -131,6 +134,7 @@ void NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &o
 }
 
 void NaiveBiasGeluKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

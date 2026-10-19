@@ -7,8 +7,8 @@
 // All per-call packing and dispatch costs are included in the median seconds.
 // Use tools/benchmark_cdist_parity.py for end-to-end ONNX Runtime comparisons.
 
-#include "onnx_light_cpu/impl/com_microsoft/cdist.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "ml_cpu_compute/com_microsoft/cdist.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <chrono>
@@ -47,7 +47,7 @@ constexpr Case kCases[] = {
     {"single_column", 256, 1, 64},
 };
 
-template <typename T> void Measure(const Case &shape, onnx_light_cpu::CDistMetric metric) {
+template <typename T> void Measure(const Case &shape, ml_cpu_compute::CDistMetric metric) {
   std::vector<T> a(shape.m * shape.n), b(shape.k * shape.n), c(shape.m * shape.k);
   for (std::size_t i = 0; i < a.size(); ++i) {
     a[i] = T(static_cast<int>(i % 29) - 14) / T(16);
@@ -57,9 +57,9 @@ template <typename T> void Measure(const Case &shape, onnx_light_cpu::CDistMetri
   }
   const auto run = [&] {
     if constexpr (std::is_same_v<T, float>) {
-      onnx_light_cpu::CDistFloat32(a.data(), b.data(), c.data(), shape.m, shape.k, shape.n, metric);
+      ml_cpu_compute::CDistFloat32(a.data(), b.data(), c.data(), shape.m, shape.k, shape.n, metric);
     } else {
-      onnx_light_cpu::CDistFloat64(a.data(), b.data(), c.data(), shape.m, shape.k, shape.n, metric);
+      ml_cpu_compute::CDistFloat64(a.data(), b.data(), c.data(), shape.m, shape.k, shape.n, metric);
     }
   };
   for (int warmup = 0; warmup < 10; ++warmup) {
@@ -79,7 +79,7 @@ template <typename T> void Measure(const Case &shape, onnx_light_cpu::CDistMetri
   std::sort(samples.begin(), samples.end());
   std::printf("%s,%s,%s,%zu,%zu,%zu,%.9g,%.9g\n", shape.name,
               std::is_same_v<T, float> ? "float32" : "float64",
-              metric == onnx_light_cpu::CDistMetric::kEuclidean ? "euclidean" : "sqeuclidean",
+              metric == ml_cpu_compute::CDistMetric::kEuclidean ? "euclidean" : "sqeuclidean",
               shape.m, shape.k, shape.n, samples[samples.size() / 2],
               static_cast<double>(c.front()));
 }
@@ -88,14 +88,14 @@ template <typename T> void Measure(const Case &shape, onnx_light_cpu::CDistMetri
 
 int main(int argc, char **argv) {
   std::printf("# SIMD level=%d (0=scalar,1=SSE2,2=AVX,3=AVX2,4=AVX512), threads=1\n",
-              static_cast<int>(onnx_light_cpu::DetectSimdLevel()));
+              static_cast<int>(ml_cpu_compute::DetectSimdLevel()));
   std::printf("case,dtype,metric,m,k,n,median_seconds,first_output\n");
   for (const Case &shape : kCases) {
     if (argc > 1 && std::string(shape.name).find(argv[1]) == std::string::npos) {
       continue;
     }
     for (const auto metric :
-         {onnx_light_cpu::CDistMetric::kSqEuclidean, onnx_light_cpu::CDistMetric::kEuclidean}) {
+         {ml_cpu_compute::CDistMetric::kSqEuclidean, ml_cpu_compute::CDistMetric::kEuclidean}) {
       Measure<float>(shape, metric);
       Measure<double>(shape, metric);
     }

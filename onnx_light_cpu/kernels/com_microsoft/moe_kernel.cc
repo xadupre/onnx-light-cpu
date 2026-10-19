@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -46,7 +47,7 @@ MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::K
   if (k < 1) {
     throw std::invalid_argument("MoE: k must be positive.");
   }
-  attributes_.k = CheckedDimension(k, "MoE", "k");
+  attributes_.k = ml_cpu_compute::CheckedDimension(k, "MoE", "k");
   attributes_.activation = rt_ns::GetAttributeStringOrDefault(node, "activation_type", "relu");
   if (attributes_.activation != "relu" && attributes_.activation != "gelu" &&
       attributes_.activation != "silu" && attributes_.activation != "identity" &&
@@ -77,6 +78,7 @@ MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::K
 Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Tensor &fc1,
                              const Tensor *bias1, const Tensor &fc2, const Tensor *bias2,
                              rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto dtype = static_cast<DataType>(input.data_type);
   if (dtype != DataType::FLOAT && dtype != DataType::FLOAT16 && dtype != DataType::BFLOAT16) {
     throw std::invalid_argument(
@@ -90,27 +92,30 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
   if (input.shape.size() != 2 && input.shape.size() != 3) {
     throw std::invalid_argument("MoE: input must have rank 2 or 3.");
   }
-  const std::size_t hidden = CheckedDimension(input.shape[input.shape.size() - 1], "MoE", "hidden");
-  const std::size_t tokens = CheckedDimension(input.shape[0], "MoE", "tokens");
+  const std::size_t hidden =
+      ml_cpu_compute::CheckedDimension(input.shape[input.shape.size() - 1], "MoE", "hidden");
+  const std::size_t tokens = ml_cpu_compute::CheckedDimension(input.shape[0], "MoE", "tokens");
   const std::size_t rows =
       input.shape.size() == 3
-          ? CheckedMultiply(tokens, CheckedDimension(input.shape[1], "MoE", "sequence"), "MoE",
-                            "token count")
+          ? ml_cpu_compute::CheckedMultiply(
+                tokens, ml_cpu_compute::CheckedDimension(input.shape[1], "MoE", "sequence"), "MoE",
+                "token count")
           : tokens;
   if (hidden == 0 || router.shape.size() != 2) {
     throw std::invalid_argument("MoE: hidden must be positive and router must have rank 2.");
   }
-  const std::size_t experts = CheckedDimension(router.shape[1], "MoE", "experts");
+  const std::size_t experts = ml_cpu_compute::CheckedDimension(router.shape[1], "MoE", "experts");
   if (experts == 0 || attributes_.k > experts ||
       router.shape[0] != static_cast<std::int64_t>(rows) || fc2.shape.size() != 3) {
     throw std::invalid_argument("MoE: invalid router, k, or fc2 dimensions.");
   }
-  const std::size_t intermediate = CheckedDimension(fc2.shape[2], "MoE", "intermediate");
+  const std::size_t intermediate =
+      ml_cpu_compute::CheckedDimension(fc2.shape[2], "MoE", "intermediate");
   if (intermediate == 0) {
     throw std::invalid_argument("MoE: intermediate must be positive.");
   }
-  const std::size_t fc1_width =
-      CheckedMultiply(intermediate, attributes_.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
+  const std::size_t fc1_width = ml_cpu_compute::CheckedMultiply(
+      intermediate, attributes_.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
   RequireShape(fc1,
                {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(fc1_width),
                 static_cast<std::int64_t>(hidden)},
@@ -127,33 +132,37 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
     RequireShape(*bias2, {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(hidden)},
                  "fc2_experts_bias");
   }
-  CheckedProduct({experts, fc1_width, hidden}, "MoE", "fc1 elements");
-  CheckedProduct({experts, hidden, intermediate}, "MoE", "fc2 elements");
-  CheckedMultiply(rows, experts, "MoE", "router elements");
-  const auto bytes = CheckedByteSize(CheckedMultiply(rows, hidden, "MoE", "output elements"),
-                                     input.element_size(), "MoE", "output bytes");
+  ml_cpu_compute::CheckedProduct({experts, fc1_width, hidden}, "MoE", "fc1 elements");
+  ml_cpu_compute::CheckedProduct({experts, hidden, intermediate}, "MoE", "fc2 elements");
+  ml_cpu_compute::CheckedMultiply(rows, experts, "MoE", "router elements");
+  const auto bytes = ml_cpu_compute::CheckedByteSize(
+      ml_cpu_compute::CheckedMultiply(rows, hidden, "MoE", "output elements"), input.element_size(),
+      "MoE", "output bytes");
   rt_ns::RawBufferAllocator *allocator = rt != nullptr ? rt->execution_allocator() : ctx_.allocator;
   Tensor output =
       rt != nullptr ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
                     : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, ctx_.allocator);
-  const MoEDataType data_type = dtype == DataType::FLOAT     ? MoEDataType::kFloat32
-                                : dtype == DataType::FLOAT16 ? MoEDataType::kFloat16
-                                                             : MoEDataType::kBFloat16;
-  const MoEScratchSize scratch_size =
-      ComputeMoEScratchSize(rows, hidden, experts, intermediate, data_type, attributes_);
-  rt_ns::detail::TemporaryTypedBuffer<MoERoute> routes(scratch_size.route_count, allocator,
-                                                       "MoE routing scratch");
+  const ml_cpu_compute::MoEDataType data_type =
+      dtype == DataType::FLOAT     ? ml_cpu_compute::MoEDataType::kFloat32
+      : dtype == DataType::FLOAT16 ? ml_cpu_compute::MoEDataType::kFloat16
+                                   : ml_cpu_compute::MoEDataType::kBFloat16;
+  const ml_cpu_compute::MoEScratchSize scratch_size = ml_cpu_compute::ComputeMoEScratchSize(
+      rows, hidden, experts, intermediate, data_type, attributes_);
+  rt_ns::detail::TemporaryTypedBuffer<ml_cpu_compute::MoERoute> routes(
+      scratch_size.route_count, allocator, "MoE routing scratch");
   rt_ns::detail::TemporaryTypedBuffer<float> values(scratch_size.value_count, allocator,
                                                     "MoE value scratch");
-  ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(), bias1 ? bias1->bytes() : nullptr,
-             fc2.bytes(), bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
-             experts, intermediate, data_type, attributes_,
-             {routes.data(), scratch_size.route_count, values.data(), scratch_size.value_count,
-              scratch_size.token_blocks});
+  ml_cpu_compute::ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(),
+                             bias1 ? bias1->bytes() : nullptr, fc2.bytes(),
+                             bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
+                             experts, intermediate, data_type, attributes_,
+                             {routes.data(), scratch_size.route_count, values.data(),
+                              scratch_size.value_count, scratch_size.token_blocks});
   return output;
 }
 
 void MoEKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 5 || node.input_size() > 8) {

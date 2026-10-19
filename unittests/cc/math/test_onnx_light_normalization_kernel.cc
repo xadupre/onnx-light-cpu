@@ -5,13 +5,13 @@
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/normalization.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_extensions/kernels/kernels/nn/include_nn_kernels.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -33,7 +33,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -87,12 +87,12 @@ double Tolerance(rt_ns::DataType type) {
 
 float RoundFloat(rt_ns::DataType type, float value) {
   if (type == rt_ns::DataType::FLOAT16) {
-    return onnx_light_cpu::detail::Float16BitsToFloat(
-        onnx_light_cpu::detail::FloatToFloat16Bits(value));
+    return ml_cpu_compute::detail::Float16BitsToFloat(
+        ml_cpu_compute::detail::FloatToFloat16Bits(value));
   }
   if (type == rt_ns::DataType::BFLOAT16) {
-    return onnx_light_cpu::detail::Bfloat16BitsToFloat(
-        onnx_light_cpu::detail::FloatToBFloat16Bits(value));
+    return ml_cpu_compute::detail::Bfloat16BitsToFloat(
+        ml_cpu_compute::detail::FloatToBFloat16Bits(value));
   }
   return value;
 }
@@ -324,15 +324,15 @@ TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsPreserveExecutorSchedu
     };
     const auto expected = run(x);
     InlineExecutor executor;
-    onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     run(small);
     EXPECT_EQ(executor.dispatches, 0);
     const auto actual = run(x);
     EXPECT_EQ(executor.dispatches, 1);
     EXPECT_GT(executor.blocks, 1);
     EXPECT_LE(executor.blocks, 8);
-    onnx_light_cpu::detail::ExecutionRegionScope region;
+    ml_cpu_compute::detail::ExecutionRegionScope region;
     const auto nested = run(x);
     EXPECT_EQ(executor.dispatches, 1);
     for (const auto *result : {&actual, &nested}) {
@@ -360,8 +360,8 @@ TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsSingleRowCanUseExecuto
   const auto bias =
       MakeTensor(rt_ns::DataType::FLOAT, {channels}, std::vector<float>(channels, 0.0F));
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto y = kernel(x, scale, bias, bias, scale, 0.0F);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
@@ -668,9 +668,9 @@ TEST(OnnxLightNormalizationKernel, ScaleBiasPreservesRoundingTailsAndInPlaceOutp
     }
     auto in_place = input;
     std::vector<float> output(count + 2, -42.0F);
-    onnx_light_cpu::ApplyNormalizationScaleBiasFloat32(input.data() + 1, output.data() + 1, count,
+    ml_cpu_compute::ApplyNormalizationScaleBiasFloat32(input.data() + 1, output.data() + 1, count,
                                                        multiplier, offset);
-    onnx_light_cpu::ApplyNormalizationScaleBiasFloat32(in_place.data() + 1, in_place.data() + 1,
+    ml_cpu_compute::ApplyNormalizationScaleBiasFloat32(in_place.data() + 1, in_place.data() + 1,
                                                        count, multiplier, offset);
     EXPECT_EQ(output.front(), -42.0F);
     EXPECT_EQ(output.back(), -42.0F);
@@ -716,13 +716,13 @@ TEST(OnnxLightNormalizationKernel, InstanceSimdAffinePreservesExecutorAndNestedR
   const auto bias = rt_ns::Tensor::FromFloat("", {128}, std::vector<float>(128, 0.75F));
   const auto expected = kernel(x, scale, bias);
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto actual = kernel(x, scale, bias);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
   EXPECT_LE(executor.blocks, 8);
-  onnx_light_cpu::detail::ExecutionRegionScope region;
+  ml_cpu_compute::detail::ExecutionRegionScope region;
   const auto nested = kernel(x, scale, bias);
   EXPECT_EQ(executor.dispatches, 1);
   for (std::size_t i = 0; i < values.size(); ++i) {
@@ -740,8 +740,8 @@ TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets)
       norm::ComputeContiguousMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
   const norm::Moments<float> stashed =
       norm::ComputeContiguousFloatMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
-  const onnx_light_cpu::Float32NormalizationMoments shared =
-      onnx_light_cpu::ComputeNormalizationMomentsFloat32(values.data(), values.size());
+  const ml_cpu_compute::Float32NormalizationMoments shared =
+      ml_cpu_compute::ComputeNormalizationMomentsFloat32(values.data(), values.size());
 
   EXPECT_FLOAT_EQ(moments.mean, 100.0F);
   EXPECT_FLOAT_EQ(moments.variance, 0.5F);
@@ -986,9 +986,9 @@ TEST(OnnxLightNormalizationKernel, LayerNormalizationUsesExecutorForLargeRowSets
   const rt_ns::Tensor scale = rt_ns::Tensor::FromFloat("", {static_cast<std::int64_t>(width)},
                                                        std::vector<float>(width, 1.0F));
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
     const onnx_light_cpu::LayerNormalizationResult result =
         onnx_light_cpu::LayerNormalizationKernel(MakeContext(17))(x, scale);
     EXPECT_TRUE(std::isfinite(Value(result.y, 0)));
@@ -1186,8 +1186,8 @@ TEST(OnnxLightNormalizationKernel, MvnRetainedAxisPreservesExecutorScheduling) {
   const auto x = rt_ns::Tensor::FromFloat("", {16, 64, 16, 16}, values);
   const auto expected = kernel(x);
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto small = rt_ns::Tensor::FromFloat("", {2, 2, 4}, std::vector<float>(16, 1.0F));
   kernel(small, {0, 2});
   EXPECT_EQ(executor.dispatches, 0);
@@ -1195,7 +1195,7 @@ TEST(OnnxLightNormalizationKernel, MvnRetainedAxisPreservesExecutorScheduling) {
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
   EXPECT_LE(executor.blocks, 8);
-  onnx_light_cpu::detail::ExecutionRegionScope region;
+  ml_cpu_compute::detail::ExecutionRegionScope region;
   const auto nested = kernel(x);
   EXPECT_EQ(executor.dispatches, 1);
   for (std::size_t i = 0; i < values.size(); ++i) {

@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/kernels/execution.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/math.h"
 #include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -13,8 +16,6 @@
 #include "onnx_core/runtime/tuning/cpu_executor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
@@ -99,7 +100,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -151,7 +152,7 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
   ASSERT_NE(schema, nullptr);
   auto parameters = schema->portable_defaults();
-  const auto &float_defaults = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  const auto &float_defaults = ml_cpu_compute::DefaultAbsFloat32ExecutionTuning();
   EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 2 * 1024 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"),
             static_cast<int64_t>(float_defaults.target_block_bytes));
@@ -172,8 +173,8 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   constexpr std::size_t count = 256;
   const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {count}, std::vector<float>(count, -3.0f));
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const rt_ns::Tensor y = kernel(x);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 2);
@@ -279,6 +280,60 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
 
   EXPECT_EQ(runtime.Get("y").element_count(), n);
   EXPECT_GE(executor->counters().dispatches, 1u);
+
+  const auto dispatches = executor->counters().dispatches;
+  onnx_light_cpu::AbsKernel direct_kernel(MakeCtx());
+  {
+    rt_ns::CpuExecutorScope scope(executor.get());
+    {
+      const ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+      const onnx_light_cpu::RuntimeExecutionScope adapter;
+      EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+      EXPECT_EQ(ml_cpu_compute::ExecutionThreadCount(), 1);
+      kernel->Run(runtime);
+      EXPECT_EQ(runtime.Get("y").AsFloat()[n - 1], 3.0f);
+      const rt_ns::Tensor serial_output = direct_kernel(runtime.Get("x"));
+      EXPECT_EQ(serial_output.AsFloat()[n - 1], 3.0f);
+      EXPECT_EQ(executor->counters().dispatches, dispatches);
+    }
+    const rt_ns::Tensor output = direct_kernel(runtime.Get("x"));
+    EXPECT_EQ(output.AsFloat()[n - 1], 3.0f);
+  }
+  EXPECT_GT(executor->counters().dispatches, dispatches);
+  EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+}
+
+TEST(OnnxLightAbsKernel, RuntimeScopePreservesExplicitExecutorAndRestoresPreviousScope) {
+  rt_ns::CpuExecutionPolicy policy;
+  policy.num_threads = 1;
+  policy.affinity_policy = rt_ns::CpuAffinityPolicy::kNone;
+  rt_ns::CpuExecutorRegistry registry(1);
+  std::shared_ptr<rt_ns::CpuExecutor> executor = registry.Acquire(policy);
+  EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+  {
+    rt_ns::CpuExecutorScope runtime_scope(executor.get());
+    // Low-level computations do not discover ONNX runtime state themselves.
+    EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+    const onnx_light_cpu::RuntimeExecutionScope adapter;
+    ASSERT_NE(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+    EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor()->context, executor.get());
+    ml_cpu_compute::ExecutionExecutorView explicit_view =
+        *ml_cpu_compute::CurrentExecutionExecutor();
+    {
+      const ml_cpu_compute::ExecutionExecutorScope explicit_scope(&explicit_view);
+      const onnx_light_cpu::RuntimeExecutionScope nested_adapter;
+      EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), &explicit_view);
+    }
+    EXPECT_NE(ml_cpu_compute::CurrentExecutionExecutor(), &explicit_view);
+    {
+      const ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+      const onnx_light_cpu::RuntimeExecutionScope nested_adapter;
+      EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+      EXPECT_EQ(ml_cpu_compute::ExecutionThreadCount(), 1);
+    }
+    EXPECT_NE(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+  }
+  EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
 }
 
 } // namespace

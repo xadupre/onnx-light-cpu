@@ -52,15 +52,15 @@ dimensions and attributes to its implementation or execution plan. The
 implementation checks runtime CPU capabilities, rather than assuming the
 compiler's target machine:
 
-* On x86, :cpp:func:`onnx_light_cpu::DetectSimdLevel` detects SSE2, AVX,
+* On x86, :cpp:func:`ml_cpu_compute::DetectSimdLevel` detects SSE2, AVX,
   AVX2, and AVX-512 while checking that the operating system saves the needed
   register state. Feature predicates additionally gate FMA, F16C, AVX-512
   extensions, and AMX. They are declared in
-  `impl/simd_level.h <https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/simd_level.h>`_.
-* On ARM, :cpp:func:`onnx_light_cpu::DetectArmSimdLevel` distinguishes scalar,
+  `simd_level.h <https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/simd_level.h>`_.
+* On ARM, :cpp:func:`ml_cpu_compute::DetectArmSimdLevel` distinguishes scalar,
   NEON, SVE, and SVE2 paths; the separate dot-product predicate protects
   INT8-specific implementations. Its interface is
-  `impl/arm_simd_level.h <https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/arm_simd_level.h>`_.
+  `arm_simd_level.h <https://github.com/xadupre/onnx-light-cpu/blob/main/ml_cpu_compute/include/ml_cpu_compute/arm_simd_level.h>`_.
 * A family combines those capabilities with its data type, tensor layout,
   shape, and operation-specific constraints. For example, a GEMM plan caches
   an algorithm and blocking choice derived from data type, dimensions, and

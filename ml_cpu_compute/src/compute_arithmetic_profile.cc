@@ -1,0 +1,697 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ml_cpu_compute/compute_arithmetic_profile.h"
+#include "ml_cpu_compute/compute/compute_avx2_fma.h"
+
+#include <algorithm>
+#include <atomic>
+#include <barrier>
+#include <chrono>
+#include <cmath>
+#include <functional>
+#include <thread>
+#include <vector>
+
+#include "ml_cpu_compute/thread_topology.h"
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#define ML_CPU_COMPUTE_X86 1
+#include <immintrin.h>
+#else
+#define ML_CPU_COMPUTE_X86 0
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define ML_CPU_COMPUTE_ARM64 1
+#include <arm_neon.h>
+#else
+#define ML_CPU_COMPUTE_ARM64 0
+#endif
+
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+#include "ml_cpu_compute/compute/avx512/compute_avx512.h"
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512FP16
+#include "ml_cpu_compute/compute/avx512fp16/compute_avx512fp16.h"
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512BF16
+#include "ml_cpu_compute/compute/avx512bf16/compute_avx512bf16.h"
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+#include "ml_cpu_compute/compute/avx512vnni/compute_avx512vnni.h"
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+#include "ml_cpu_compute/compute/arm/compute_neon_dotprod.h"
+#endif
+
+#if defined(_MSC_VER)
+#define ML_CPU_COMPUTE_NOINLINE __declspec(noinline)
+#else
+#define ML_CPU_COMPUTE_NOINLINE __attribute__((noinline))
+#endif
+
+namespace ml_cpu_compute {
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+// Module-level sink. Every measurement writes its post-timing checksum here
+// so the compiler cannot prove the timed arithmetic is dead, without adding
+// any consumption inside a timed sample. Atomic (relaxed) because multiple
+// worker threads and the main thread accumulate into it concurrently; only
+// the side effect matters, not the accumulated value.
+std::atomic<double> g_compute_profile_sink{0.0};
+
+double ToSeconds(Clock::duration duration) {
+  return std::chrono::duration<double>(duration).count();
+}
+
+double Median(std::vector<double> values) {
+  if (values.empty()) {
+    return 0.0;
+  }
+  std::sort(values.begin(), values.end());
+  const std::size_t count = values.size();
+  return count % 2 == 1 ? values[count / 2] : 0.5 * (values[count / 2 - 1] + values[count / 2]);
+}
+
+double Quantile(const std::vector<double> &sorted_values, double q) {
+  if (sorted_values.empty()) {
+    return 0.0;
+  }
+  if (sorted_values.size() == 1) {
+    return sorted_values.front();
+  }
+  const double position = q * static_cast<double>(sorted_values.size() - 1);
+  const std::size_t low = static_cast<std::size_t>(std::floor(position));
+  const std::size_t high = static_cast<std::size_t>(std::ceil(position));
+  if (low == high) {
+    return sorted_values[low];
+  }
+  const double fraction = position - static_cast<double>(low);
+  return sorted_values[low] * (1.0 - fraction) + sorted_values[high] * fraction;
+}
+
+double InterquartileRange(std::vector<double> values) {
+  if (values.size() < 2) {
+    return 0.0;
+  }
+  std::sort(values.begin(), values.end());
+  return Quantile(values, 0.75) - Quantile(values, 0.25);
+}
+
+constexpr double kComputeProfileGiga = 1.0e9;
+constexpr std::size_t kComputeProfileMaxCalibrationPasses = 1u << 20;
+
+// ---------------------------------------------------------------------------
+// Baseline (portable scalar, plus x86 SSE2 or AArch64 NEON) FP32/FP64
+// register-resident multiply-add routines. Every accumulator lives in a local array
+// small enough to stay in registers; nothing here reads or writes a working
+// set, so this never becomes a memory-bandwidth benchmark.
+// ---------------------------------------------------------------------------
+
+constexpr std::size_t kComputeScalarAccumulatorCount = 8;
+
+ML_CPU_COMPUTE_NOINLINE double RunScalarFloat32Round(std::size_t passes, double seed) {
+  float acc[kComputeScalarAccumulatorCount];
+  float mul[kComputeScalarAccumulatorCount];
+  float add[kComputeScalarAccumulatorCount];
+  for (std::size_t i = 0; i < kComputeScalarAccumulatorCount; ++i) {
+    acc[i] = static_cast<float>(seed) + static_cast<float>(i);
+    mul[i] = 1.0000001f + static_cast<float>(i) * 1e-7f;
+    add[i] = 1.0e-6f * static_cast<float>(i + 1);
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (std::size_t i = 0; i < kComputeScalarAccumulatorCount; ++i) {
+        acc[i] = acc[i] * mul[i] + add[i];
+      }
+    }
+  }
+  double sum = 0.0;
+  for (float value : acc) {
+    sum += static_cast<double>(value);
+  }
+  return sum;
+}
+
+ML_CPU_COMPUTE_NOINLINE double RunScalarFloat64Round(std::size_t passes, double seed) {
+  double acc[kComputeScalarAccumulatorCount];
+  double mul[kComputeScalarAccumulatorCount];
+  double add[kComputeScalarAccumulatorCount];
+  for (std::size_t i = 0; i < kComputeScalarAccumulatorCount; ++i) {
+    acc[i] = seed + static_cast<double>(i);
+    mul[i] = 1.0000001 + static_cast<double>(i) * 1e-9;
+    add[i] = 1.0e-9 * static_cast<double>(i + 1);
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (std::size_t i = 0; i < kComputeScalarAccumulatorCount; ++i) {
+        acc[i] = acc[i] * mul[i] + add[i];
+      }
+    }
+  }
+  double sum = 0.0;
+  for (double value : acc) {
+    sum += value;
+  }
+  return sum;
+}
+
+#if ML_CPU_COMPUTE_X86
+
+constexpr int kComputeSse2Registers = 4;
+constexpr std::size_t kComputeSse2Float32AccumulatorCount = kComputeSse2Registers * 4;
+constexpr std::size_t kComputeSse2Float64AccumulatorCount = kComputeSse2Registers * 2;
+ML_CPU_COMPUTE_NOINLINE double RunSse2Float32Round(std::size_t passes, double seed) {
+  __m128 acc[kComputeSse2Registers];
+  __m128 mul[kComputeSse2Registers];
+  __m128 add[kComputeSse2Registers];
+  for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+    acc[reg] = _mm_set1_ps(static_cast<float>(seed) + static_cast<float>(reg));
+    mul[reg] = _mm_set1_ps(1.0000001f + static_cast<float>(reg) * 1e-7f);
+    add[reg] = _mm_set1_ps(1.0e-6f * static_cast<float>(reg + 1));
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+        acc[reg] = _mm_add_ps(_mm_mul_ps(acc[reg], mul[reg]), add[reg]);
+      }
+    }
+  }
+  alignas(16) float lanes[4];
+  double sum = 0.0;
+  for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+    _mm_store_ps(lanes, acc[reg]);
+    for (float lane : lanes) {
+      sum += lane;
+    }
+  }
+  return sum;
+}
+
+ML_CPU_COMPUTE_NOINLINE double RunSse2Float64Round(std::size_t passes, double seed) {
+  __m128d acc[kComputeSse2Registers];
+  __m128d mul[kComputeSse2Registers];
+  __m128d add[kComputeSse2Registers];
+  for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+    acc[reg] = _mm_set1_pd(seed + static_cast<double>(reg));
+    mul[reg] = _mm_set1_pd(1.0000001 + static_cast<double>(reg) * 1e-9);
+    add[reg] = _mm_set1_pd(1.0e-9 * static_cast<double>(reg + 1));
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+        acc[reg] = _mm_add_pd(_mm_mul_pd(acc[reg], mul[reg]), add[reg]);
+      }
+    }
+  }
+  alignas(16) double lanes[2];
+  double sum = 0.0;
+  for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
+    _mm_store_pd(lanes, acc[reg]);
+    for (double lane : lanes) {
+      sum += lane;
+    }
+  }
+  return sum;
+}
+
+#endif // ML_CPU_COMPUTE_X86
+
+#if ML_CPU_COMPUTE_ARM64
+
+constexpr int kComputeNeonRegisters = 4;
+constexpr std::size_t kComputeNeonFloat32AccumulatorCount = kComputeNeonRegisters * 4;
+constexpr std::size_t kComputeNeonFloat64AccumulatorCount = kComputeNeonRegisters * 2;
+
+ML_CPU_COMPUTE_NOINLINE double RunNeonFloat32Round(std::size_t passes, double seed) {
+  float32x4_t acc[kComputeNeonRegisters];
+  float32x4_t mul[kComputeNeonRegisters];
+  float32x4_t add[kComputeNeonRegisters];
+  for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+    acc[reg] = vdupq_n_f32(static_cast<float>(seed) + static_cast<float>(reg));
+    mul[reg] = vdupq_n_f32(1.0000001f + static_cast<float>(reg) * 1e-7f);
+    add[reg] = vdupq_n_f32(1.0e-6f * static_cast<float>(reg + 1));
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+        acc[reg] = vfmaq_f32(add[reg], acc[reg], mul[reg]);
+      }
+    }
+  }
+  double sum = 0.0;
+  for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+    alignas(16) float lanes[4];
+    vst1q_f32(lanes, acc[reg]);
+    for (float lane : lanes) {
+      sum += lane;
+    }
+  }
+  return sum;
+}
+
+ML_CPU_COMPUTE_NOINLINE double RunNeonFloat64Round(std::size_t passes, double seed) {
+  float64x2_t acc[kComputeNeonRegisters];
+  float64x2_t mul[kComputeNeonRegisters];
+  float64x2_t add[kComputeNeonRegisters];
+  for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+    acc[reg] = vdupq_n_f64(seed + static_cast<double>(reg));
+    mul[reg] = vdupq_n_f64(1.0000001 + static_cast<double>(reg) * 1e-9);
+    add[reg] = vdupq_n_f64(1.0e-9 * static_cast<double>(reg + 1));
+  }
+  for (std::size_t pass = 0; pass < passes; ++pass) {
+    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
+      for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+        acc[reg] = vfmaq_f64(add[reg], acc[reg], mul[reg]);
+      }
+    }
+  }
+  double sum = 0.0;
+  for (int reg = 0; reg < kComputeNeonRegisters; ++reg) {
+    alignas(16) double lanes[2];
+    vst1q_f64(lanes, acc[reg]);
+    for (double lane : lanes) {
+      sum += lane;
+    }
+  }
+  return sum;
+}
+
+#endif // ML_CPU_COMPUTE_ARM64
+
+// ---------------------------------------------------------------------------
+// Participant coordination: mirrors memory_traffic_profile.cc's worker pool
+// so participant creation, synchronization, and final checksum reduction all
+// stay outside every timed sample.
+// ---------------------------------------------------------------------------
+
+using ComputeRoundFn = std::function<double(std::size_t passes, double seed)>;
+
+class ComputeWorkerPool {
+public:
+  ComputeWorkerPool(ComputeRoundFn routine, std::size_t participant_count,
+                    const std::vector<CpuAffinity> &affinities)
+      : routine_(std::move(routine)), barrier_(static_cast<std::ptrdiff_t>(participant_count)) {
+    for (std::size_t index = 1; index < participant_count; ++index) {
+      const CpuAffinity *affinity = index < affinities.size() ? &affinities[index] : nullptr;
+      workers_.emplace_back([this, index, affinity]() {
+        if (affinity != nullptr) {
+          SetCurrentThreadAffinity(*affinity);
+        }
+        while (true) {
+          barrier_.arrive_and_wait();
+          const std::size_t passes = passes_.load(std::memory_order_acquire);
+          if (passes == 0 && stop_.load(std::memory_order_relaxed)) {
+            barrier_.arrive_and_wait();
+            return;
+          }
+          const double checksum = routine_(passes, static_cast<double>(index) + 1.0);
+          barrier_.arrive_and_wait();
+          g_compute_profile_sink.fetch_add(checksum, std::memory_order_relaxed);
+        }
+      });
+    }
+  }
+
+  ~ComputeWorkerPool() {
+    if (!workers_.empty()) {
+      passes_.store(0, std::memory_order_release);
+      stop_.store(true, std::memory_order_relaxed);
+      barrier_.arrive_and_wait();
+      barrier_.arrive_and_wait();
+      for (std::thread &worker : workers_) {
+        worker.join();
+      }
+    }
+  }
+
+  // Runs one synchronized round of ``passes`` iterations across every
+  // participant and returns the aggregate wall-clock seconds elapsed.
+  double RunRound(std::size_t passes) {
+    passes_.store(passes, std::memory_order_release);
+    barrier_.arrive_and_wait();
+    const Clock::time_point start = Clock::now();
+    const double checksum = routine_(passes, 0.0);
+    barrier_.arrive_and_wait();
+    const Clock::time_point end = Clock::now();
+    g_compute_profile_sink.fetch_add(checksum, std::memory_order_relaxed);
+    return ToSeconds(end - start);
+  }
+
+private:
+  ComputeRoundFn routine_;
+  std::barrier<> barrier_;
+  std::vector<std::thread> workers_;
+  std::atomic<std::size_t> passes_{0};
+  std::atomic<bool> stop_{false};
+};
+
+} // namespace
+
+ComputeOperationAccounting ComputeFmaOperationAccounting(std::size_t accumulator_count,
+                                                         std::size_t fma_count_per_accumulator) {
+  ComputeOperationAccounting accounting;
+  accounting.fma_count_per_pass = static_cast<std::uint64_t>(accumulator_count) *
+                                  static_cast<std::uint64_t>(fma_count_per_accumulator);
+  accounting.operations_per_pass = accounting.fma_count_per_pass * 2;
+  return accounting;
+}
+
+ComputeOperationAccounting
+ComputeDotProductOperationAccounting(std::size_t accumulator_count,
+                                     std::size_t reductions_per_accumulator,
+                                     std::size_t dot_product_length) {
+  ComputeOperationAccounting accounting;
+  const std::uint64_t total_pairs = static_cast<std::uint64_t>(accumulator_count) *
+                                    static_cast<std::uint64_t>(reductions_per_accumulator) *
+                                    static_cast<std::uint64_t>(dot_product_length);
+  accounting.fma_count_per_pass = total_pairs;
+  accounting.dot_product_length = dot_product_length;
+  accounting.operations_per_pass = total_pairs * 2;
+  return accounting;
+}
+
+const char *ComputeProfileTimerName() { return "std::chrono::steady_clock"; }
+
+const char *ComputeImplementationName(ComputeImplementation implementation) {
+  switch (implementation) {
+  case ComputeImplementation::kScalar:
+    return "scalar";
+  case ComputeImplementation::kSSE2:
+    return "SSE2";
+  case ComputeImplementation::kAVX2:
+    return "AVX2";
+  case ComputeImplementation::kAVX512:
+    return "AVX-512";
+  case ComputeImplementation::kNeon:
+    return "NEON";
+  case ComputeImplementation::kSve:
+    return "SVE";
+  case ComputeImplementation::kAmx:
+    return "AMX";
+  case ComputeImplementation::kOther:
+    return "other";
+  }
+  return "other";
+}
+
+namespace detail {
+
+ComputeDispatchDecision SelectComputeImplementation(DataType element_type,
+                                                    const ComputeDispatchInputs &inputs) {
+  ComputeDispatchDecision decision;
+  switch (element_type) {
+  case DataType::FLOAT:
+  case DataType::DOUBLE: {
+    // Always available: register-resident FP32/FP64 FMA has a portable
+    // scalar fallback on every platform.
+    decision.available = true;
+    if (inputs.avx512_compiled && inputs.simd_level >= SimdLevel::kAVX512) {
+      decision.implementation = ComputeImplementation::kAVX512;
+    } else if (inputs.arm_simd_level != ArmSimdLevel::kNone) {
+      // SVE is not yet measured directly (Profile PR03 scope): NEON is a
+      // safe, always-available AArch64 baseline and satisfies "every
+      // platform" without fabricating an unmeasured SVE result.
+      decision.implementation = ComputeImplementation::kNeon;
+    } else if (inputs.simd_level >= SimdLevel::kAVX2 && inputs.has_fma) {
+      decision.implementation = ComputeImplementation::kAVX2;
+    } else if (inputs.simd_level >= SimdLevel::kSSE2) {
+      decision.implementation = ComputeImplementation::kSSE2;
+    } else {
+      decision.implementation = ComputeImplementation::kScalar;
+    }
+    return decision;
+  }
+  case DataType::FLOAT16: {
+    if (inputs.avx512fp16_compiled && inputs.avx512fp16_runtime) {
+      decision.available = true;
+      decision.implementation = ComputeImplementation::kAVX512;
+    }
+    return decision;
+  }
+  case DataType::BFLOAT16: {
+    if (inputs.avx512bf16_compiled && inputs.avx512bf16_runtime) {
+      decision.available = true;
+      decision.implementation = ComputeImplementation::kAVX512;
+    }
+    return decision;
+  }
+  case DataType::INT8: {
+    if (inputs.avx512vnni_compiled && inputs.avx512vnni_runtime) {
+      decision.available = true;
+      decision.implementation = ComputeImplementation::kAVX512;
+    } else if (inputs.neon_dotprod_compiled && inputs.neon_dotprod_runtime) {
+      decision.available = true;
+      decision.implementation = ComputeImplementation::kNeon;
+    }
+    return decision;
+  }
+  }
+  return decision;
+}
+
+} // namespace detail
+
+ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type,
+                                                           ComputeParticipantPolicy policy,
+                                                           const ComputeProfileOptions &options) {
+  ComputeThroughputResult result;
+  result.element_type = element_type;
+  result.policy = policy;
+  result.timer_name = ComputeProfileTimerName();
+
+  if (options.repeats == 0 || options.minimum_duration_ms <= 0.0) {
+    result.unavailable_reason = ComputeProfileUnavailableReason::kInvalidOptions;
+    result.diagnostic = "invalid measurement options";
+    return result;
+  }
+
+  detail::ComputeDispatchInputs inputs;
+  inputs.simd_level = DetectSimdLevel();
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  inputs.has_fma = CpuSupportsFma();
+#endif
+  inputs.arm_simd_level = DetectArmSimdLevel();
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+  inputs.avx512_compiled = true;
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512FP16
+  inputs.avx512fp16_compiled = true;
+  inputs.avx512fp16_runtime = CpuSupportsAvx512Fp16();
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512BF16
+  inputs.avx512bf16_compiled = true;
+  inputs.avx512bf16_runtime = CpuSupportsAvx512Bf16();
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+  inputs.avx512vnni_compiled = true;
+  inputs.avx512vnni_runtime = CpuSupportsAvx512Vnni();
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+  inputs.neon_dotprod_compiled = true;
+  inputs.neon_dotprod_runtime = CpuSupportsNeonDotProd();
+#endif
+
+  const detail::ComputeDispatchDecision decision =
+      detail::SelectComputeImplementation(element_type, inputs);
+  if (!decision.available) {
+    result.unavailable_reason = ComputeProfileUnavailableReason::kUnsupportedNativePath;
+    result.diagnostic =
+        "no compiled and runtime-detected native arithmetic path for this element type";
+    return result;
+  }
+  result.implementation = decision.implementation;
+  result.implementation_name = ComputeImplementationName(decision.implementation);
+
+  ComputeOperationAccounting accounting;
+  ComputeRoundFn routine;
+
+  switch (element_type) {
+  case DataType::FLOAT: {
+    switch (decision.implementation) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+    case ComputeImplementation::kAVX512:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeAvx512Float32AccumulatorCount, kComputeChainLength);
+      routine = &ComputeArithmeticAvx512Float32Round;
+      break;
+#endif
+#if ML_CPU_COMPUTE_ARM64
+    case ComputeImplementation::kNeon:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeNeonFloat32AccumulatorCount, kComputeChainLength);
+      routine = &RunNeonFloat32Round;
+      break;
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+    case ComputeImplementation::kAVX2:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeAvx2Float32AccumulatorCount, kComputeChainLength);
+      routine = &ComputeArithmeticAvx2Float32Round;
+      break;
+#endif
+#if ML_CPU_COMPUTE_X86
+    case ComputeImplementation::kSSE2:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeSse2Float32AccumulatorCount, kComputeChainLength);
+      routine = &RunSse2Float32Round;
+      break;
+#endif
+    default:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeScalarAccumulatorCount, kComputeChainLength);
+      routine = &RunScalarFloat32Round;
+      break;
+    }
+    break;
+  }
+  case DataType::DOUBLE: {
+    switch (decision.implementation) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+    case ComputeImplementation::kAVX512:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeAvx512Float64AccumulatorCount, kComputeChainLength);
+      routine = &ComputeArithmeticAvx512Float64Round;
+      break;
+#endif
+#if ML_CPU_COMPUTE_ARM64
+    case ComputeImplementation::kNeon:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeNeonFloat64AccumulatorCount, kComputeChainLength);
+      routine = &RunNeonFloat64Round;
+      break;
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+    case ComputeImplementation::kAVX2:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeAvx2Float64AccumulatorCount, kComputeChainLength);
+      routine = &ComputeArithmeticAvx2Float64Round;
+      break;
+#endif
+#if ML_CPU_COMPUTE_X86
+    case ComputeImplementation::kSSE2:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeSse2Float64AccumulatorCount, kComputeChainLength);
+      routine = &RunSse2Float64Round;
+      break;
+#endif
+    default:
+      accounting =
+          ComputeFmaOperationAccounting(kComputeScalarAccumulatorCount, kComputeChainLength);
+      routine = &RunScalarFloat64Round;
+      break;
+    }
+    break;
+  }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512FP16
+  case DataType::FLOAT16: {
+    accounting =
+        ComputeFmaOperationAccounting(kComputeAvx512Fp16AccumulatorCount, kComputeChainLength);
+    routine = &ComputeArithmeticAvx512Fp16Round;
+    break;
+  }
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512BF16
+  case DataType::BFLOAT16: {
+    accounting = ComputeDotProductOperationAccounting(kComputeAvx512Bf16AccumulatorCount,
+                                                      kComputeChainLength,
+                                                      kComputeAvx512Bf16DotProductLength);
+    routine = &ComputeArithmeticAvx512Bf16Round;
+    break;
+  }
+#endif
+  case DataType::INT8: {
+    switch (decision.implementation) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512VNNI
+    case ComputeImplementation::kAVX512:
+      accounting = ComputeDotProductOperationAccounting(kComputeAvx512VnniAccumulatorCount,
+                                                        kComputeChainLength,
+                                                        kComputeAvx512VnniDotProductLength);
+      routine = &ComputeArithmeticAvx512VnniRound;
+      break;
+#endif
+#ifdef ML_CPU_COMPUTE_HAVE_NEON_DOTPROD
+    case ComputeImplementation::kNeon:
+      accounting = ComputeDotProductOperationAccounting(kComputeNeonDotProdAccumulatorCount,
+                                                        kComputeChainLength,
+                                                        kComputeNeonDotProdDotProductLength);
+      routine = &ComputeArithmeticNeonDotProdRound;
+      break;
+#endif
+    default:
+      break;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+
+  if (!routine) {
+    // The dispatch decision claimed a native path but this build was not
+    // compiled with the matching translation unit (should not happen given
+    // SelectComputeImplementation only reports a compiled path available).
+    result.unavailable_reason = ComputeProfileUnavailableReason::kUnsupportedNativePath;
+    result.diagnostic = "selected implementation has no compiled routine";
+    return result;
+  }
+
+  result.operations_per_pass_per_participant = accounting.operations_per_pass;
+  result.dot_product_length = accounting.dot_product_length;
+
+  std::vector<CpuAffinity> affinities;
+  std::size_t participant_count = 1;
+  bool affinity_pinned = false;
+  if (policy == ComputeParticipantPolicy::kPhysical) {
+    const CpuTopology &cpu_topology = GetCpuTopology();
+    participant_count = std::max<std::size_t>(cpu_topology.physical_core_count, 1);
+    affinities = SelectCpuAffinities(cpu_topology, participant_count);
+    if (!affinities.empty()) {
+      participant_count = affinities.size();
+      affinity_pinned = true;
+    } else {
+      participant_count = 1;
+    }
+  } else if (options.explicit_single_affinity.has_value()) {
+    affinity_pinned = SetCurrentThreadAffinity(*options.explicit_single_affinity);
+  }
+  result.participant_count = participant_count;
+  result.affinity_pinned = affinity_pinned;
+
+  if (!affinity_pinned) {
+    affinities.clear();
+  }
+  ComputeWorkerPool pool(routine, participant_count, affinities);
+
+  std::size_t passes = 1;
+  const double calibration_elapsed = pool.RunRound(1);
+  {
+    const double target_seconds = options.minimum_duration_ms / 1000.0;
+    const double safe_elapsed = calibration_elapsed > 0.0 ? calibration_elapsed : 1e-9;
+    const double estimated_passes = target_seconds / safe_elapsed;
+    passes = static_cast<std::size_t>(std::ceil(std::max(1.0, estimated_passes)));
+    passes = std::min(passes, kComputeProfileMaxCalibrationPasses);
+  }
+
+  result.raw_gops_samples.reserve(options.repeats);
+  for (std::size_t repeat = 0; repeat < options.repeats; ++repeat) {
+    const double elapsed_seconds = pool.RunRound(passes);
+    const double total_operations = static_cast<double>(accounting.operations_per_pass) *
+                                    static_cast<double>(passes) *
+                                    static_cast<double>(participant_count);
+    const double seconds = elapsed_seconds > 0.0 ? elapsed_seconds : 1e-12;
+    result.raw_gops_samples.push_back(total_operations / seconds / kComputeProfileGiga);
+  }
+
+  result.median_gops = Median(result.raw_gops_samples);
+  result.dispersion_gops = InterquartileRange(result.raw_gops_samples);
+  result.available = true;
+  return result;
+}
+
+} // namespace ml_cpu_compute

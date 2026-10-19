@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "ml_cpu_compute/math/math.h"
 
 #include <algorithm>
 #include <chrono>
@@ -43,10 +43,10 @@ int main(int argc, char **argv) {
   }
   std::vector<float> input(count, -1.0f);
   std::vector<float> output(count);
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  const double cached = Measure(onnx_light_cpu::AbsFloat32_AVX512, input, output, samples);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+  const double cached = Measure(ml_cpu_compute::AbsFloat32_AVX512, input, output, samples);
   const double streaming =
-      Measure(onnx_light_cpu::AbsFloat32_AVX512Streaming, input, output, samples);
+      Measure(ml_cpu_compute::AbsFloat32_AVX512Streaming, input, output, samples);
   std::printf("size=%zu cached_us=%.2f streaming_us=%.2f speedup=%.3f\n", count, cached * 1e6,
               streaming * 1e6, cached / streaming);
 #else

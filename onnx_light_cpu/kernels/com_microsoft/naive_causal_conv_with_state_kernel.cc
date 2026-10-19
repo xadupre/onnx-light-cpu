@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_causal_conv_with_state_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_common.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -27,8 +28,8 @@ float Load(const Tensor &tensor, std::size_t index) {
   }
   const auto value = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
   return tensor.data_type == static_cast<int>(DataType::FLOAT16)
-             ? detail::Float16BitsToFloat(value)
-             : detail::Bfloat16BitsToFloat(value);
+             ? ml_cpu_compute::detail::Float16BitsToFloat(value)
+             : ml_cpu_compute::detail::Bfloat16BitsToFloat(value);
 }
 
 void Store(Tensor &tensor, std::size_t index, float value) {
@@ -37,8 +38,8 @@ void Store(Tensor &tensor, std::size_t index, float value) {
   } else {
     reinterpret_cast<std::uint16_t *>(tensor.mutable_bytes())[index] =
         tensor.data_type == static_cast<int>(DataType::FLOAT16)
-            ? detail::FloatToFloat16Bits(value)
-            : detail::FloatToBFloat16Bits(value);
+            ? ml_cpu_compute::detail::FloatToFloat16Bits(value)
+            : ml_cpu_compute::detail::FloatToBFloat16Bits(value);
   }
 }
 
@@ -49,6 +50,7 @@ NaiveCausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &we
                                            const Tensor *bias, const Tensor *past_state,
                                            const std::string &activation, bool channels_last,
                                            std::int64_t dilation, rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto plan = detail::PlanCausalConvWithState(input, weight, bias, past_state, activation,
                                                     channels_last, dilation);
   Tensor output =
@@ -95,6 +97,7 @@ NaiveCausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &we
 }
 
 void NaiveCausalConvWithStateKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   detail::RunCausalConvWithState(*this, *node_, rt);
 }
 

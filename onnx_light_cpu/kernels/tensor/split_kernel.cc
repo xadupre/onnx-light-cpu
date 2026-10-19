@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/split_kernel.h"
+#include "ml_cpu_compute/tensor/split.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -135,6 +136,7 @@ SplitKernel::SplitKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 std::vector<Tensor> SplitKernel::operator()(const Tensor &data, int64_t axis,
                                             std::span<const int64_t> split, int64_t num_outputs,
                                             rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return Compute(data, axis, split, num_outputs, rt, nullptr);
 }
 
@@ -181,12 +183,13 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
     offset += row_bytes;
   }
   if (rows > 0 && outputs.size() > 1 && offset == input_row_bytes) {
-    SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes, output_row_bytes);
+    ml_cpu_compute::SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes,
+                                     output_row_bytes);
   } else {
     offset = 0;
     for (std::size_t i = 0; i < sizes.size(); ++i) {
-      SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes,
-                output_row_bytes[i], offset);
+      ml_cpu_compute::SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes,
+                                output_row_bytes[i], offset);
       offset += output_row_bytes[i];
     }
   }
@@ -194,6 +197,7 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
 }
 
 void SplitKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   const int64_t version = ctx_.opset.version;

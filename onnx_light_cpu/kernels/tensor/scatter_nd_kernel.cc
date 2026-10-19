@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/scatter_nd_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "ml_cpu_compute/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -140,12 +141,12 @@ void Copy(const Tensor &data, const Tensor &indices, const Tensor &updates, Tens
   }
   const auto *source = data.bytes();
   auto *destination = output.mutable_bytes();
-  ExecuteRanges(static_cast<int64_t>(plan.output_bytes),
-                ExecutionSchedule{262144, 65536, ExecutionThreadCount()}, int64_t{64},
-                [source, destination](int64_t begin, int64_t end) {
-                  std::memcpy(destination + begin, source + begin,
-                              static_cast<std::size_t>(end - begin));
-                });
+  ml_cpu_compute::ExecuteRanges(
+      static_cast<int64_t>(plan.output_bytes),
+      ml_cpu_compute::ExecutionSchedule{262144, 65536, ml_cpu_compute::ExecutionThreadCount()},
+      int64_t{64}, [source, destination](int64_t begin, int64_t end) {
+        std::memcpy(destination + begin, source + begin, static_cast<std::size_t>(end - begin));
+      });
   // Serial tuple order makes duplicate writes deterministic and race-free.
   for (std::size_t t = 0; t < plan.offsets.size(); ++t) {
     std::memcpy(destination + plan.offsets[t], updates.bytes() + t * plan.slice_bytes,
@@ -170,6 +171,7 @@ ScatterNDKernel::ScatterNDKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                    rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Tensor output =
       rt ? rt->MakeOutputTensor(0, data.data_type, data.shape, plan.output_bytes)
@@ -180,11 +182,13 @@ Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, co
 
 void ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                  Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Copy(data, indices, updates, output, plan);
 }
 
 void ScatterNDKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireInputCount(node, 3);

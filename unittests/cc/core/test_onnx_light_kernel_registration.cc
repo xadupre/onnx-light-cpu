@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
+#include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -25,7 +25,7 @@ namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 using onnx_light_cpu::KernelRegistration;
 
 std::vector<KernelRegistration>
-BinaryRegistrations(const onnx_light_cpu::BinaryManifestEntry &entry) {
+BinaryRegistrations(const ml_cpu_compute::BinaryManifestEntry &entry) {
   std::vector<std::int64_t> versions = {entry.minimum_version};
   for (const auto &signature : entry.signatures) {
     if (signature.minimum_version > entry.minimum_version &&
@@ -480,7 +480,7 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        std::nullopt},
   };
   std::vector<KernelRegistration> all_expected = expected;
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+  for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
     std::vector<KernelRegistration> binary_records = BinaryRegistrations(entry);
     all_expected.insert(all_expected.end(), std::make_move_iterator(binary_records.begin()),
                         std::make_move_iterator(binary_records.end()));
