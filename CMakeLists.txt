@@ -855,12 +855,24 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_proto PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY}")
+    set(_onnx_light_include_dirs
+        "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light")
+    if(EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_proto/include/onnx_proto/onnx.h")
+      list(APPEND _onnx_light_include_dirs
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_proto/include"
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_proto/include/onnx_proto"
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_proto/helpers/include")
+    else()
+      list(APPEND _onnx_light_include_dirs
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include"
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto")
+    endif()
     add_library(onnx_light::lib_onnx_core
         ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_core PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES
-            "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto"
+            "${_onnx_light_include_dirs}"
         INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_proto)
     if(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB)
       if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB)
