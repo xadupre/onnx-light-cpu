@@ -39,6 +39,7 @@ public:
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
   TuningKey(std::int32_t element_type) const override;
+  std::int32_t TuningInputIndex() const noexcept override { return 0; }
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
@@ -69,6 +70,9 @@ private:
   struct PreparedInt8Plan;
   struct PreparedEncodedState;
 
+  void PrepareImmutableInputs(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+                              const std::unordered_set<std::string> &immutable_inputs);
+
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
@@ -84,8 +88,6 @@ private:
               const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
               const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
               ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt) const;
-  void PrepareImpl(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
-                   const std::unordered_set<std::string> &immutable_inputs);
 
   MatMulNBitsAttributes attributes_;
   ml_cpu_compute::MatMulNBitsExecutionTuning tuning_ =

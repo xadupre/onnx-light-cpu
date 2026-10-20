@@ -364,59 +364,61 @@ void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string
   if (!HasPreparations(immutable_inputs)) {
     return;
   }
-  const std::string weights_name = node_->input(1);
-  const std::string scales_name =
-      node_->input_size() >= 3 && !node_->input(2).empty() ? node_->input(2) : std::string{};
+  const bool encoded = node_->input_size() < 3 || node_->input(2).empty();
   rt_ns::KernelPreparation preparation;
-  preparation.info.source_inputs = {weights_name};
-  if (!scales_name.empty()) {
-    preparation.info.source_inputs.push_back(scales_name);
+  preparation.info.source_inputs = {node_->input(1)};
+  if (!encoded) {
+    preparation.info.source_inputs.push_back(node_->input(2));
   }
-  preparation.info.representation = "MatMulNBits:prepared-v1";
-  preparation.info.output_slots = {weights_name + ":" + preparation.info.representation};
-  preparation.estimate_memory = [this, weights_name, scales_name](const rt_ns::RuntimeContext &rt) {
-    const auto encoded = rt.values().find(weights_name);
-    if (encoded != rt.values().end()) {
-      if (encoded->second.kind != rt_ns::RuntimeValue::Kind::kEncoded) {
-        throw std::invalid_argument(
-            "onnx_light_cpu::MatMulNBits: B must be a Tensor or EncodedValueProto.");
+  preparation.info.representation =
+      encoded ? "MatMulNBits:encoded-view-v1"
+              : "MatMulNBits:int" + std::to_string(attributes_.bits) + "-v1";
+  std::ostringstream output_slot;
+  output_slot << preparation.info.representation;
+  for (const auto &source : preparation.info.source_inputs) {
+    output_slot << ':' << source.size() << ':' << source;
+  }
+  output_slot << ":K=" << attributes_.k << ":N=" << attributes_.n;
+  preparation.info.output_slots = {output_slot.str()};
+  preparation.estimate_memory = [this, encoded](const rt_ns::RuntimeContext &rt) {
+    if (encoded) {
+      const auto &name = node_->input(1);
+      const auto kind =
+          rt.Has(name) ? rt_ns::RuntimeValue::Kind::kTensor : rt.values().at(name).kind;
+      if (kind != rt_ns::RuntimeValue::Kind::kEncoded) {
+        const char *description = kind == rt_ns::RuntimeValue::Kind::kTensor     ? "tensor"
+                                  : kind == rt_ns::RuntimeValue::Kind::kStruct   ? "structure"
+                                  : kind == rt_ns::RuntimeValue::Kind::kSequence ? "sequence"
+                                                                                 : "unknown";
+        throw std::invalid_argument("onnx_light_cpu::MatMulNBits: input '" + name +
+                                    "' must contain encoded weights for MatMulNBits; received " +
+                                    description + ".");
       }
-      std::size_t source_bytes = encoded->second.Encoded().raw_data().size();
-      if (!scales_name.empty() && rt.HasValue(scales_name)) {
-        source_bytes = ml_cpu_compute::CheckedAdd(source_bytes, rt.Get(scales_name).size_bytes(),
-                                                  "MatMulNBits", "preparation source bytes");
-      }
-      return rt_ns::KernelPreparationMemory{source_bytes, 0, 0};
+      const auto &value = rt.values().at(name);
+      const std::size_t bytes = value.Encoded().raw_data().size();
+      return rt_ns::KernelPreparationMemory{bytes, attributes_.bits == 3 ? 0 : bytes, 0};
     }
-    if (attributes_.bits == 3) {
-      throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
-    }
-    if (scales_name.empty()) {
-      throw std::invalid_argument(
-          "onnx_light_cpu::MatMulNBits: scales may be supplied either inside encoded B or as "
-          "input 2, but not omitted from both.");
-    }
-    const Tensor &b = rt.Get(weights_name);
-    const Tensor &scales = rt.Get(scales_name);
+    const Tensor &b = rt.Get(node_->input(1));
+    const Tensor &scales = rt.Get(node_->input(2));
     const std::size_t source_bytes = ml_cpu_compute::CheckedAdd(
         b.size_bytes(), scales.size_bytes(), "MatMulNBits", "preparation source bytes");
-    if (attributes_.bits == 8 &&
-        scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT)) {
-      return rt_ns::KernelPreparationMemory{source_bytes, 0, 0};
-    }
-    const std::size_t prepared_bytes = attributes_.bits == 8
-                                           ? PreparedInt8Plan::TotalBytes(attributes_)
-                                           : PreparedInt4Plan::TotalBytes(attributes_);
+    const std::size_t prepared_bytes =
+        attributes_.bits == 8
+            ? (scales.data_type == static_cast<std::int32_t>(RuntimeDataType::FLOAT)
+                   ? PreparedInt8Plan::TotalBytes(attributes_)
+                   : 0)
+            : PreparedInt4Plan::TotalBytes(attributes_);
     return rt_ns::KernelPreparationMemory{source_bytes, 0, prepared_bytes};
   };
-  preparation.execute = [this, immutable_inputs](rt_ns::RuntimeContext &rt) {
-    PrepareImpl(rt, immutable_inputs);
-  };
+  preparation.execute =
+      [this, sources = std::unordered_set<std::string>(preparation.info.source_inputs.begin(),
+                                                       preparation.info.source_inputs.end())](
+          rt_ns::RuntimeContext &rt) { PrepareImmutableInputs(rt, sources); };
   preparations.push_back(std::move(preparation));
 }
 
-void MatMulNBitsKernel::PrepareImpl(rt_ns::RuntimeContext &rt,
-                                    const std::unordered_set<std::string> &immutable_inputs) {
+void MatMulNBitsKernel::PrepareImmutableInputs(
+    rt_ns::RuntimeContext &rt, const std::unordered_set<std::string> &immutable_inputs) {
   const auto encoded = node_ != nullptr && node_->input_size() >= 2
                            ? rt.values().find(node_->input(1))
                            : rt.values().end();
