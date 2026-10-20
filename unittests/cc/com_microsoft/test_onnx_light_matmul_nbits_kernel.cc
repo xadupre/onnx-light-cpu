@@ -444,6 +444,101 @@ TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidenc
   }
 }
 
+#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
+TEST(MatMulNBitsKernel, DeclaresPackingBeforeSourcesAreAvailable) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  for (const std::int64_t bits : {4, 8}) {
+    const bool available = bits == 4 ? ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()
+                                     : ml_cpu_compute::MatMulNBitsInt8Float32Available();
+    const auto node = MakeNode(k, n, bits);
+    onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    std::vector<rt_ns::KernelPreparation> preparations;
+    kernel.DeclarePreparations({"B"}, preparations);
+    EXPECT_TRUE(preparations.empty());
+    kernel.DeclarePreparations({"B", "scales"}, preparations);
+    ASSERT_EQ(preparations.size(), available ? 1U : 0U);
+    if (!available) {
+      continue;
+    }
+    const auto &preparation = preparations.front();
+    EXPECT_EQ(preparation.info.source_inputs, (std::vector<std::string>{"B", "scales"}));
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    rt.Set("B", rt_ns::Tensor::FromUint8(
+                    "B", {n, k / 32, bits == 4 ? 16 : 32},
+                    std::vector<std::uint8_t>(n * k * bits / 8, bits == 4 ? 0x99 : 129)));
+    rt.Set("scales",
+           rt_ns::Tensor::FromFloat("scales", {n, k / 32}, std::vector<float>(n * k / 32, 0.25f)));
+    const auto memory = preparation.estimate_memory(rt);
+    EXPECT_EQ(memory.source_bytes, rt.Get("B").size_bytes() + rt.Get("scales").size_bytes());
+    EXPECT_EQ(memory.temporary_bytes, 0U);
+    EXPECT_GT(memory.prepared_bytes, 0U);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+    preparation.execute(rt);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), memory.prepared_bytes);
+    preparation.execute(rt);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), memory.prepared_bytes);
+    const auto output = kernel(rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, 0.5f)),
+                               rt.Get("B"), rt.Get("scales"));
+    for (std::size_t index = 0; index < output.element_count(); ++index) {
+      EXPECT_FLOAT_EQ(output.AsFloat()[index], 8.0f);
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, RuntimeSessionPacksInitializersBeforeInference) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  for (const std::int64_t bits : {4, 8}) {
+    ONNX_LIGHT_NAMESPACE::ModelProto model;
+    model.add_opset_import()->set_version(23);
+    auto *opset = model.add_opset_import();
+    opset->set_domain("com.microsoft");
+    opset->set_version(1);
+    auto *graph = model.mutable_graph();
+    graph->add_input()->set_name("A");
+    graph->add_output()->set_name("Y");
+    *graph->add_node() = MakeNode(k, n, bits);
+    auto *weights = graph->add_initializer();
+    weights->set_name("B");
+    weights->set_data_type(rt_ns::DataType::UINT8);
+    weights->add_dims(n);
+    weights->add_dims(k / 32);
+    weights->add_dims(bits == 4 ? 16 : 32);
+    weights->set_raw_data(std::string(n * k * bits / 8, bits == 4 ? '\x99' : '\x81'));
+    auto *scales = graph->add_initializer();
+    scales->set_name("scales");
+    scales->set_data_type(rt_ns::DataType::FLOAT);
+    scales->add_dims(n);
+    scales->add_dims(k / 32);
+    for (std::int64_t index = 0; index < n * k / 32; ++index) {
+      scales->add_float_data(0.25f);
+    }
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
+    rt.Set("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, 0.5f)));
+    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
+    rt_ns::RuntimeSession session(model);
+    session.DeclarePreparations(rt);
+    const bool available = bits == 4 ? ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()
+                                     : ml_cpu_compute::MatMulNBitsInt8Float32Available();
+    EXPECT_EQ(session.pending_preparations().size(), available ? 1U : 0U);
+    session.ExecutePreparations(rt, 0);
+    EXPECT_EQ(session.prepared_bytes(), 0U);
+    session.Prepare(rt);
+    EXPECT_TRUE(session.pending_preparations().empty());
+    EXPECT_EQ(session.prepared_bytes() > 0, available);
+    EXPECT_FALSE(rt.HasValue("Y"));
+    const auto prepared_bytes = session.prepared_bytes();
+    session.Run(rt);
+    EXPECT_EQ(session.prepared_bytes(), prepared_bytes);
+    for (std::size_t index = 0; index < rt.Get("Y").element_count(); ++index) {
+      EXPECT_FLOAT_EQ(rt.Get("Y").AsFloat()[index], 8.0f);
+    }
+  }
+}
+#endif
+
 TEST(MatMulNBitsKernel, PreparedReplayRebindsToEachValueStore) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
@@ -622,7 +717,19 @@ TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
       rt.PutValue("B", rt_ns::RuntimeValue(MakeEncodedWeights(data_type, k, n, bits)));
 
       EXPECT_TRUE(kernel.HasPreparations({"B"}));
+#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
+      std::vector<rt_ns::KernelPreparation> preparations;
+      kernel.DeclarePreparations({"B"}, preparations);
+      ASSERT_EQ(preparations.size(), 1U);
+      EXPECT_EQ(preparations.front().info.source_inputs, (std::vector<std::string>{"B"}));
+      const auto memory = preparations.front().estimate_memory(rt);
+      EXPECT_EQ(memory.source_bytes, rt.values().at("B").Encoded().raw_data().size());
+      EXPECT_EQ(memory.temporary_bytes, memory.source_bytes);
+      EXPECT_EQ(memory.prepared_bytes, 0U);
+      preparations.front().execute(rt);
+#else
       kernel.Prepare(rt, {"B"});
+#endif
       EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
       kernel.Run(rt);
 

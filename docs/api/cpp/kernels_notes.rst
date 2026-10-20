@@ -30,6 +30,13 @@ layout requires block size 32. INT4/INT8 optimized preparation is used only
 for block size 32 with implicit zero points; all other supported groups use
 the bounded-panel path, including K tails and optional bias.
 
+With onnx-light's declarative preparation API, ``MatMulNBits`` declares its
+immutable sources without reading their payloads. The session schedules packing
+after those sources become available and accounts for source, temporary and
+prepared bytes before execution. ``RuntimeSession::Prepare`` can perform this
+work before inference. Builds against older onnx-light releases retain the
+legacy preparation hook.
+
 Gather
 ^^^^^^
 

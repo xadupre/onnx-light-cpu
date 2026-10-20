@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -42,7 +43,12 @@ public:
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
   void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
-               const std::unordered_set<std::string> &immutable_inputs) override;
+               const std::unordered_set<std::string> &immutable_inputs);
+#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
+  void DeclarePreparations(
+      const std::unordered_set<std::string> &immutable_inputs,
+      std::vector<ONNX_LIGHT_NAMESPACE::core::runtime::KernelPreparation> &preparations) override;
+#endif
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
