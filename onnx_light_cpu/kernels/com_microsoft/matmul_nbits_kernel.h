@@ -39,6 +39,7 @@ public:
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
   TuningKey(std::int32_t element_type) const override;
+  std::int32_t TuningInputIndex() const noexcept override { return 0; }
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;

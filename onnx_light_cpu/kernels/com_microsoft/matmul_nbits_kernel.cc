@@ -395,9 +395,10 @@ void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string
             : PreparedInt4Plan::TotalBytes(attributes_);
     return rt_ns::KernelPreparationMemory{source_bytes, 0, prepared_bytes};
   };
-  preparation.execute = [this, immutable_inputs](rt_ns::RuntimeContext &rt) {
-    Prepare(rt, immutable_inputs);
-  };
+  preparation.execute =
+      [this, sources = std::unordered_set<std::string>(preparation.info.source_inputs.begin(),
+                                                       preparation.info.source_inputs.end())](
+          rt_ns::RuntimeContext &rt) { Prepare(rt, sources); };
   preparations.push_back(std::move(preparation));
 }
 

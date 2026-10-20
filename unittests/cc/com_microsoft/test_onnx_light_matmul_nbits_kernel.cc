@@ -456,7 +456,7 @@ TEST(MatMulNBitsKernel, DeclaresPackingBeforeSourcesAreAvailable) {
     std::vector<rt_ns::KernelPreparation> preparations;
     kernel.DeclarePreparations({"B"}, preparations);
     EXPECT_TRUE(preparations.empty());
-    kernel.DeclarePreparations({"B", "scales"}, preparations);
+    kernel.DeclarePreparations({"B", "scales", "unrelated_initializer"}, preparations);
     ASSERT_EQ(preparations.size(), available ? 1U : 0U);
     if (!available) {
       continue;
@@ -490,49 +490,68 @@ TEST(MatMulNBitsKernel, RuntimeSessionPacksInitializersBeforeInference) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
   for (const std::int64_t bits : {4, 8}) {
-    ONNX_LIGHT_NAMESPACE::ModelProto model;
-    model.add_opset_import()->set_version(23);
-    auto *opset = model.add_opset_import();
-    opset->set_domain("com.microsoft");
-    opset->set_version(1);
-    auto *graph = model.mutable_graph();
-    graph->add_input()->set_name("A");
-    graph->add_output()->set_name("Y");
-    *graph->add_node() = MakeNode(k, n, bits);
-    auto *weights = graph->add_initializer();
-    weights->set_name("B");
-    weights->set_data_type(rt_ns::DataType::UINT8);
-    weights->add_dims(n);
-    weights->add_dims(k / 32);
-    weights->add_dims(bits == 4 ? 16 : 32);
-    weights->set_raw_data(std::string(n * k * bits / 8, bits == 4 ? '\x99' : '\x81'));
-    auto *scales = graph->add_initializer();
-    scales->set_name("scales");
-    scales->set_data_type(rt_ns::DataType::FLOAT);
-    scales->add_dims(n);
-    scales->add_dims(k / 32);
-    for (std::int64_t index = 0; index < n * k / 32; ++index) {
-      scales->add_float_data(0.25f);
-    }
-    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
-    rt.Set("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, 0.5f)));
-    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
-    rt_ns::RuntimeSession session(model);
-    session.DeclarePreparations(rt);
-    const bool available = bits == 4 ? ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()
-                                     : ml_cpu_compute::MatMulNBitsInt8Float32Available();
-    EXPECT_EQ(session.pending_preparations().size(), available ? 1U : 0U);
-    session.ExecutePreparations(rt, 0);
-    EXPECT_EQ(session.prepared_bytes(), 0U);
-    session.Prepare(rt);
-    EXPECT_TRUE(session.pending_preparations().empty());
-    EXPECT_EQ(session.prepared_bytes() > 0, available);
-    EXPECT_FALSE(rt.HasValue("Y"));
-    const auto prepared_bytes = session.prepared_bytes();
-    session.Run(rt);
-    EXPECT_EQ(session.prepared_bytes(), prepared_bytes);
-    for (std::size_t index = 0; index < rt.Get("Y").element_count(); ++index) {
-      EXPECT_FLOAT_EQ(rt.Get("Y").AsFloat()[index], 8.0f);
+    for (bool declared_input_type : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "bits=" << bits << " declared_input_type=" << declared_input_type);
+      ONNX_LIGHT_NAMESPACE::ModelProto model;
+      model.add_opset_import()->set_version(23);
+      auto *opset = model.add_opset_import();
+      opset->set_domain("com.microsoft");
+      opset->set_version(1);
+      auto *graph = model.mutable_graph();
+      auto *input = graph->add_input();
+      input->set_name("A");
+      if (declared_input_type) {
+        input->mutable_type()->mutable_tensor_type()->set_elem_type(rt_ns::DataType::FLOAT);
+      }
+      graph->add_output()->set_name("Y");
+      *graph->add_node() = MakeNode(k, n, bits);
+      auto *weights = graph->add_initializer();
+      weights->set_name("B");
+      weights->set_data_type(rt_ns::DataType::UINT8);
+      weights->add_dims(n);
+      weights->add_dims(k / 32);
+      weights->add_dims(bits == 4 ? 16 : 32);
+      weights->set_raw_data(std::string(n * k * bits / 8, bits == 4 ? '\x99' : '\x81'));
+      auto *scales = graph->add_initializer();
+      scales->set_name("scales");
+      scales->set_data_type(rt_ns::DataType::FLOAT);
+      scales->add_dims(n);
+      scales->add_dims(k / 32);
+      for (std::int64_t index = 0; index < n * k / 32; ++index) {
+        scales->add_float_data(0.25f);
+      }
+      rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
+      ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
+      onnx_light_cpu::MatMulNBitsKernel kernel{
+          graph->node(0), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      const auto key = kernel.TuningKey(rt_ns::DataType::FLOAT);
+      auto &registry = rt_ns::GetKernelTuningRegistry();
+      auto parameters = registry.FindSchema(key)->portable_defaults();
+      parameters.values["parallel.max_participants"] = std::int64_t{1};
+      registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{parameters});
+      rt_ns::RuntimeSession session(model);
+      const bool available = bits == 4 ? ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()
+                                       : ml_cpu_compute::MatMulNBitsInt8Float32Available();
+      session.Prepare(rt);
+      EXPECT_EQ(session.pending_preparations().empty(), !available || declared_input_type);
+      EXPECT_EQ(session.prepared_bytes() > 0, available && declared_input_type);
+      EXPECT_EQ(session.tuning_resolution_statistics().resolved_profiles,
+                declared_input_type ? 1U : 0U);
+      EXPECT_FALSE(rt.HasValue("Y"));
+      const auto prepared_bytes = session.prepared_bytes();
+      rt.Set("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, 0.5f)));
+      session.Run(rt);
+      EXPECT_TRUE(session.pending_preparations().empty());
+      EXPECT_EQ(session.prepared_bytes() > 0, available);
+      EXPECT_EQ(session.tuning_resolution_statistics().resolved_profiles, 1U);
+      if (declared_input_type) {
+        EXPECT_EQ(session.prepared_bytes(), prepared_bytes);
+      }
+      for (std::size_t index = 0; index < rt.Get("Y").element_count(); ++index) {
+        EXPECT_FLOAT_EQ(rt.Get("Y").AsFloat()[index], 8.0f);
+      }
+      registry.PublishProfiles({}, std::vector<rt_ns::KernelTuningKey>{key});
     }
   }
 }

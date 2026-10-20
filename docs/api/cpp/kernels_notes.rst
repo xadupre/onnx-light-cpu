@@ -35,6 +35,9 @@ immutable sources without reading their payloads. The session schedules packing
 after those sources become available and accounts for source, temporary and
 prepared bytes before execution. ``RuntimeSession::Prepare`` can perform this
 work before inference. This declarative preparation API is required.
+Tuning uses the activation input A's type, not the packed UINT8 weights.
+If A has no declared type and is not yet supplied, tuning and preparation wait
+until A becomes available.
 
 Gather
 ^^^^^^
