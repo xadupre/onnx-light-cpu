@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -41,8 +42,9 @@ public:
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
-  void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
-               const std::unordered_set<std::string> &immutable_inputs) override;
+  void DeclarePreparations(
+      const std::unordered_set<std::string> &immutable_inputs,
+      std::vector<ONNX_LIGHT_NAMESPACE::core::runtime::KernelPreparation> &preparations) override;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
@@ -82,6 +84,8 @@ private:
               const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
               const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
               ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt) const;
+  void PrepareImpl(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+                   const std::unordered_set<std::string> &immutable_inputs);
 
   MatMulNBitsAttributes attributes_;
   ml_cpu_compute::MatMulNBitsExecutionTuning tuning_ =
