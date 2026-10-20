@@ -131,13 +131,35 @@ def test_windows_release_repair_keeps_onnx_light_dlls_external():
     )[0]
     dependencies = ";".join(
         f"lib_onnx_{component}.dll"
-        for component in ("core", "proto", "kernels", "backend_test", "op", "shape")
+        for component in ("core", "proto", "kernels", "backend_test", "op", "shape", "threads")
     )
     assert shlex.split(repair) == [
         "delvewheel",
         "repair",
         "--exclude",
         dependencies,
+        "-w",
+        "{dest_dir}",
+        "{wheel}",
+    ]
+
+
+def test_linux_release_repair_keeps_onnx_light_libraries_external():
+    linux_job = _RELEASE_WORKFLOW.split("  build_wheels_linux:", 1)[1].split(
+        "  build_wheels_windows:", 1
+    )[0]
+    repair = linux_job.split("CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-\n", 1)[1].split(
+        "          CIBW_", 1
+    )[0]
+    dependencies = [
+        argument
+        for component in ("core", "proto", "kernels", "backend_test", "op", "shape", "threads")
+        for argument in ("--exclude", f"liblib_onnx_{component}.so")
+    ]
+    assert shlex.split(repair) == [
+        "auditwheel",
+        "repair",
+        *dependencies,
         "-w",
         "{dest_dir}",
         "{wheel}",

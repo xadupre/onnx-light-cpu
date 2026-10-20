@@ -64,6 +64,7 @@ jobs:
             --exclude liblib_onnx_core.so --exclude liblib_onnx_proto.so
             --exclude liblib_onnx_kernels.so --exclude liblib_onnx_backend_test.so
             --exclude liblib_onnx_op.so --exclude liblib_onnx_shape.so
+            --exclude liblib_onnx_threads.so
             -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
@@ -135,7 +136,7 @@ jobs:
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             delvewheel repair
-            --exclude "lib_onnx_core.dll;lib_onnx_proto.dll;lib_onnx_kernels.dll;lib_onnx_backend_test.dll;lib_onnx_op.dll;lib_onnx_shape.dll"
+            --exclude "lib_onnx_core.dll;lib_onnx_proto.dll;lib_onnx_kernels.dll;lib_onnx_backend_test.dll;lib_onnx_op.dll;lib_onnx_shape.dll;lib_onnx_threads.dll"
             -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}

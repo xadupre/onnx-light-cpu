@@ -86,8 +86,16 @@ CMake option or wheel tag.
 With onnx-light 0.2.0 source checkouts, the standalone proto headers are under
 ``onnx_proto/include`` and their helpers under ``onnx_proto/helpers/include``.
 ``--onnx-light-source`` uses those paths while still linking the exact core
-and proto shared libraries loaded by Python. Installed Python wheels retain
-the packaged header layout under ``onnx_light``.
+and proto shared libraries loaded by Python. Source checkouts with the
+standalone threading library also use ``onnx_threads/include`` and link the
+same threading shared library as Python, without rebuilding it. Direct CMake
+builds can select that library with ``ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY``;
+Windows builds also need ``ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB``.
+Installed Python wheels retain the packaged header layout under ``onnx_light``.
+The selected threading library is also linked with that layout, without requiring
+the source-only ``onnx_threads/include`` directory. Both layouts are recognized
+when selecting the runtime through ``PYTHONPATH``, including forwarding the
+threading import library on Windows.
 
 The regression test imports ``_cpukernels`` then ``_cpuregister``, and the
 reverse order, in separate Python subprocesses. It runs from both the checkout
