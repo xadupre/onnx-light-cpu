@@ -443,22 +443,6 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       ml_cpu_compute
       onnx_light::lib_onnx_core
       onnx_light::lib_onnx_kernels)
-  include(CheckCXXSourceCompiles)
-  include(CMakePushCheckState)
-  cmake_push_check_state(RESET)
-  set(CMAKE_REQUIRED_LIBRARIES onnx_light::lib_onnx_core)
-  unset(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS CACHE)
-  check_cxx_source_compiles("
-      #include \"onnx_core/runtime/kernels/kernel_context.h\"
-      using Declaration = decltype(
-          &ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::DeclarePreparations);
-      int main() { return 0; }
-      " ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
-  cmake_pop_check_state()
-  if(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
-    target_compile_definitions(lib_onnx_light_cpu_kernels PUBLIC
-        ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS=1)
-  endif()
   # Standalone consumers inherit the concrete Cast link dependency. Linux/macOS
   # build-tree consumers resolve it via CMake's target RPATH; Windows consumers
   # must place the onnx-light runtime DLL directory on their loader search path.

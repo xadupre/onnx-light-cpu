@@ -34,8 +34,7 @@ With onnx-light's declarative preparation API, ``MatMulNBits`` declares its
 immutable sources without reading their payloads. The session schedules packing
 after those sources become available and accounts for source, temporary and
 prepared bytes before execution. ``RuntimeSession::Prepare`` can perform this
-work before inference. Builds against older onnx-light releases retain the
-legacy preparation hook.
+work before inference. This declarative preparation API is required.
 
 Gather
 ^^^^^^

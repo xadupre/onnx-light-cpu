@@ -444,7 +444,6 @@ TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidenc
   }
 }
 
-#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
 TEST(MatMulNBitsKernel, DeclaresPackingBeforeSourcesAreAvailable) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
@@ -537,7 +536,6 @@ TEST(MatMulNBitsKernel, RuntimeSessionPacksInitializersBeforeInference) {
     }
   }
 }
-#endif
 
 TEST(MatMulNBitsKernel, PreparedReplayRebindsToEachValueStore) {
   constexpr std::int64_t k = 64;
@@ -717,7 +715,6 @@ TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
       rt.PutValue("B", rt_ns::RuntimeValue(MakeEncodedWeights(data_type, k, n, bits)));
 
       EXPECT_TRUE(kernel.HasPreparations({"B"}));
-#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
       std::vector<rt_ns::KernelPreparation> preparations;
       kernel.DeclarePreparations({"B"}, preparations);
       ASSERT_EQ(preparations.size(), 1U);
@@ -727,9 +724,6 @@ TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
       EXPECT_EQ(memory.temporary_bytes, memory.source_bytes);
       EXPECT_EQ(memory.prepared_bytes, 0U);
       preparations.front().execute(rt);
-#else
-      kernel.Prepare(rt, {"B"});
-#endif
       EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
       kernel.Run(rt);
 

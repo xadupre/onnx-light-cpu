@@ -359,7 +359,6 @@ bool MatMulNBitsKernel::HasPreparations(
          immutable_inputs.contains(node_->input(1)) && immutable_inputs.contains(node_->input(2));
 }
 
-#if defined(ONNX_LIGHT_CPU_HAS_DECLARATIVE_PREPARATIONS)
 void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string> &immutable_inputs,
                                             std::vector<rt_ns::KernelPreparation> &preparations) {
   if (!HasPreparations(immutable_inputs)) {
@@ -401,7 +400,6 @@ void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string
   };
   preparations.push_back(std::move(preparation));
 }
-#endif
 
 void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
                                 const std::unordered_set<std::string> &immutable_inputs) {
