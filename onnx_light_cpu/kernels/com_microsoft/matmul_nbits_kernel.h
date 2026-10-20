@@ -13,7 +13,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -71,8 +70,6 @@ private:
   struct PreparedInt8Plan;
   struct PreparedEncodedState;
 
-  std::string PreparedWeightsKey(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
-                                 const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &scales) const;
   void PrepareImmutableInputs(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
                               const std::unordered_set<std::string> &immutable_inputs);
 
