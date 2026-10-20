@@ -38,6 +38,9 @@ work before inference. This declarative preparation API is required.
 Tuning uses the activation input A's type, not the packed UINT8 weights.
 If A has no declared type and is not yet supplied, tuning and preparation wait
 until A becomes available.
+Preparation metadata identifies the immutable sources and packing geometry,
+independently of node output names. Nodes sharing the same weights and scales
+reuse the prepared storage.
 
 Gather
 ^^^^^^

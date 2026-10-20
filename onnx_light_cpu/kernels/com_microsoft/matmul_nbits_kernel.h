@@ -43,8 +43,6 @@ public:
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
-  void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
-               const std::unordered_set<std::string> &immutable_inputs);
   void DeclarePreparations(
       const std::unordered_set<std::string> &immutable_inputs,
       std::vector<ONNX_LIGHT_NAMESPACE::core::runtime::KernelPreparation> &preparations) override;
@@ -71,6 +69,9 @@ private:
   struct PreparedInt4State;
   struct PreparedInt8Plan;
   struct PreparedEncodedState;
+
+  void PrepareImmutableInputs(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+                              const std::unordered_set<std::string> &immutable_inputs);
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
