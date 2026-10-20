@@ -157,7 +157,9 @@ def _onnx_light_source_build_info():
             "core_library": find_runtime_library("lib_onnx_core"),
             "proto_library": find_runtime_library("lib_onnx_proto"),
         }
-        if (include_dir.parent / "onnx_threads/include/onnx_threads/config.h").is_file():
+        if (include_dir.parent / "onnx_threads/include/onnx_threads/config.h").is_file() or (
+            include_dir / "onnx_threads/config.h"
+        ).is_file():
             info["threads_library"] = find_runtime_library("lib_onnx_threads")
     else:
         info = dict(onnx_light.get_cpp_build_info())

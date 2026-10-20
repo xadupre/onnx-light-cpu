@@ -35,7 +35,14 @@ print(json.dumps({"info": info, "cmake_args": cmake_args}))
 """
 
 
-def _check_runtime(*, symlinks=False, foreign=False, threads=False):
+def _check_runtime(
+    *,
+    symlinks=False,
+    foreign=False,
+    threads=False,
+    packaged_headers=False,
+    import_libraries=False,
+):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
@@ -47,7 +54,11 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
         header.parent.mkdir(parents=True)
         header.touch()
         if threads:
-            thread_header = root / "onnx_threads/include/onnx_threads/config.h"
+            thread_header = (
+                package / "onnx_threads/config.h"
+                if packaged_headers
+                else root / "onnx_threads/include/onnx_threads/config.h"
+            )
             thread_header.parent.mkdir(parents=True)
             thread_header.touch()
         (package / "__init__.py").touch()
@@ -72,6 +83,20 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
                 f"__path__ = [{str(artifacts)!r}]\n", encoding="utf-8"
             )
         env = dict(os.environ, PYTHONPATH=str(root))
+        if import_libraries:
+            import_library_dir = root / "import_libraries"
+            import_library_dir.mkdir()
+            for component in (
+                "core",
+                "proto",
+                "threads",
+                "kernels",
+                "backend_test",
+                "op",
+                "shape",
+            ):
+                (import_library_dir / f"lib_onnx_{component}.lib").touch()
+            env["ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR"] = str(import_library_dir)
         result = subprocess.run(
             [sys.executable, "-c", _SCRIPT, str(_SETUP)],
             env=env,
@@ -99,6 +124,14 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={info['threads_library']}"
                     in output["cmake_args"]
                 )
+                if import_libraries:
+                    assert info["threads_import_library"] == str(
+                        import_library_dir / "lib_onnx_threads.lib"
+                    )
+                    assert (
+                        f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB={info['threads_import_library']}"
+                        in output["cmake_args"]
+                    )
             else:
                 assert "threads_library" not in info
 
@@ -118,6 +151,14 @@ def test_foreign_extension():
 
 def test_inplace_threads():
     _check_runtime(threads=True)
+
+
+def test_packaged_threads():
+    _check_runtime(threads=True, packaged_headers=True)
+
+
+def test_packaged_threads_import_libraries():
+    _check_runtime(threads=True, packaged_headers=True, import_libraries=True)
 
 
 @unittest.skipIf(sys.platform == "win32", "Symbolic links require Windows privileges.")
