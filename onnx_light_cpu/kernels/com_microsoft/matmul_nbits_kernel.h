@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -38,11 +39,13 @@ public:
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
   TuningKey(std::int32_t element_type) const override;
+  std::int32_t TuningInputIndex() const noexcept override { return 0; }
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
   bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
-  void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
-               const std::unordered_set<std::string> &immutable_inputs) override;
+  void DeclarePreparations(
+      const std::unordered_set<std::string> &immutable_inputs,
+      std::vector<ONNX_LIGHT_NAMESPACE::core::runtime::KernelPreparation> &preparations) override;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
@@ -66,6 +69,9 @@ private:
   struct PreparedInt4State;
   struct PreparedInt8Plan;
   struct PreparedEncodedState;
+
+  void PrepareImmutableInputs(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+                              const std::unordered_set<std::string> &immutable_inputs);
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
