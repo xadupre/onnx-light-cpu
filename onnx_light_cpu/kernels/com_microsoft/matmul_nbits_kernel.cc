@@ -359,6 +359,22 @@ bool MatMulNBitsKernel::HasPreparations(
          immutable_inputs.contains(node_->input(1)) && immutable_inputs.contains(node_->input(2));
 }
 
+std::string MatMulNBitsKernel::PreparedWeightsKey(const Tensor &b, const Tensor &scales) const {
+  std::uint64_t digest = 14695981039346656037ULL;
+  const auto add_to_digest = [&](const Tensor &tensor) {
+    for (std::size_t index = 0; index < tensor.size_bytes(); ++index) {
+      digest = (digest ^ tensor.bytes()[index]) * 1099511628211ULL;
+    }
+  };
+  add_to_digest(b);
+  add_to_digest(scales);
+  std::ostringstream key;
+  key << "MatMulNBits:int" << attributes_.bits << "-v1:" << node_->input(1) << ':'
+      << node_->input(2) << ":K=" << attributes_.k << ":N=" << attributes_.n
+      << ":dtype=" << scales.data_type << ":digest=" << digest;
+  return key.str();
+}
+
 void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string> &immutable_inputs,
                                             std::vector<rt_ns::KernelPreparation> &preparations) {
   if (!HasPreparations(immutable_inputs)) {
@@ -402,12 +418,19 @@ void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string
     const Tensor &scales = rt.Get(node_->input(2));
     const std::size_t source_bytes = ml_cpu_compute::CheckedAdd(
         b.size_bytes(), scales.size_bytes(), "MatMulNBits", "preparation source bytes");
-    const std::size_t prepared_bytes =
+    std::size_t prepared_bytes =
         attributes_.bits == 8
             ? (scales.data_type == static_cast<std::int32_t>(RuntimeDataType::FLOAT)
                    ? PreparedInt8Plan::TotalBytes(attributes_)
                    : 0)
             : PreparedInt4Plan::TotalBytes(attributes_);
+    if (prepared_bytes != 0) {
+      const auto &store = rt.value_store();
+      const auto slot = store.Find(PreparedWeightsKey(b, scales));
+      if (slot && store.IsReady(*slot)) {
+        prepared_bytes = 0;
+      }
+    }
     return rt_ns::KernelPreparationMemory{source_bytes, 0, prepared_bytes};
   };
   preparation.execute =
@@ -501,20 +524,8 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
         "onnx_light_cpu::MatMulNBits: prepared B must be UINT8 and scales must be FLOAT, FLOAT16, "
         "or BFLOAT16.");
   }
-  std::uint64_t digest = 14695981039346656037ULL;
-  const auto add_to_digest = [&](const Tensor &tensor) {
-    for (std::size_t index = 0; index < tensor.size_bytes(); ++index) {
-      digest = (digest ^ tensor.bytes()[index]) * 1099511628211ULL;
-    }
-  };
-  add_to_digest(b);
-  add_to_digest(scales);
-  std::ostringstream key;
-  key << "MatMulNBits:int" << attributes_.bits << "-v1:" << node_->input(1) << ':'
-      << node_->input(2) << ":K=" << attributes_.k << ":N=" << attributes_.n
-      << ":dtype=" << scales.data_type << ":digest=" << digest;
   rt_ns::ValueStore &store = rt.value_store();
-  const auto slot = store.Bind(key.str());
+  const auto slot = store.Bind(PreparedWeightsKey(b, scales));
   const bool int8 = attributes_.bits == 8;
   const std::size_t weight_bytes = int8 ? PreparedInt8Plan::WeightBytes(attributes_)
                                         : PreparedInt4Plan::WeightBytes(attributes_);

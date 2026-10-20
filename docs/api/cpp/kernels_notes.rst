@@ -40,7 +40,9 @@ If A has no declared type and is not yet supplied, tuning and preparation wait
 until A becomes available.
 Preparation metadata identifies the immutable sources and packing geometry,
 independently of node output names. Nodes sharing the same weights and scales
-reuse the prepared storage.
+reuse the prepared storage. Once that artifact is ready in the session's value
+store, subsequent preparations report zero additional prepared bytes, so a
+bounded budget does not charge for the shared buffer twice.
 
 Gather
 ^^^^^^
