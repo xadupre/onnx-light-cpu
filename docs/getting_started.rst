@@ -92,6 +92,8 @@ same threading shared library as Python, without rebuilding it. Direct CMake
 builds can select that library with ``ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY``;
 Windows builds also need ``ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB``.
 Installed Python wheels retain the packaged header layout under ``onnx_light``.
+The selected threading library is also linked with that layout, without requiring
+the source-only ``onnx_threads/include`` directory.
 
 The regression test imports ``_cpukernels`` then ``_cpuregister``, and the
 reverse order, in separate Python subprocesses. It runs from both the checkout

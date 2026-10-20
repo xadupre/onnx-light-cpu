@@ -235,7 +235,8 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include"
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto")
     endif()
-    if(EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include/onnx_threads/config.h")
+    if(ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY OR
+       EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include/onnx_threads/config.h")
       get_filename_component(_onnx_light_libdir
           "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}" DIRECTORY)
       if(ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY)
@@ -255,10 +256,13 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_threads::lib_onnx_threads PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_threads_lib}"
-          INTERFACE_INCLUDE_DIRECTORIES
-              "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include"
           INTERFACE_COMPILE_DEFINITIONS ONNX_THREADS_SHARED
           INTERFACE_LINK_LIBRARIES Threads::Threads)
+      if(EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include/onnx_threads/config.h")
+        set_property(TARGET onnx_threads::lib_onnx_threads PROPERTY
+            INTERFACE_INCLUDE_DIRECTORIES
+                "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_threads/include")
+      endif()
       if(WIN32)
         if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_IMPLIB)
           message(FATAL_ERROR

@@ -7,6 +7,7 @@
 import importlib.machinery
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,7 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
+        prefix = "" if sys.platform == "win32" else "lib"
         package = root / "onnx_light"
         runtime = package / "onnx_py"
         runtime.mkdir(parents=True)
@@ -55,11 +57,11 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
         extension_name = "_onnxpyprotoop" + importlib.machinery.EXTENSION_SUFFIXES[0]
         names = [
             extension_name,
-            f"liblib_onnx_core{suffix}",
-            f"liblib_onnx_proto{suffix}",
+            f"{prefix}lib_onnx_core{suffix}",
+            f"{prefix}lib_onnx_proto{suffix}",
         ]
         if threads:
-            names.append(f"liblib_onnx_threads{suffix}")
+            names.append(f"{prefix}lib_onnx_threads{suffix}")
         for name in names:
             artifact = artifacts / name
             artifact.touch()
@@ -87,10 +89,12 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
             output = json.loads(result.stdout)
             info = output["info"]
             assert info["include_dir"] == str(package)
-            assert info["core_library"] == str(artifacts / f"liblib_onnx_core{suffix}")
-            assert info["proto_library"] == str(artifacts / f"liblib_onnx_proto{suffix}")
+            assert info["core_library"] == str(artifacts / f"{prefix}lib_onnx_core{suffix}")
+            assert info["proto_library"] == str(artifacts / f"{prefix}lib_onnx_proto{suffix}")
             if threads:
-                assert info["threads_library"] == str(artifacts / f"liblib_onnx_threads{suffix}")
+                assert info["threads_library"] == str(
+                    artifacts / f"{prefix}lib_onnx_threads{suffix}"
+                )
                 assert (
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={info['threads_library']}"
                     in output["cmake_args"]
@@ -122,13 +126,13 @@ def test_inplace_threads_symlinks():
 
 
 def test_cmake_source_header_layouts():
-    for layout in ("legacy", "proto", "threads"):
+    for layout in ("legacy", "proto", "threads", "packaged_threads"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "onnx-light"
             package = source / "onnx_light"
             package.mkdir(parents=True)
-            if layout != "legacy":
+            if layout in ("proto", "threads"):
                 proto = source / "onnx_proto/include/onnx_proto"
                 helpers = source / "onnx_proto/helpers/include"
             else:
@@ -142,8 +146,12 @@ def test_cmake_source_header_layouts():
             suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
             libraries = {}
             components = ["core", "proto", "kernels"]
-            if layout == "threads":
-                thread_header = source / "onnx_threads/include/onnx_threads/config.h"
+            if layout in ("threads", "packaged_threads"):
+                thread_header = (
+                    source / "onnx_threads/include/onnx_threads/config.h"
+                    if layout == "threads"
+                    else package / "onnx_threads/config.h"
+                )
                 thread_header.parent.mkdir(parents=True)
                 thread_header.touch()
                 components.append("threads")
@@ -157,6 +165,7 @@ def test_cmake_source_header_layouts():
                 str(_SETUP.parent),
                 "-B",
                 str(root / "build"),
+                f"--graphviz={root / 'dependencies.dot'}",
                 "-DONNX_LIGHT_CPU_BUILD_PYTHON=OFF",
                 "-DONNX_LIGHT_CPU_BUILD_TESTS=OFF",
                 "-DONNX_LIGHT_CPU_INSTALL=OFF",
@@ -166,7 +175,7 @@ def test_cmake_source_header_layouts():
                 f"-DONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY={libraries['proto']}",
                 f"-DONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY={libraries['kernels']}",
             ]
-            if layout == "threads":
+            if layout in ("threads", "packaged_threads"):
                 threads_library_arg = (
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={libraries['threads']}"
                 )
@@ -181,6 +190,21 @@ def test_cmake_source_header_layouts():
                 command, capture_output=True, text=True, check=False, timeout=120
             )
             assert result.returncode == 0, result.stdout + result.stderr
+            if layout in ("threads", "packaged_threads"):
+                graph = (root / "dependencies.dot").read_text(encoding="utf-8")
+                nodes = {
+                    name: re.search(rf'"([^"]+)" \[ label = "{name}"', graph).group(1)
+                    for name in (
+                        "onnx_light::lib_onnx_core",
+                        "onnx_light::lib_onnx_proto",
+                        "onnx_threads::lib_onnx_threads",
+                    )
+                }
+                for component in ("core", "proto"):
+                    assert (
+                        f'"{nodes[f"onnx_light::lib_onnx_{component}"]}" -> '
+                        f'"{nodes["onnx_threads::lib_onnx_threads"]}"'
+                    ) in graph
             if layout == "threads":
                 command[command.index(threads_library_arg)] = (
                     "-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY="
