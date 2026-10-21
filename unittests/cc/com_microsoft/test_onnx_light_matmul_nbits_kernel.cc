@@ -1039,7 +1039,7 @@ TEST(MatMulNBitsKernel, RuntimeSessionPreparesEncodedWeightsWithoutSeparateScale
     graph->add_output()->set_name("Y");
     auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n, bits);
     encoded.set_name("B");
-    *graph->add_encoded_initializer() = std::move(encoded);
+    *graph->add_extended_initializer()->mutable_encoded_value() = std::move(encoded);
     ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
     node.ref_input().resize(2);
     *graph->add_node() = std::move(node);
