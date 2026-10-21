@@ -119,6 +119,31 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> expe
   }
 }
 
+std::string PreparedCacheKey(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                             const MatMulNBitsAttributes &attributes, const Tensor &b,
+                             const Tensor &scales) {
+  std::uint64_t digest = 14695981039346656037ULL;
+  for (const Tensor *tensor : {&b, &scales}) {
+    for (std::size_t index = 0; index < tensor->size_bytes(); ++index) {
+      digest = (digest ^ tensor->bytes()[index]) * 1099511628211ULL;
+    }
+  }
+  std::ostringstream key;
+  key << "MatMulNBits:int" << attributes.bits << "-v1";
+  for (const auto &source : {node.input(1), node.input(2)}) {
+    key << ':' << source.size() << ':' << source;
+  }
+  key << ":K=" << attributes.k << ":N=" << attributes.n << ":Bdtype=" << b.data_type
+      << ":dtype=" << scales.data_type << ":digest=" << digest;
+  return key.str();
+}
+
+std::optional<rt_ns::ValueStore::Slot> FindReadyPreparedSlot(const rt_ns::ValueStore &store,
+                                                             const std::string &key) {
+  const auto slot = store.Find(key);
+  return slot && store.IsReady(*slot) ? slot : std::nullopt;
+}
+
 } // namespace
 
 struct MatMulNBitsKernel::PreparedInt4Plan {
@@ -402,12 +427,16 @@ void MatMulNBitsKernel::DeclarePreparations(const std::unordered_set<std::string
     const Tensor &scales = rt.Get(node_->input(2));
     const std::size_t source_bytes = ml_cpu_compute::CheckedAdd(
         b.size_bytes(), scales.size_bytes(), "MatMulNBits", "preparation source bytes");
-    const std::size_t prepared_bytes =
+    std::size_t prepared_bytes =
         attributes_.bits == 8
             ? (scales.data_type == static_cast<std::int32_t>(RuntimeDataType::FLOAT)
                    ? PreparedInt8Plan::TotalBytes(attributes_)
                    : 0)
             : PreparedInt4Plan::TotalBytes(attributes_);
+    if (prepared_bytes != 0 &&
+        FindReadyPreparedSlot(rt.value_store(), PreparedCacheKey(*node_, attributes_, b, scales))) {
+      prepared_bytes = 0;
+    }
     return rt_ns::KernelPreparationMemory{source_bytes, 0, prepared_bytes};
   };
   preparation.execute =
@@ -501,20 +530,9 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
         "onnx_light_cpu::MatMulNBits: prepared B must be UINT8 and scales must be FLOAT, FLOAT16, "
         "or BFLOAT16.");
   }
-  std::uint64_t digest = 14695981039346656037ULL;
-  const auto add_to_digest = [&](const Tensor &tensor) {
-    for (std::size_t index = 0; index < tensor.size_bytes(); ++index) {
-      digest = (digest ^ tensor.bytes()[index]) * 1099511628211ULL;
-    }
-  };
-  add_to_digest(b);
-  add_to_digest(scales);
-  std::ostringstream key;
-  key << "MatMulNBits:int" << attributes_.bits << "-v1:" << node_->input(1) << ':'
-      << node_->input(2) << ":K=" << attributes_.k << ":N=" << attributes_.n
-      << ":dtype=" << scales.data_type << ":digest=" << digest;
+  const auto key = PreparedCacheKey(*node_, attributes_, b, scales);
   rt_ns::ValueStore &store = rt.value_store();
-  const auto slot = store.Bind(key.str());
+  auto slot = FindReadyPreparedSlot(store, key);
   const bool int8 = attributes_.bits == 8;
   const std::size_t weight_bytes = int8 ? PreparedInt8Plan::WeightBytes(attributes_)
                                         : PreparedInt4Plan::WeightBytes(attributes_);
@@ -522,7 +540,8 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
                                             : PreparedInt4Plan::WeightSumBytes(attributes_);
   const std::size_t total_bytes =
       int8 ? PreparedInt8Plan::TotalBytes(attributes_) : PreparedInt4Plan::TotalBytes(attributes_);
-  if (!store.IsReady(slot)) {
+  if (!slot) {
+    slot = store.Bind(key);
     Tensor packed = store.AllocateTensor(static_cast<std::int32_t>(RuntimeDataType::UINT8),
                                          {static_cast<std::int64_t>(total_bytes)}, total_bytes);
     std::uint8_t *base = packed.mutable_bytes();
@@ -535,11 +554,11 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
                              reinterpret_cast<std::int32_t *>(base + weight_bytes),
                              reinterpret_cast<float *>(base + weight_bytes + weight_sum_bytes));
     }
-    store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
+    store.Publish(*slot, rt_ns::RuntimeValue(std::move(packed)));
   }
   auto &prepared = int8 ? prepared_int8_ : prepared_int4_;
   prepared =
-      std::make_unique<PreparedInt4State>(BindPreparedSlot(store, slot), weight_bytes,
+      std::make_unique<PreparedInt4State>(BindPreparedSlot(store, *slot), weight_bytes,
                                           weight_sum_bytes, total_bytes, tuning_.max_participants);
 }
 
