@@ -571,15 +571,15 @@ TEST(MatMulNBitsKernel, SharedSourcesReusePreparationAcrossDifferentNodeOutputs)
 
     const auto original_b = rt.Get("B");
     const auto original_scales = rt.Get("scales");
-    rt.Set("B", rt_ns::Tensor::FromUint8(
+    rt.Put("B", rt_ns::Tensor::FromUint8(
                     "B", {n, k / 32, bits == 4 ? 16 : 32},
                     std::vector<std::uint8_t>(n * k * bits / 8, bits == 4 ? 0xAA : 130)));
     EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, prepared_bytes);
-    rt.Set("B", original_b);
-    rt.Set("scales",
+    rt.Put("B", original_b);
+    rt.Put("scales",
            rt_ns::Tensor::FromFloat("scales", {n, k / 32}, std::vector<float>(n * k / 32, 0.5f)));
     EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, prepared_bytes);
-    rt.Set("scales", original_scales);
+    rt.Put("scales", original_scales);
     EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, 0U);
 
     auto other_b_node = first_node;
@@ -595,20 +595,34 @@ TEST(MatMulNBitsKernel, SharedSourcesReusePreparationAcrossDifferentNodeOutputs)
     onnx_light_cpu::MatMulNBitsKernel other_geometry{other_geometry_node, ctx};
     other_geometry.DeclarePreparations({"B", "scales"}, other_preparations);
     ASSERT_EQ(other_preparations.size(), 2U);
-    rt.Set("B",
+    rt.Put("B",
            rt_ns::Tensor::Borrow("B", original_b.data_type, {n * 2, k / 64, bits == 4 ? 16 : 32},
                                  original_b.bytes(), original_b.size_bytes()));
+    rt.Put("scales", rt_ns::Tensor::Borrow("scales", original_scales.data_type, {n * 2, k / 64},
+                                           original_scales.bytes(), original_scales.size_bytes()));
     const auto geometry_memory = other_preparations[1].estimate_memory(rt);
     EXPECT_EQ(geometry_memory.source_bytes, memory.source_bytes);
     EXPECT_EQ(geometry_memory.prepared_bytes, prepared_bytes);
-    rt.Set("B", original_b);
-    if (bits == 4) {
-      rt.Set("scales", rt_ns::MakeFloat16Tensor("scales", {n, k / 32},
-                                                std::vector<float>(n * k / 32, 0.25f)));
-      EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, prepared_bytes);
-    }
+    rt.Put("B", original_b);
+    rt.Put("scales", original_scales);
     EXPECT_EQ(rt.value_store().prepared_bytes(), prepared_bytes);
     EXPECT_EQ(rt.value_store().slot_count(), 1U);
+    if (bits == 4) {
+      const auto half_scales =
+          rt_ns::MakeFloat16Tensor("scales", {n, k / 32}, std::vector<float>(n * k / 32, 0.25f));
+      rt.Put("scales", half_scales);
+      EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, prepared_bytes);
+      preparations[1].execute(rt);
+      EXPECT_EQ(preparations[1].estimate_memory(rt).prepared_bytes, 0U);
+      rt.Put("scales", rt_ns::Tensor::Borrow(
+                           "scales", static_cast<std::int32_t>(rt_ns::DataType::BFLOAT16),
+                           half_scales.shape, half_scales.bytes(), half_scales.size_bytes()));
+      const auto typed_memory = preparations[1].estimate_memory(rt);
+      EXPECT_EQ(typed_memory.source_bytes, original_b.size_bytes() + half_scales.size_bytes());
+      EXPECT_EQ(typed_memory.prepared_bytes, prepared_bytes);
+      EXPECT_EQ(rt.value_store().prepared_bytes(), 2 * prepared_bytes);
+      EXPECT_EQ(rt.value_store().slot_count(), 2U);
+    }
   }
 }
 
