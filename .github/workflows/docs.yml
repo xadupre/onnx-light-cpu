@@ -45,12 +45,12 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         run: |
-          # Build the current main branch once and install that exact wheel.
+          # Build the 0.2.0 release once and install that exact wheel.
           # onnx-light-cpu subsequently discovers the loaded runtime through
           # get_cpp_build_info(), avoiding a second CMake-installed copy with a
           # different dispatch registry.
           pip install nanobind scikit-build-core numpy
-          git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          git clone --depth 1 --branch 0.2.0 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           # Match the CPU extensions' STABLE_ABI; nanobind separates ABI3 and
           # regular CPython type registries (LightOpSchema, RuntimeContext).
           pip install -C build.verbose=true -C wheel.py-api=cp312 /tmp/onnx-light -v

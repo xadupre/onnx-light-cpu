@@ -38,8 +38,9 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
     assert "cache: ${{ hashFiles('pixi.lock') != '' }}" in setup
 
 
-def test_documentation_does_not_replace_onnx_light_main():
-    assert "git clone --depth 1 --branch main" in _DOCS_WORKFLOW
+def test_documentation_does_not_replace_onnx_light_release():
+    assert "git clone --depth 1 --branch 0.2.0" in _DOCS_WORKFLOW
+    assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
     assert "--cpp-tests" not in _DOCS_WORKFLOW
@@ -51,6 +52,12 @@ def test_standalone_source_build_allows_time_for_both_projects():
     assert "timeout-minutes: 60" in standalone_job
     assert "- name: Build and install onnx-light\n" in standalone_job
     assert "- name: Build and install onnx-light-cpu\n" in standalone_job
+
+
+def test_standalone_source_build_uses_onnx_light_release():
+    standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
+    assert "git clone --depth 1 --branch 0.2.0" in standalone_job
+    assert "git clone --depth 1 --branch main" not in standalone_job
 
 
 def test_source_integration_uses_matching_nanobind_abi():
@@ -175,7 +182,7 @@ def test_release_wheel_maps_the_core_windows_import_library():
     assert 'set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "${_import_lib_path}")' in release_block
 
 
-def test_onnx_light_main_integration_runs_on_every_supported_os():
+def test_onnx_light_release_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
     )[0]
@@ -184,7 +191,9 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "git clone --depth 1 --branch main" in source_job
+    assert "name: onnx-light 0.2.0 (" in source_job
+    assert "git clone --depth 1 --branch 0.2.0" in source_job
+    assert "git clone --depth 1 --branch main" not in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
     assert "--cpp-tests --onnx-light-source" in source_job
