@@ -37,6 +37,34 @@ def test_changelog_release_sections():
         re.findall(r"^## \[(\d+\.\d+\.\d+)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
     )
     assert "Unreleased" in sections["0.2.0"]
+    for number in (
+        893,
+        915,
+        922,
+        923,
+        924,
+        925,
+        932,
+        933,
+        934,
+        935,
+        941,
+        942,
+        943,
+        947,
+        952,
+        953,
+        955,
+        956,
+        961,
+        963,
+        965,
+    ):
+        assert (
+            f"[#{number}](https://github.com/xadupre/onnx-light-cpu/pull/{number})"
+            in sections["0.2.0"]
+        ), number
+    assert "pinned CI and release builds to 0.1.32" not in sections["0.2.0"]
     assert "2026-10-05" in sections["0.1.20"]
     assert all(f"#{number}" in sections["0.1.20"] for number in (853, 859, 860))
     assert "2026-10-05" in sections["0.1.19"]
