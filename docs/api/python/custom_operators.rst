@@ -159,6 +159,45 @@ a positive CPU ``qmoe_block_size`` (for example, 32). Untagged CUDA-prepacked
 contents cannot be identified from tensor shapes alone; do not pass them as
 raw CPU tensors.
 
+Microsoft GatherBlockQuantized
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::GatherBlockQuantized`` version 1 gathers embeddings directly
+from packed ``UINT8`` weights, without expanding the checkpoint to a dense
+floating-point table. ``bits`` supports **2, 4, and 8** (default 4).
+Codes occupy consecutive low-to-high bit fields within each byte.
+``block_size`` defaults to 128 and must be a power of two of at least 16.
+
+The supported layout has ``gather_axis=0`` and ``quantize_axis`` on the last
+dimension (default 1); equivalent negative axes are accepted. Weights have
+rank at least two. If their stored shape is ``[V, ..., P]``, the logical
+last dimension is ``D = P * (8 / bits)``. Scales have the same rank and
+dimensions, except their last dimension is ``ceil(D / block_size)``.
+Their type, ``FLOAT`` or ``FLOAT16``, determines the output type.
+
+Optional ``UINT8`` zero points use the same packing as the weights, with
+``ceil(number_of_groups / (8 / bits))`` bytes per last-axis row.
+Packing restarts for each row; unused fields in its final byte are ignored.
+When omitted, the zero point is ``2 ** (bits - 1)``.
+Each selected code is dequantized as ``(code - zero_point) * scale``.
+``INT32`` or ``INT64`` indices may have any rank, including scalars.
+Negative indices wrap from the end; out-of-range indices produce zero
+embeddings, matching the `ONNX Runtime CPU implementation
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/quantization/gather_block_quantized.cc>`_.
+The output shape is ``indices.shape + weights.shape[1:-1] + [D]``.
+
+Register with :func:`register_kernels_global` before creating evaluators,
+or register the operator on the decoder session with
+``register_kernel_for_session(decoder, "com.microsoft", "GatherBlockQuantized")``.
+It can then execute in ``decoder.generate(..., embedding=embedding)``:
+the embedding model retains packed initializers and only selected rows are
+dequantized into the output. No heap scratch, dense-weight preparation,
+gradient rule, or graph fusion is registered. Logical ``INT4``/``UINT4``
+tensors and floating-point quantized formats are not supported.
+
+See :ref:`sphx_glr_auto_examples_benchmarks_plot_gather_block_quantized_benchmark.py`
+for bounded ONNX Runtime parity checks and timings.
+
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 

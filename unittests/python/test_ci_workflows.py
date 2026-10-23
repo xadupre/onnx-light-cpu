@@ -237,6 +237,7 @@ def test_native_kernel_tests_are_version_gated_in_standalone():
         "test_documentation_examples.py",
         "test_exp_log_parity_benchmark.py",
         "test_gemm_parity_benchmark.py",
+        "test_gather_block_quantized.py",
         "test_integer_gemm_parity_benchmark.py",
         "test_kernels_doc.py",
         "test_kernels_e2e.py",

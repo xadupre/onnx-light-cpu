@@ -221,7 +221,8 @@ print(f"SIMD level: {level}")
 [onnx-light](https://github.com/xadupre/onnx-light)'s shared C++ kernel
 dispatch table. This includes the portable `com.microsoft::CDist`,
 `com.microsoft::BiasGelu`, `com.microsoft::MultiHeadAttention`, `com.microsoft::GroupQueryAttention`, and
-`com.microsoft::LinearAttention` kernels, the standard numeric normalization
+`com.microsoft::LinearAttention` kernels, packed 2-/4-/8-bit embedding lookup
+with `com.microsoft::GatherBlockQuantized`, the standard numeric normalization
 family (`BatchNormalization` through `RMSNormalization`), and their related
 runtime metadata:
 

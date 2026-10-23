@@ -169,6 +169,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
    "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, CausalConvWithState, GroupQueryAttention, MultiHeadAttention, LinearAttention, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
    "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
+   "RegisterGatherBlockQuantizedKernel", "com.microsoft", "GatherBlockQuantized"
    "RegisterMoEKernel", "com.microsoft", "MoE"
    "RegisterQMoEKernel", "com.microsoft", "QMoE"
 

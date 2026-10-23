@@ -349,33 +349,34 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 12U);
+  ASSERT_EQ(schemas.size(), 13U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
-  EXPECT_EQ(schemas[3].name(), "GroupQueryAttention");
-  ASSERT_EQ(schemas[3].inputs().size(), 12U);
-  EXPECT_EQ(schemas[3].inputs()[11].name, "head_sink");
-  EXPECT_EQ(schemas[3].inputs()[11].type, "T");
-  EXPECT_EQ(schemas[4].name(), "LinearAttention");
-  EXPECT_EQ(schemas[5].name(), "MatMulNBits");
-  EXPECT_EQ(schemas[6].name(), "MoE");
-  EXPECT_EQ(schemas[7].name(), "MultiHeadAttention");
-  EXPECT_EQ(schemas[8].name(), "QMoE");
-  EXPECT_EQ(schemas[9].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[10].name(), "SkipLayerNormalization");
-  EXPECT_EQ(schemas[11].name(), "SkipSimplifiedLayerNormalization");
-  EXPECT_EQ(schemas[8].inputs().size(), 14U);
+  EXPECT_EQ(schemas[3].name(), "GatherBlockQuantized");
+  EXPECT_EQ(schemas[4].name(), "GroupQueryAttention");
+  ASSERT_EQ(schemas[4].inputs().size(), 12U);
+  EXPECT_EQ(schemas[4].inputs()[11].name, "head_sink");
+  EXPECT_EQ(schemas[4].inputs()[11].type, "T");
+  EXPECT_EQ(schemas[5].name(), "LinearAttention");
+  EXPECT_EQ(schemas[6].name(), "MatMulNBits");
+  EXPECT_EQ(schemas[7].name(), "MoE");
+  EXPECT_EQ(schemas[8].name(), "MultiHeadAttention");
+  EXPECT_EQ(schemas[9].name(), "QMoE");
+  EXPECT_EQ(schemas[10].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[11].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[12].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[9].inputs().size(), 14U);
   EXPECT_EQ(schemas[2].inputs().size(), 4U);
   EXPECT_EQ(schemas[2].outputs().size(), 2U);
-  EXPECT_EQ(schemas[6].inputs().size(), 8U);
-  ASSERT_EQ(schemas[5].inputs().size(), 6U);
-  EXPECT_EQ(schemas[5].inputs()[3].name, "zero_points");
-  EXPECT_EQ(schemas[5].inputs()[4].name, "g_idx");
-  EXPECT_EQ(schemas[5].inputs()[5].name, "bias");
-  ASSERT_EQ(schemas[5].attributes().size(), 6U);
+  EXPECT_EQ(schemas[7].inputs().size(), 8U);
+  ASSERT_EQ(schemas[6].inputs().size(), 6U);
+  EXPECT_EQ(schemas[6].inputs()[3].name, "zero_points");
+  EXPECT_EQ(schemas[6].inputs()[4].name, "g_idx");
+  EXPECT_EQ(schemas[6].inputs()[5].name, "bias");
+  ASSERT_EQ(schemas[6].attributes().size(), 6U);
   const auto find_attribute = [&](const char *name) {
-    return std::find_if(schemas[5].attributes().begin(), schemas[5].attributes().end(),
+    return std::find_if(schemas[6].attributes().begin(), schemas[6].attributes().end(),
                         [&](const auto &attribute) { return attribute.name == name; });
   };
   EXPECT_TRUE(find_attribute("K")->required);
@@ -407,6 +408,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       {"com.microsoft", "BiasGelu", "BiasGeluFusionPattern", true},
       {"com.microsoft", "CDist", "CDistFusionPattern", true},
       {"com.microsoft", "CausalConvWithState", "", false},
+      {"com.microsoft", "GatherBlockQuantized", "", false},
       {"com.microsoft", "GroupQueryAttention", "GroupQueryAttentionFusionPattern", true},
       {"com.microsoft", "MultiHeadAttention", "", false},
       {"com.microsoft", "LinearAttention", "LinearAttentionFusionPattern", false},

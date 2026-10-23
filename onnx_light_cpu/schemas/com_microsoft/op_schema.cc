@@ -332,6 +332,40 @@ LightOpSchema MakeLinearAttentionSchema() {
   return schema;
 }
 
+LightOpSchema MakeGatherBlockQuantizedSchema() {
+  LightOpSchema schema(
+      "GatherBlockQuantized", kMicrosoftDomain, 1,
+      "Gathers rows from a block-quantized UINT8 tensor of rank at least two and dequantizes "
+      "them. Only gather_axis=0 and last-axis quantization are supported, including equivalent "
+      "negative axes. The logical last dimension is the packed last dimension times 8/bits.",
+      {{"data", "UINT8 packed data of rank at least two.", "T1"},
+       {"indices", "INT32 or INT64 indices of any rank, including scalar.", "Tind"},
+       {"scales",
+        "FLOAT or FLOAT16 scales, matching data except the last dimension is "
+        "ceil(logical_last / block_size).",
+        "T2"},
+       {"zero_points",
+        "Optional UINT8 zero points, matching scales except the last dimension is "
+        "ceil(scales_last / (8/bits)).",
+        "T1"}},
+      {{"output", "indices.shape + logical_data.shape[1:], with scales' element type.", "T2"}},
+      {{"T1", {TensorType::kUint8}, "Packed unsigned data and zero points."},
+       {"Tind", {TensorType::kInt32, TensorType::kInt64}, "Gather indices."},
+       {"T2", {TensorType::kFloat, TensorType::kFloat16}, "Scale and output types."}},
+      {AttributeParam{"gather_axis", "Only normalized axis zero is supported.", AttributeType::INT,
+                      false, int64_t{0}},
+       AttributeParam{"quantize_axis", "Must normalize to the last data axis.", AttributeType::INT,
+                      false, int64_t{1}},
+       AttributeParam{"block_size", "Power of two, at least 16.", AttributeType::INT, false,
+                      int64_t{128}},
+       AttributeParam{"bits", "Packed bit width: 2, 4, or 8.", AttributeType::INT, false,
+                      int64_t{4}}},
+      false, true);
+  schema.set_min_output(1);
+  schema.set_max_output(1);
+  return schema;
+}
+
 LightOpSchema MakeMatMulNBitsSchema() {
   return LightOpSchema(
       "MatMulNBits", kMicrosoftDomain, 1,
@@ -482,6 +516,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"CausalConvWithState",
        [] { return std::vector<LightOpSchema>{MakeCausalConvWithStateSchema()}; }},
       {"CDist", [] { return std::vector<LightOpSchema>{MakeCDistSchema()}; }},
+      {"GatherBlockQuantized",
+       [] { return std::vector<LightOpSchema>{MakeGatherBlockQuantizedSchema()}; }},
       {"GroupQueryAttention",
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},

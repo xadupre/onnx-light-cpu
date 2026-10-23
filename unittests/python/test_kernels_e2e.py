@@ -102,6 +102,7 @@ _BENCHMARK_TYPE_SUFFIXES["QLinearMatMul"] = "(?:int8|uint8)"
 _BENCHMARK_TYPE_SUFFIXES["Sum"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
+_BENCHMARK_TYPE_SUFFIXES["GatherBlockQuantized"] = "(?:float32|float16)"
 for _op_type in {
     "BatchNormalization",
     "CausalConvWithState",
@@ -121,6 +122,7 @@ _BENCHMARK_OP_TAGS = {
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "CausalConvWithState": "causal_conv",
     "GroupQueryAttention": "group_query_attention",
+    "GatherBlockQuantized": "gather_block_quantized",
     "RMSNormalization": "rms_normalization",
     "SimplifiedLayerNormalization": "simplified_layer_normalization",
     "SkipSimplifiedLayerNormalization": "skip_simplified_layer_normalization",
@@ -771,6 +773,7 @@ class TestBackendCases(ExtTestCase):
             "Equal",
             "Greater",
             "GreaterOrEqual",
+            "GatherBlockQuantized",
             "Less",
             "LessOrEqual",
             "Mod",
@@ -817,6 +820,7 @@ class TestBackendCases(ExtTestCase):
                     "Greater",
                     "GreaterOrEqual",
                     "GroupQueryAttention",
+                    "GatherBlockQuantized",
                     "Less",
                     "LessOrEqual",
                     "Max",

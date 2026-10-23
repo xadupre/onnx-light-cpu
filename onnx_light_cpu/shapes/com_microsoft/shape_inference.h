@@ -51,6 +51,9 @@ void ComputeShapeMultiHeadAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesCo
 /// Infers output and state shapes for ``com.microsoft::LinearAttention``.
 void ComputeShapeLinearAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the packed ``com.microsoft::GatherBlockQuantized`` output shape.
+void ComputeShapeGatherBlockQuantized(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 /// Infers the restricted ``com.microsoft::MatMulNBits`` output shape.
 void ComputeShapeMatMulNBits(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                              const ONNX_LIGHT_NAMESPACE::NodeProto &node);
@@ -92,6 +95,10 @@ int64_t ComputePeakMemoryMultiHeadAttention(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::LinearAttention``.
 int64_t ComputePeakMemoryLinearAttention(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns zero scratch memory for the streaming quantized gather.
+int64_t ComputePeakMemoryGatherBlockQuantized(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero heap scratch; bounded INT4 panels use 6144 bytes of stack per callback.

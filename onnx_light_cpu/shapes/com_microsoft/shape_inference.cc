@@ -344,6 +344,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {},
        false},
       {kMicrosoftDomain,
+       "GatherBlockQuantized",
+       "onnx_light_cpu::ComputeShapeGatherBlockQuantized",
+       "onnx_light_cpu::ComputePeakMemoryGatherBlockQuantized",
+       {},
+       false},
+      {kMicrosoftDomain,
        "GroupQueryAttention",
        "onnx_light_cpu::ComputeShapeGroupQueryAttention",
        "onnx_light_cpu::ComputePeakMemoryGroupQueryAttention",
@@ -720,6 +726,111 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     projection(8, 9, 10, width, hidden);
   }
   ctx.Set(node.output(0), SymTensor(nullptr, type, shape));
+}
+
+void ComputeShapeGatherBlockQuantized(ShapesContext &ctx,
+                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() < 3 || node.input_size() > 4 || node.output_size() != 1 ||
+      node.output(0).empty()) {
+    throw std::invalid_argument(
+        "ComputeShapeGatherBlockQuantized: expected three or four inputs and one output.");
+  }
+  for (int i = 0; i < node.input_size(); ++i) {
+    if ((i < 3 || HasInput(node, i)) && (node.input(i).empty() || !ctx.Has(node.input(i)))) {
+      throw std::invalid_argument("ComputeShapeGatherBlockQuantized: missing input shape.");
+    }
+  }
+  const auto &data = ctx.Get(node.input(0));
+  const auto &indices = ctx.Get(node.input(1));
+  const auto &scales = ctx.Get(node.input(2));
+  const auto rank = data.Shape().Rank();
+  if ((data.Dtype() != sym_ns::TensorType::kUndefined &&
+       data.Dtype() != sym_ns::TensorType::kUint8) ||
+      (indices.Dtype() != sym_ns::TensorType::kUndefined &&
+       indices.Dtype() != sym_ns::TensorType::kInt32 &&
+       indices.Dtype() != sym_ns::TensorType::kInt64) ||
+      (scales.Dtype() != sym_ns::TensorType::kUndefined &&
+       scales.Dtype() != sym_ns::TensorType::kFloat &&
+       scales.Dtype() != sym_ns::TensorType::kFloat16)) {
+    throw std::invalid_argument("ComputeShapeGatherBlockQuantized: unsupported input type.");
+  }
+  if (rank < 2 || scales.Shape().Rank() != rank) {
+    throw std::invalid_argument(
+        "ComputeShapeGatherBlockQuantized: data and scales must have matching rank >= 2.");
+  }
+  for (const auto &attribute : node.attribute()) {
+    if (attribute.type() != ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT) {
+      throw std::invalid_argument("ComputeShapeGatherBlockQuantized: attributes must be INT.");
+    }
+  }
+  const int64_t bits = GetIntAttribute(node, "bits", 4);
+  const int64_t block_size = GetIntAttribute(node, "block_size", 128);
+  auto gather_axis = GetIntAttribute(node, "gather_axis", 0);
+  auto quantize_axis = GetIntAttribute(node, "quantize_axis", 1);
+  if (gather_axis < 0)
+    gather_axis += static_cast<int64_t>(rank);
+  if (quantize_axis < 0)
+    quantize_axis += static_cast<int64_t>(rank);
+  if ((bits != 2 && bits != 4 && bits != 8) || block_size < 16 ||
+      (block_size & (block_size - 1)) != 0 || gather_axis != 0 ||
+      quantize_axis != static_cast<int64_t>(rank) - 1) {
+    throw std::invalid_argument(
+        "ComputeShapeGatherBlockQuantized: unsupported axes, bits, or block_size.");
+  }
+  const auto validate_dims = [](const SymShape &shape) {
+    for (size_t i = 0; i < shape.Rank(); ++i) {
+      if (shape[i].IsInt() && shape[i].AsInt() < 0) {
+        throw std::invalid_argument(
+            "ComputeShapeGatherBlockQuantized: dimensions must be non-negative.");
+      }
+    }
+  };
+  validate_dims(data.Shape());
+  validate_dims(indices.Shape());
+  validate_dims(scales.Shape());
+  const int64_t packing = 8 / bits;
+  const auto &packed_last = data.Shape()[rank - 1];
+  const sym_ns::SymDim logical_last =
+      packed_last.IsInt()
+          ? sym_ns::SymDim(ml_cpu_compute::CheckedIndexMultiply(
+                packed_last.AsInt(), packing, "GatherBlockQuantized", "logical last dimension"))
+      : packing == 1
+          ? packed_last
+          : sym_ns::SymDim("(" + packed_last.ToString() + ")*" + std::to_string(packing));
+  const auto ceil_div = [](const sym_ns::SymDim &dim, int64_t divisor) {
+    return dim.IsInt() ? sym_ns::SymDim(dim.AsInt() / divisor + (dim.AsInt() % divisor != 0))
+           : divisor == 1
+               ? dim
+               : sym_ns::SymDim("ceil((" + dim.ToString() + ")/" + std::to_string(divisor) + ")");
+  };
+  for (size_t i = 0; i + 1 < rank; ++i) {
+    ConstrainEqual(ctx, data.Shape()[i], scales.Shape()[i],
+                   "ComputeShapeGatherBlockQuantized: scales dimensions must match data.");
+  }
+  ConstrainEqual(ctx, scales.Shape()[rank - 1], ceil_div(logical_last, block_size),
+                 "ComputeShapeGatherBlockQuantized: invalid scales block count.");
+  if (HasInput(node, 3)) {
+    const auto &zero_points = ctx.Get(node.input(3));
+    if ((zero_points.Dtype() != sym_ns::TensorType::kUndefined &&
+         zero_points.Dtype() != sym_ns::TensorType::kUint8) ||
+        zero_points.Shape().Rank() != rank) {
+      throw std::invalid_argument(
+          "ComputeShapeGatherBlockQuantized: zero_points must be UINT8 with data's rank.");
+    }
+    validate_dims(zero_points.Shape());
+    for (size_t i = 0; i < rank; ++i) {
+      ConstrainEqual(ctx, zero_points.Shape()[i],
+                     i + 1 == rank ? ceil_div(scales.Shape()[i], packing) : scales.Shape()[i],
+                     "ComputeShapeGatherBlockQuantized: invalid zero_points dimensions.");
+    }
+  }
+  SymShape output_shape;
+  for (size_t i = 0; i < indices.Shape().Rank(); ++i)
+    output_shape.PushBack(indices.Shape()[i]);
+  for (size_t i = 1; i + 1 < rank; ++i)
+    output_shape.PushBack(data.Shape()[i]);
+  output_shape.PushBack(logical_last);
+  ctx.Set(node.output(0), SymTensor(nullptr, scales.Dtype(), std::move(output_shape)));
 }
 
 void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
@@ -1469,6 +1580,10 @@ int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { 
 
 int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
+int64_t ComputePeakMemoryGatherBlockQuantized(sym_ns::Device, const std::vector<SymShape> &) {
+  return 0;
+}
+
 int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
 int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
@@ -1734,6 +1849,11 @@ int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
 void RegisterMicrosoftShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "GatherBlockQuantized",
+                                      ComputeShapeGatherBlockQuantized);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "GatherBlockQuantized",
+                                           sym_ns::Device::kCPU,
+                                           ComputePeakMemoryGatherBlockQuantized);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CDist", ComputeShapeCDist);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CausalConvWithState",
                                       ComputeShapeCausalConvWithState);
