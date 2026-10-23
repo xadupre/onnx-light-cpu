@@ -488,6 +488,29 @@ TEST(SoftmaxFloat32AVX2FMA, NoncanonicalNaNsPropagateAcrossWideRows) {
     }
   }
 }
+
+TEST(SoftmaxFloat32AVX2FMA, DominantLogitsPreserveSmallContributions) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  for (const std::size_t columns : {1024, 2047, 2048}) {
+    for (const float small_logit : {-16.0f, -17.0f, -18.0f, -19.0f}) {
+      std::vector<float> input(columns, small_logit), output(columns);
+      std::fill_n(input.begin(), 8, 0.0f);
+      const double sum =
+          8.0 + static_cast<double>(columns - 8) * std::exp(static_cast<double>(small_logit));
+      ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), 1, columns);
+      double actual_sum = 0.0;
+      for (std::size_t column = 0; column < columns; ++column) {
+        const double expected = std::exp(static_cast<double>(input[column])) / sum;
+        EXPECT_NEAR(output[column], expected, expected * 2e-6) << columns << "," << small_logit;
+        actual_sum += output[column];
+      }
+      EXPECT_NEAR(actual_sum, 1.0, 2e-6) << columns << "," << small_logit;
+    }
+  }
+}
 #endif
 
 TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {

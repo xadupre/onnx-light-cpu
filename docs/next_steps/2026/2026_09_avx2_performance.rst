@@ -686,3 +686,90 @@ Work sequence
 AVX2 PR05 completes this follow-up. Architecture-specific work for AVX-512FP16,
 AVX-512BF16, VNNI, AMX, NEON, or SVE remains independent and must not be used
 to hide a missing AVX2 implementation.
+
+Softmax follow-up (issue #997)
+------------------------------
+
+On 2026-10-23, the exact
+``test_cpu_softmax_1024x1024_float32_benchmark`` case reproduced an ORT
+advantage on an AMD EPYC 9V74 virtualized runner (four logical CPUs, two
+physical cores), not the issue's EPYC 7763. The input remains the registered
+float32 ``[1024,1024]`` tensor, seed ``987654321``, axis ``-1``, opset 13.
+No workload, tolerance, allocation, or executor policy was changed.
+
+The baseline was commit ``38940c9fc353f8f4c9856575541c8e3f904ed372``,
+which includes remote main ``b3fc52ef3c52f0378b56664e4c11c02837c07e2c``;
+remote refs were refreshed before measurement. Builds used GCC 13.3,
+Release, and ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``; detected SIMD level was
+3. Backends were onnx-light-cpu 0.2.0 from this checkout, the published
+onnx-light 0.2.0 CPython 3.13 Linux wheel, and ONNX Runtime 1.31.0
+CPUExecutionProvider. The wheel's underlying commit was not available.
+
+Generated-code inspection found register spills in the fused row loop.
+The retained change uses compact 128-column exponential/sum blocks for
+normal-range rows up to 2048 columns. Bounded partial sums avoid losing
+small contributions after dominant logits. Wider rows and extreme-range
+rows retain the original multi-accumulator loop. The exponential
+approximation, SIMD dispatch, scalar fallback, and runtime scheduling
+are unchanged.
+
+The final baseline/final comparison used one thread, ``taskset -c 2``,
+100 warm-ups and 2000 repetitions per backend, with a two-second limit per
+phase. Each backend ran all 2000 samples in three fresh CLI processes.
+CPU feeds were backend tensors; ORT feeds were NumPy arrays, as in the
+existing runner. Backend phase order was CPU then ORT on both builds.
+Spin settings were the unchanged backend defaults: onnx-light adaptive
+bounded spinning and ORT's default spinning. These policies are not
+identical, and the published campaign's spin/thread settings are unknown.
+
+End-to-end latencies below are **milliseconds**, summarized as the median
+of three per-process medians, with their full range:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Backend
+     - Before
+     - After
+   * - onnx-light-cpu
+     - 0.416699 (0.382647--0.426699)
+     - 0.375611 (0.374304--0.427099)
+   * - ONNX Runtime
+     - 0.299411 (0.295515--0.299947)
+     - 0.296547 (0.292271--0.301064)
+
+ORT gain (CPU / ORT median) decreased from 1.392x to 1.267x, but the
+process ranges overlap substantially: the apparent 9.9% session improvement
+is indicative, not a stable hardware guarantee or a parity claim.
+The direct AVX2/FMA driver, on the same CPU and affinity with preallocated
+buffers, ten warm-ups and 301 samples, measured 0.370377 to 0.360834 ms
+for aligned ``[1024,1024]`` (2.6% lower), and 0.421224 to 0.417670 ms
+with a one-float alignment offset. This is a separate diagnostic input,
+not a substitute for the registered workload.
+
+Earlier one/two/default-thread runs also reproduced the ORT gap.
+Reverse-order cross-checks became contaminated by validation extractors
+saturating the runner, including CPU 0's SMT sibling; those results are
+excluded. The final matched-core comparison used CPU 2 instead.
+Hardware sampling was unavailable (``perf_event_paranoid=4``); the spill
+diagnosis is from disassembly, not hardware counters. Native EPYC 7763
+confirmation and a quiet multithreaded rerun remain outstanding.
+
+Reproduce from the checkout with the selected onnx-light runtime on
+``PYTHONPATH``:
+
+.. code-block:: bash
+
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
+      python setup.py build_ext --inplace --onnx-light-source
+    taskset -c 2 python -m onnx_light_cpu benchmark \
+      --test '^test_cpu_softmax_1024x1024_float32_benchmark$' \
+      --threads 1 --repeat 2000 --warmup 100 --max-repeat-time 2 \
+      --onnxruntime --output /tmp/softmax.xlsx
+    # Configure ONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON to build this diagnostic.
+    taskset -c 2 ./build/exp_log_throughput 301 softmax
+
+Focused validation passed 36 direct Exp/Log/activation tests and 18 runtime
+Sigmoid/Softmax tests, including every vector tail, unaligned/in-place
+buffers, the 2048-column boundary, extreme ranges, noncanonical NaNs, and
+dominant logits with small remaining probabilities.
