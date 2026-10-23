@@ -63,17 +63,22 @@ void Compare(const T *left, const T *right, std::uint8_t *out, std::size_t count
   }
 }
 
-} // namespace
-
-void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+template <bool OrEqual, bool LeftScalar = false, bool RightScalar = false>
+void BulkFloatComparison(const void *left, const void *right, void *out, std::size_t count) {
+  if (count == 0) {
+    return;
+  }
   const auto *a = static_cast<const float *>(left);
   const auto *b = static_cast<const float *>(right);
   auto *output = static_cast<std::uint8_t *>(out);
+  const auto scalar_a = _mm256_set1_ps(LeftScalar ? *a : 0.0f);
+  const auto scalar_b = _mm256_set1_ps(RightScalar ? *b : 0.0f);
   const auto ones = _mm256_set1_epi8(1);
   const auto order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
   const auto compare = [&](std::size_t i) {
-    return _mm256_castps_si256(
-        _mm256_cmp_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), _CMP_GT_OQ));
+    const auto av = LeftScalar ? scalar_a : _mm256_loadu_ps(a + i);
+    const auto bv = RightScalar ? scalar_b : _mm256_loadu_ps(b + i);
+    return _mm256_castps_si256(_mm256_cmp_ps(av, bv, OrEqual ? _CMP_GE_OQ : _CMP_GT_OQ));
   };
   std::size_t i = 0;
   for (; count - i >= 32; i += 32) {
@@ -91,8 +96,31 @@ void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::
     _mm_storel_epi64(reinterpret_cast<__m128i *>(output + i), bytes);
   }
   for (; i < count; ++i) {
-    output[i] = a[i] > b[i];
+    const float av = a[LeftScalar ? 0 : i];
+    const float bv = b[RightScalar ? 0 : i];
+    output[i] = OrEqual ? av >= bv : av > bv;
   }
+}
+
+} // namespace
+
+void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+  BulkFloatComparison<false>(left, right, out, count);
+}
+
+void BulkFloatGreaterOrEqual_AVX2(const void *left, const void *right, void *out,
+                                  std::size_t count) {
+  BulkFloatComparison<true>(left, right, out, count);
+}
+
+void BulkFloatGreaterOrEqualLeft_AVX2(const void *left, const void *right, void *out,
+                                      std::size_t count) {
+  BulkFloatComparison<true, true>(left, right, out, count);
+}
+
+void BulkFloatGreaterOrEqualRight_AVX2(const void *left, const void *right, void *out,
+                                       std::size_t count) {
+  BulkFloatComparison<true, false, true>(left, right, out, count);
 }
 
 void BinaryCompareInt64_AVX2(const std::int64_t *left, const std::int64_t *right, std::uint8_t *out,

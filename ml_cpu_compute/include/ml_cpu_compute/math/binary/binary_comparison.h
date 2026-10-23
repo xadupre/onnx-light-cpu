@@ -43,6 +43,12 @@ void BinaryCompareUInt64(const std::uint64_t *left, const std::uint64_t *right, 
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2
 void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::size_t count);
+void BulkFloatGreaterOrEqual_AVX2(const void *left, const void *right, void *out,
+                                  std::size_t count);
+void BulkFloatGreaterOrEqualLeft_AVX2(const void *left, const void *right, void *out,
+                                      std::size_t count);
+void BulkFloatGreaterOrEqualRight_AVX2(const void *left, const void *right, void *out,
+                                       std::size_t count);
 
 void BinaryCompareInt64_AVX2(const std::int64_t *left, const std::int64_t *right, std::uint8_t *out,
                              std::size_t count, BinaryOperator op, bool left_scalar,
