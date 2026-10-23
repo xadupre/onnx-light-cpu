@@ -184,8 +184,8 @@ ML_CPU_COMPUTE_FORCE_INLINE __m256i TailMask(std::size_t count) {
 }
 
 ML_CPU_COMPUTE_FORCE_INLINE __m256 SigmoidPs256Fma(__m256 value) {
-  const __m256 exponent = ExpNegativePs256Fma(
-      _mm256_sub_ps(_mm256_setzero_ps(), _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value)));
+  const __m256 negative_magnitude = _mm256_or_ps(_mm256_set1_ps(-0.0f), value);
+  const __m256 exponent = ExpNegativePs256Fma(negative_magnitude);
   const __m256 numerator = _mm256_blendv_ps(_mm256_set1_ps(1.0f), exponent, value);
   return _mm256_div_ps(numerator, _mm256_add_ps(_mm256_set1_ps(1.0f), exponent));
 }
@@ -386,12 +386,6 @@ void TanhFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std
 
 void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   std::size_t index = 0;
-  for (; index + 16 <= count; index += 16) {
-    const __m256 result0 = SigmoidPs256Fma(_mm256_loadu_ps(input + index));
-    const __m256 result1 = SigmoidPs256Fma(_mm256_loadu_ps(input + index + 8));
-    _mm256_storeu_ps(output + index, result0);
-    _mm256_storeu_ps(output + index + 8, result1);
-  }
   for (; index + 8 <= count; index += 8) {
     _mm256_storeu_ps(output + index, SigmoidPs256Fma(_mm256_loadu_ps(input + index)));
   }
