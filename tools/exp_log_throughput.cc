@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated float32 Exp/Log throughput driver (pass "tanh" or "sigmoid" as the second argument
-// for a direct scalar/AVX2/AVX-512 comparison). This deliberately measures
-// preallocated buffers and reports the environment separately from the
-// end-to-end parity runner.
+// Isolated float32 Exp/Log throughput driver (pass "tanh", "sigmoid", or "softmax" as the second
+// argument for a direct scalar/AVX2/AVX-512 comparison). This deliberately measures preallocated
+// buffers and reports the environment separately from the end-to-end parity runner.
 
 #include "ml_cpu_compute/math/math.h"
 #include "ml_cpu_compute/simd_level.h"
@@ -183,6 +182,54 @@ int MeasureActivation(std::size_t samples, bool sigmoid) {
 #endif
 }
 
+int MeasureSoftmax(std::size_t samples) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    std::fprintf(stderr, "direct Softmax comparison requires AVX2 and FMA\n");
+    return 2;
+  }
+  std::printf("operator,rows,columns,offset_floats,median_seconds,iqr_seconds\n");
+  for (const std::size_t rows : {1, 32, 1024}) {
+    for (const std::size_t columns : {1023, 1024, 1025}) {
+      for (const std::size_t offset : {0, 1}) {
+        std::vector<float> input(rows * columns + 32), output(input.size());
+        const auto aligned = [offset](std::vector<float> &storage) {
+          const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+          return reinterpret_cast<float *>((address + 63u) & ~std::uintptr_t{63u}) + offset;
+        };
+        float *x = aligned(input);
+        float *y = aligned(output);
+        for (std::size_t i = 0; i < rows * columns; ++i) {
+          x[i] = static_cast<float>(static_cast<int>(i % 257) - 128) / 32.0f;
+        }
+        for (int warmup = 0; warmup < 10; ++warmup) {
+          ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(x, y, rows, columns);
+        }
+        std::vector<double> timings;
+        const auto iterations = std::max<std::size_t>(1, 100000 / (rows * columns));
+        for (std::size_t sample = 0; sample < samples; ++sample) {
+          const auto start = std::chrono::steady_clock::now();
+          for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+            ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(x, y, rows, columns);
+          }
+          timings.push_back(
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() /
+              static_cast<double>(iterations));
+        }
+        const auto [median, iqr] = Summary(timings);
+        std::printf("SoftmaxAVX2FMA,%zu,%zu,%zu,%.9g,%.9g\n", rows, columns, offset, median, iqr);
+      }
+    }
+  }
+  return 0;
+#else
+  (void)samples;
+  std::fprintf(stderr, "direct Softmax comparison requires compiled AVX2/FMA support\n");
+  return 2;
+#endif
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -208,6 +255,9 @@ int main(int argc, char **argv) {
               static_cast<long>(__cplusplus), IsaName(ml_cpu_compute::DetectSimdLevel()), samples);
   if (argc > 2 && (std::string(argv[2]) == "tanh" || std::string(argv[2]) == "sigmoid")) {
     return MeasureActivation(samples, std::string(argv[2]) == "sigmoid");
+  }
+  if (argc > 2 && std::string(argv[2]) == "softmax") {
+    return MeasureSoftmax(samples);
   }
   std::printf("operator,size,median_seconds,iqr_seconds,cycles_per_element\n");
   for (const std::size_t size : Sizes()) {

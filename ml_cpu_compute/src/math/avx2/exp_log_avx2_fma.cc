@@ -258,31 +258,48 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
   __m256 sum2 = _mm256_setzero_ps();
   __m256 sum3 = _mm256_setzero_ps();
   std::size_t column = 0;
-  for (; column + 32 <= vector_columns; column += 32) {
-    const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
-    const __m256 exponent1 =
-        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
-    const __m256 exponent2 =
-        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 16), maximum));
-    const __m256 exponent3 =
-        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 24), maximum));
-    _mm256_storeu_ps(output + column, exponent0);
-    _mm256_storeu_ps(output + column + 8, exponent1);
-    _mm256_storeu_ps(output + column + 16, exponent2);
-    _mm256_storeu_ps(output + column + 24, exponent3);
-    sum0 = _mm256_add_ps(sum0, exponent0);
-    sum1 = _mm256_add_ps(sum1, exponent1);
-    sum2 = _mm256_add_ps(sum2, exponent2);
-    sum3 = _mm256_add_ps(sum3, exponent3);
-  }
-  for (; column + 16 <= vector_columns; column += 16) {
-    const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
-    const __m256 exponent1 =
-        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
-    _mm256_storeu_ps(output + column, exponent0);
-    _mm256_storeu_ps(output + column + 8, exponent1);
-    sum0 = _mm256_add_ps(sum0, exponent0);
-    sum1 = _mm256_add_ps(sum1, exponent1);
+  // Compact blocks reduce register pressure without one long summation chain.
+  // Wider and extreme-range rows retain the original four-accumulator loop.
+  if (!normal_range || columns > 2048) {
+    for (; column + 32 <= vector_columns; column += 32) {
+      const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+      const __m256 exponent1 =
+          exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
+      const __m256 exponent2 =
+          exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 16), maximum));
+      const __m256 exponent3 =
+          exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 24), maximum));
+      _mm256_storeu_ps(output + column, exponent0);
+      _mm256_storeu_ps(output + column + 8, exponent1);
+      _mm256_storeu_ps(output + column + 16, exponent2);
+      _mm256_storeu_ps(output + column + 24, exponent3);
+      sum0 = _mm256_add_ps(sum0, exponent0);
+      sum1 = _mm256_add_ps(sum1, exponent1);
+      sum2 = _mm256_add_ps(sum2, exponent2);
+      sum3 = _mm256_add_ps(sum3, exponent3);
+    }
+    for (; column + 16 <= vector_columns; column += 16) {
+      const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+      const __m256 exponent1 =
+          exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
+      _mm256_storeu_ps(output + column, exponent0);
+      _mm256_storeu_ps(output + column + 8, exponent1);
+      sum0 = _mm256_add_ps(sum0, exponent0);
+      sum1 = _mm256_add_ps(sum1, exponent1);
+    }
+  } else {
+    constexpr std::size_t block_columns = 128;
+    while (column < vector_columns) {
+      const std::size_t end = std::min(column + block_columns, vector_columns);
+      __m256 partial = _mm256_setzero_ps();
+      for (; column < end; column += 8) {
+        const __m256 exponent =
+            exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+        _mm256_storeu_ps(output + column, exponent);
+        partial = _mm256_add_ps(partial, exponent);
+      }
+      sum0 = _mm256_add_ps(sum0, partial);
+    }
   }
   for (; column < vector_columns; column += 8) {
     const __m256 exponent = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));

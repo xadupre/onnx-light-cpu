@@ -424,6 +424,93 @@ TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
     EXPECT_NEAR(output_sum, 1.0, 2e-6) << row;
   }
 }
+
+TEST(SoftmaxFloat32AVX2FMA, WideRowsUnalignedInPlaceAndRangeBoundary) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  constexpr std::size_t rows = 3;
+  for (const std::size_t columns : {31, 32, 33, 63, 64, 65, 1023, 1024, 1025, 1026, 1027, 1028,
+                                    1029, 1030, 1031, 2047, 2048, 2049}) {
+    for (const float span : {8.0f, 87.0f, 87.01f, 104.0f}) {
+      SCOPED_TRACE(::testing::Message() << "columns=" << columns << ", span=" << span);
+      std::vector<float> input(rows * columns + 2, -123.0f);
+      for (std::size_t row = 0; row < rows; ++row) {
+        for (std::size_t column = 0; column < columns; ++column) {
+          input[1 + row * columns + column] =
+              16.0f -
+              span * static_cast<float>((column + row) % columns) / static_cast<float>(columns - 1);
+        }
+      }
+      for (const bool in_place : {false, true}) {
+        std::vector<float> output = input;
+        ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(in_place ? output.data() + 1 : input.data() + 1,
+                                                output.data() + 1, rows, columns);
+        EXPECT_EQ(output.front(), -123.0f);
+        EXPECT_EQ(output.back(), -123.0f);
+        for (std::size_t row = 0; row < rows; ++row) {
+          const float *x = input.data() + 1 + row * columns;
+          const double maximum = *std::max_element(x, x + columns);
+          double sum = 0.0;
+          for (std::size_t column = 0; column < columns; ++column) {
+            sum += std::exp(static_cast<double>(x[column]) - maximum);
+          }
+          double actual_sum = 0.0;
+          for (std::size_t column = 0; column < columns; ++column) {
+            const double expected = std::exp(static_cast<double>(x[column]) - maximum) / sum;
+            const float actual = output[1 + row * columns + column];
+            EXPECT_NEAR(actual, expected, expected * 2e-6 + 1e-44) << row << "," << column;
+            actual_sum += actual;
+          }
+          EXPECT_NEAR(actual_sum, 1.0, 2e-6) << row;
+        }
+      }
+    }
+  }
+}
+
+TEST(SoftmaxFloat32AVX2FMA, NoncanonicalNaNsPropagateAcrossWideRows) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  for (const std::uint32_t bits : {0x7fc00001u, 0x7fc001ffu, 0xffc00001u, 0xffc001ffu}) {
+    float nan;
+    std::memcpy(&nan, &bits, sizeof(nan));
+    for (const std::size_t position : {0, 7, 8, 15, 16, 31, 1023, 1024}) {
+      std::vector<float> input(1025, 1.0f), output(input.size());
+      input[position] = nan;
+      ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), 1, input.size());
+      for (const float value : output) {
+        EXPECT_TRUE(std::isnan(value)) << bits << "," << position;
+      }
+    }
+  }
+}
+
+TEST(SoftmaxFloat32AVX2FMA, DominantLogitsPreserveSmallContributions) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  for (const std::size_t columns : {1024, 2047, 2048}) {
+    for (const float small_logit : {-16.0f, -17.0f, -18.0f, -19.0f}) {
+      std::vector<float> input(columns, small_logit), output(columns);
+      std::fill_n(input.begin(), 8, 0.0f);
+      const double sum =
+          8.0 + static_cast<double>(columns - 8) * std::exp(static_cast<double>(small_logit));
+      ml_cpu_compute::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), 1, columns);
+      double actual_sum = 0.0;
+      for (std::size_t column = 0; column < columns; ++column) {
+        const double expected = std::exp(static_cast<double>(input[column])) / sum;
+        EXPECT_NEAR(output[column], expected, expected * 2e-6) << columns << "," << small_logit;
+        actual_sum += output[column];
+      }
+      EXPECT_NEAR(actual_sum, 1.0, 2e-6) << columns << "," << small_logit;
+    }
+  }
+}
 #endif
 
 TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {
