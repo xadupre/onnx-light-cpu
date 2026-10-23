@@ -709,7 +709,7 @@ TEST(BinaryOperationDescriptor, FloatComparisonBulkPreservesIeeeSemanticsAndTail
       std::numeric_limits<float>::denorm_min(),
       -std::numeric_limits<float>::denorm_min(),
   };
-  for (const auto *op : {"Greater", "GreaterOrEqual"}) {
+  for (const auto *op : {"Greater", "GreaterOrEqual", "Less"}) {
     const BinaryOperationDescriptor descriptor(op, 16, {});
     const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT,
                                                     BinaryDataType::BOOL);
@@ -722,6 +722,15 @@ TEST(BinaryOperationDescriptor, FloatComparisonBulkPreservesIeeeSemanticsAndTail
         EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkFloatGreaterOrEqual_AVX2);
         EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkFloatGreaterOrEqualLeft_AVX2);
         EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkFloatGreaterOrEqualRight_AVX2);
+      }
+#endif
+    }
+    if (descriptor.op() == BinaryOperator::kLess) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+      if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+        EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkFloatLess_AVX2);
+        EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkFloatLessLeft_AVX2);
+        EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkFloatLessRight_AVX2);
       }
 #endif
     }

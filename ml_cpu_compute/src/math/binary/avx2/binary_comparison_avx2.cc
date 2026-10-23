@@ -108,6 +108,18 @@ void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::
   BulkFloatComparison<false>(left, right, out, count);
 }
 
+void BulkFloatLess_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+  BulkFloatComparison<false>(right, left, out, count);
+}
+
+void BulkFloatLessLeft_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+  BulkFloatComparison<false, false, true>(right, left, out, count);
+}
+
+void BulkFloatLessRight_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+  BulkFloatComparison<false, true, false>(right, left, out, count);
+}
+
 void BulkFloatGreaterOrEqual_AVX2(const void *left, const void *right, void *out,
                                   std::size_t count) {
   BulkFloatComparison<true>(left, right, out, count);
