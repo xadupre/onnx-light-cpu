@@ -186,3 +186,93 @@ repeat=1000, warmup=200, max_repeat_time=5)`` three times per case/thread pair.
 Run with ``taskset -c 0-3`` and keep kernel recording disabled during timing.
 Do not use that parity tool's case selector: it excludes swapped cases and
 float32 Greater is not part of its priority matrix.
+
+Float32 Less on AVX2
+--------------------
+
+``Less`` uses the same packed float32 comparison implementation as ``Greater``,
+with operands reversed, for contiguous, left-scalar, and right-scalar bulk
+callbacks. Reversing operands rather than negating a comparison preserves
+ordered IEEE semantics: NaNs compare false, including in scalar broadcasts and
+tails. Descriptor construction checks compilation and runtime AVX2 support.
+Other types, general strided loops, scheduling, and non-AVX2 fallbacks are
+unchanged.
+
+Issue #995 measurements (2026-10-23)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Host: AMD EPYC 9V45, Linux x86-64 VM exposing four logical CPUs (two cores,
+two threads per core), process affinity CPUs 0-3. GCC 13.3.0 Release
+(``-O3 -DNDEBUG``), ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``;
+``detect_simd_level()`` returned 3. Baseline onnx-light-cpu 0.2.0 source:
+``e60715618a465b4455674f5dcfdf4ecc0d27ea65``; optimized source:
+``a5b0389611f374654274c6d9c38ab36f52edc168``.
+Dependencies were the released Linux CPython 3.13 wheels for onnx-light 0.2.0
+and ONNX Runtime 1.31.0, with NumPy 2.5.4. Wheel build commits were unavailable.
+The local bindings used nanobind 3.1.0 and
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF`` to match the onnx-light wheel.
+Only onnx-light-cpu was ISA-capped; ORT retained its stock wheel dispatch.
+These builds and this processor are not asserted to reproduce the dashboard
+environment.
+
+Both runtimes used explicit thread limits (1 or 4), no worker affinity, and
+disabled spinning (``park_immediately`` for onnx-light, both ORT
+``allow_spinning`` settings zero). ORT used sequential graph execution and one
+inter-op thread. Each case/thread pair used three campaigns, each with 200
+warm-up calls and 1,000 timed calls per backend, alternating backend order on
+each iteration. The five-second cumulative per-backend limit was not reached.
+Inputs, models, shapes, and operand order were the unmodified named backend
+cases. Native backend tensors fed onnx-light-cpu; NumPy views fed ORT.
+Outputs matched ORT exactly, and recording confirmed ``onnx_light_cpu::Less``
+before timing; recording was disabled during timing.
+
+Median of the three campaign medians, in milliseconds:
+
+================== ======= ========== ========== ========= =========
+Case               Threads CPU before ORT before CPU after ORT after
+================== ======= ========== ========== ========= =========
+contiguous         1       0.840420   0.864576   0.687678  0.860010
+contiguous swapped 1       0.850450   0.856989   0.689266  0.848642
+scalar swapped     1       0.096707   0.098770   0.048754  0.100813
+contiguous         4       0.578533   0.578313   0.554907  0.584622
+contiguous swapped 4       0.584372   0.578662   0.558032  0.579890
+scalar swapped     4       0.084283   0.077678   0.048544  0.073176
+================== ======= ========== ========== ========= =========
+
+``contiguous`` and ``contiguous swapped`` have two float32[4194304] inputs.
+``scalar swapped`` is the issue's ``right_scalar`` swapped case: its actual
+inputs are float32[] and float32[1048576].
+
+The historical 21-23% contiguous gaps did not reproduce. With four threads,
+ordinary contiguous was near parity and swapped varied from narrowly faster
+to about 1% slower than ORT. Scalar swapped was consistently 6-9% slower.
+After optimization, the CPU scalar-swapped case improved by 1.74x with four
+threads and 1.98x with one. Single-thread contiguous cases improved by
+1.22-1.23x; four-thread improvements were only 4-5%. Optimized four-thread
+campaign medians ranged from 0.554822 to 0.556119 ms (contiguous),
+0.556950 to 0.562809 ms (swapped), and 0.047903 to 0.049180 ms (scalar swapped).
+These are repeated local observations, not confidence intervals or proof of
+the same gains on EPYC 7763.
+
+Hardware counters were unavailable (``perf_event_paranoid=4``). Assembly
+inspection showed baseline SSE comparisons with extensive BOOL unpacking and
+shuffling. The optimized contiguous wrapper jumps to the shared packed AVX2
+implementation; scalar broadcasts hoist the scalar load. Dispatch-pointer
+tests confirm selection of all three AVX2 callbacks. The 39 descriptor and
+broadcast-plan tests passed, including Less IEEE values, unaligned buffers,
+empty/null ranges, and every length 0-97. All 154 Less backend correctness
+cases passed against the corpus's built-in-kernel oracle at both thread counts.
+The comparison test and all 13 broadcast-plan tests also passed ASan/UBSan,
+both with AVX2 enabled and with AVX2/F16C source groups excluded. Excluding
+only AVX2 exposed unrelated normalization F16C link dependencies, so both
+groups were excluded for fallback validation.
+
+To reproduce, use the timing procedure above for issue #998, substituting this
+exact backend-case regular expression::
+
+   ^test_cpu_less_v13_(contiguous_float32xfloat32_to_bool(_swapped)?_n4194304|right_scalar_float32xfloat32_to_bool_swapped_n1048576)_benchmark$
+
+Construct the CPU session with ``num_threads`` set to 1 or 4,
+``affinity_policy="none"``, and ``spin_policy="park_immediately"``.
+The binary parity tool's selector excludes swapped cases; select directly
+through ``collect_test_cases_by_name`` instead.
