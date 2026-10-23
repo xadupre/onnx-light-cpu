@@ -165,7 +165,9 @@ void RegisterBenchmark(std::vector<TestCase> &registry, std::int64_t bits, DataT
     return IoData{std::move(inputs), {MakeTensor(data_type, {count, width}, expected)}};
   };
   const std::string name = "test_cpu_gather_block_quantized_embedding4096x256_ids16_bits" +
-                           std::to_string(bits) + "_" + DataTypeSuffix(data_type) + "_benchmark";
+                           std::to_string(bits) +
+                           (data_type == DataType::FLOAT16 ? "_scalesfp16_uint8_benchmark"
+                                                           : "_scalesfp32_uint8_benchmark");
   Expect(registry, MakeGatherBlockQuantizedNode(bits, false, 1, 128), name,
          {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)}, {rows * packed_width, count, rows * 2},
          {count * width}, build_data, "backend-test", bt_ns::TestCaseTag::AI_RT,

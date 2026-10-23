@@ -102,7 +102,7 @@ _BENCHMARK_TYPE_SUFFIXES["QLinearMatMul"] = "(?:int8|uint8)"
 _BENCHMARK_TYPE_SUFFIXES["Sum"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
-_BENCHMARK_TYPE_SUFFIXES["GatherBlockQuantized"] = "(?:float32|float16)"
+_BENCHMARK_TYPE_SUFFIXES["GatherBlockQuantized"] = "uint8"
 for _op_type in {
     "BatchNormalization",
     "CausalConvWithState",

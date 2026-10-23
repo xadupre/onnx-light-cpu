@@ -19,6 +19,7 @@ from onnx_light_cpu import (
     register_kernel_for_session,
     register_kernels_global,
 )
+from onnx_light_cpu._benchmark import _case_dtype, infer_pr_benchmark_selection
 
 
 def _embedding(
@@ -95,6 +96,22 @@ def _cpu(model):
 
 
 class TestGatherBlockQuantized(ExtTestCase):
+    def test_packed_dtype_benchmark_selection(self):
+        from onnx_light.onnx.backend import TestMode, collect_test_cases
+        from onnx_light_cpu import register_backend_test_cases, registered_kernels
+
+        register_backend_test_cases()
+        _, dtypes = infer_pr_benchmark_selection(
+            ["onnx_light_cpu/kernels/com_microsoft/gather_block_quantized_kernel.cc"],
+            "",
+            [record for record in registered_kernels() if record.op_type == "GatherBlockQuantized"],
+        )
+        self.assertEqual(dtypes, ["uint8"])
+        cases = collect_test_cases("GatherBlockQuantized", mode=TestMode.BENCHMARK)
+        self.assertEqual(len(cases), 3)
+        for case in cases:
+            self.assertEqual(_case_dtype(case.name), "uint8")
+
     def test_ort_parity(self):
         for bits in (2, 4, 8):
             for dtype in (np.float32, np.float16):
