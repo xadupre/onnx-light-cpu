@@ -42,6 +42,73 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
+Abs cache-capacity boundary follow-up
+-------------------------------------
+
+Issue `#994 <https://github.com/xadupre/onnx-light-cpu/issues/994>`_ lists
+``test_cpu_abs_n4194304_float32_benchmark``. On a processor with 32 MiB L3,
+its 16 MiB input plus 16 MiB output reaches cache capacity. The AVX/AVX2
+default previously required one additional input byte before enabling
+streaming stores. It now includes equality: the cache has no headroom for
+other runtime data at this boundary. Smaller inputs, unknown cache topology,
+explicit tuning, and the AVX-512 default are unchanged.
+
+The 2026-10-23 sandbox investigation used an AMD EPYC 7763 under virtualization
+(four logical CPUs, two visible physical cores, 32 MiB L3), GCC 13.3.0,
+Release ``-O3 -DNDEBUG``, and the AVX2 ceiling (reported SIMD level 3).
+The baseline was repository commit ``5a9b0e7364e174409e2ce941eb6b91622a3add59``;
+the after build used that revision plus this threshold change. Remote refs
+were fetched before measuring and the working branch matched its upstream.
+
+The existing ``abs_throughput`` tool now uses safe runtime dispatch instead
+of calling AVX-512 directly, and accepts ``default``, ``cached``, or
+``streaming`` as its third argument. It reports median, p10, and p90 latency.
+Measurements used affinity ``taskset -c 0``, one thread, no worker pools or
+spinning, ten warmups, and 1,001 single-call samples per process. Allocation,
+initialization, and output validation are outside timing; both versions
+reuse the same input/output buffers. Store policies ran in separate sequential
+processes, including reversed cached/streaming order after the change.
+
+For FP32[4194304], the three before-default medians were 0.74775, 0.70656,
+and 0.76158 ms. Two after-default medians were 0.67431 and 0.67495 ms:
+approximately 10% lower than the median before result. After p10/p90 ranges
+were 0.66221--0.68653 and 0.66314--0.69239 ms; before ranges were
+0.67881--0.81704, 0.66025--0.76823, and 0.71164--0.82140 ms.
+The overlapping distributions and variable cached-store results should not
+be interpreted as a universal speedup. Aligned-count neighbours 4194303 and
+4194305, small/medium inputs, and 8388608 elements were also exercised.
+The focused C++ suite checks the exact default threshold, special-value bits,
+unaligned tails, in-place execution, and concurrent scheduling.
+
+These are **single-thread kernel diagnostics, not end-to-end backend parity
+results**. The original 1.339158x ORT advantage could not be reproduced or
+disproved: ``onnx-light`` was absent and unavailable from the configured
+package index, preventing the named backend case from running. ONNX Runtime
+1.31.0 was available, but no comparable two-backend timing is claimed.
+Hardware-counter profiling was denied (``perf_event_paranoid=4``); the store
+policy A/B test identifies a memory-traffic sensitivity, not a counter-verified
+cache-miss diagnosis. The original campaign's thread/spin settings and
+per-case build provenance remain unknown.
+
+Reproduce the diagnostic (absolute paths below assume this checkout location):
+
+.. code-block:: bash
+
+    cmake -S /home/runner/work/onnx-light-cpu/onnx-light-cpu -B /tmp/abs-build \
+      -DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
+      -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+      -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
+    cmake --build /tmp/abs-build --target test_abs_kernel abs_throughput \
+      --parallel "$(nproc)"
+    /tmp/abs-build/test_abs_kernel
+    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 default
+    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 cached
+    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 streaming
+
+Full acceptance still requires the existing backend benchmark with onnx-light
+available, under identical explicit thread and spin policies for both runtimes.
+The backend workload and its correctness requirements were not modified.
+
 SimplifiedLayerNormalization follow-up
 ----------------------------------------
 
