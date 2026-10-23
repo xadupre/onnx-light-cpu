@@ -73,7 +73,7 @@ measurements showed no improvement.
        --threads 96 -r 100 -w 30 -t 0.5 -o pow-broadcast.xlsx
 
 FP32 GreaterOrEqual AVX2 follow-up (#996)
-----------------------------------------
+-----------------------------------------
 
 The FP32 adapter previously used the baseline-ISA compiler-generated bulk
 loop. GCC 13.3 generated SSE comparisons with a long unpack sequence to
