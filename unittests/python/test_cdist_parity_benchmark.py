@@ -8,6 +8,7 @@ from tools.benchmark_cdist_parity import (
     measure_alternating,
     numerical_tolerance,
     parse_args,
+    run,
     summarize,
 )
 
@@ -25,6 +26,12 @@ def test_matrix_covers_contract_boundaries_and_latency_threshold():
     assert cases["vector_before"].n == 15
     assert cases["vector_aligned"].n == 16
     assert cases["vector_after"].n == 17
+    assert (cases["large"].m, cases["large"].k, cases["large"].n) == (512, 512, 128)
+    assert (cases["large_tail"].m, cases["large_tail"].k, cases["large_tail"].n) == (
+        511,
+        513,
+        129,
+    )
     for dtype_size, threshold in ((4, 128 * 1024), (8, 256 * 1024)):
         assert cases["threshold_before"].m * cases["threshold_before"].n * dtype_size < threshold
         assert cases["threshold_at"].m * cases["threshold_at"].n * dtype_size == threshold
@@ -78,3 +85,31 @@ def test_defaults_match_single_thread_reproducibility_contract():
     assert args.threads == 1
     assert args.warmup > 0
     assert args.enforce
+
+
+def test_numpy_feeds_and_explicit_spin_metadata():
+    report = run(
+        parse_args(
+            [
+                "--case",
+                "singleton",
+                "--case",
+                "empty_a",
+                "--repeat",
+                "1",
+                "--warmup",
+                "0",
+            ]
+        )
+    )
+
+    assert len(report["results"]) == 8
+    assert {row["dtype"] for row in report["results"]} == set(DTYPES)
+    assert {row["metric"] for row in report["results"]} == set(METRICS)
+    assert all(
+        len(row["cpu_samples_seconds"]) == len(row["ort_samples_seconds"]) == 1
+        for row in report["results"]
+    )
+    assert report["metadata"]["cpu_spin_policy"] == "park_immediately"
+    assert report["metadata"]["ort_intra_op_allow_spinning"] == "0"
+    assert report["metadata"]["ort_inter_op_allow_spinning"] == "0"

@@ -563,3 +563,111 @@ a few nanoseconds of isolated short-tensor work. These measurements neither
 prove an end-to-end win nor control AVX-512 frequency effects on a dedicated
 machine. Retain existing dispatch and scalar tails until a representative
 end-to-end benchmark demonstrates a repeatable improvement.
+
+CDist AVX2 output tiling (October 23, 2026)
+-------------------------------------------
+
+Measurement layer: **steady-state end-to-end**, addressing issue #987.
+The two unchanged registered cases
+``test_cpu_cdist_m512_k512_n128_sqeuclidean_float32_benchmark`` and
+``test_cpu_cdist_m512_k512_n128_euclidean_float32_benchmark`` use dynamic
+float32 inputs of shape ``[512, 128]`` and produce ``[512, 512]`` outputs.
+Their models, input generators, tolerances, and runtime tuning were not changed.
+
+Environment: AMD EPYC 7763, Linux x86-64 Azure VM exposing four logical CPUs
+(two cores with SMT), affinity CPU 0, detected SIMD level 3, CMake
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``, Release GCC 13.3.0
+(``-O3 -DNDEBUG``, with ``-mavx2 -mfma`` only on the AVX2/FMA sources).
+Python 3.13.16, NumPy 2.5.4, official onnx-light 0.2.0 Linux cp313 release
+wheel, ONNX Runtime 1.31.0 (build commit ``402979a``), and onnx-light-cpu
+0.2.0 built from baseline ``28de81093ecfb8a7886e7d77966e55268aa108d9``
+before and with this change after. Both builds link the same onnx-light
+wheel libraries and use matching non-stable Python/nanobind ABIs.
+
+For the named-case CLI measurements below, each backend uses one intra-op
+thread (ORT inter-op threads: one, sequential execution); there are no worker
+threads to spin. That CLI retains each runtime's default spin policy, unlike
+the alternating parity driver described separately below. Outputs are allocated
+by each session; CPU tensor feeds and ORT NumPy views reuse the registered input data.
+Two invocations per build use 100 warmups and up to 1,000 repetitions, each
+phase bounded at one second. CPU phases precede ORT phases, with ORT sessions
+created afterwards. CPU phases retained 921–931 samples before and 1,000
+after; ORT phases retained 982–1,000 samples. Kernel recording verified
+``onnx_light_cpu::CDist`` and was disabled during timing.
+
+Reproduce the named-case measurements from the repository checkout:
+
+.. code-block:: bash
+
+   taskset -c 0 python -m onnx_light_cpu benchmark \
+       --test '^test_cpu_cdist_m512_k512_n128_.*_float32_benchmark$' \
+       --dtype float32 --threads 1 --onnxruntime \
+       -r 1000 -w 100 -t 1 -o /tmp/cdist-results.xlsx
+
+Per-invocation medians in milliseconds (not best samples):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Metric / invocation
+     - CPU before
+     - CPU after
+     - ORT before
+     - ORT after
+   * - sqeuclidean / 1
+     - 1.068642
+     - 0.873116
+     - 0.928530
+     - 0.931677
+   * - sqeuclidean / 2
+     - 1.078174
+     - 0.880599
+     - 0.931461
+     - 0.928876
+   * - euclidean / 1
+     - 1.073480
+     - 0.873606
+     - 1.012359
+     - 1.008356
+   * - euclidean / 2
+     - 1.066997
+     - 0.877068
+     - 1.008072
+     - 1.008772
+
+CPU p90 ranges fell from 1.0867–1.0975 to 0.8863–0.8926 ms
+(sqeuclidean), and from 1.0863–1.0941 to 0.8841–0.8864 ms (euclidean).
+The ORT advantage was repeatable but smaller than the published 1.55–1.67x:
+about 1.15–1.16x and 1.06x respectively. Afterward CPU latency is about
+18% lower, beating the local ORT medians by 1.05–1.07x and 1.15x.
+This shared VM does not establish parity on a dedicated machine, and the
+dashboard's per-case build, thread, and spin provenance is unavailable.
+
+Investigation: the parity driver's Python profile placed over 99% of the
+call inside native evaluation; isolated kernel latency was approximately
+1.01–1.03 ms before, confirming arithmetic/packing rather than Python
+adaptation dominated. Hardware counters were unavailable
+(``perf_event_paranoid=4``). Disassembly showed eight A broadcasts for each
+8x8 output tile. The AVX2 float32 fast path uses a 4x16 tile with eight
+independent accumulators, halving broadcasts per output while retaining
+direct ``(a-b)^2`` accumulation and vector square roots. It packs B on every
+call into bounded 16 KiB stack storage; there is no persistent prepacking.
+Small shapes, double precision, scalar, and AVX-512 retain their existing paths.
+Existing runtime scheduling is unchanged.
+
+The alternating parity driver independently confirmed the one-thread win
+with random inputs and explicit non-spinning settings: CPU
+``spin_policy="park_immediately"`` and ORT
+``session.intra_op.allow_spinning="0"`` /
+``session.inter_op.allow_spinning="0"``. The driver records these settings
+separately as ``cpu_spin_policy``, ``ort_intra_op_allow_spinning``, and
+``ort_inter_op_allow_spinning``. Its current implementation passes the same
+NumPy arrays through each evaluator's public ``run`` API rather than constructing
+CPU tensors through a private binding. Those calls include each runtime's
+input adaptation overhead; the named-case CLI measurements above still use
+the registered tensor feeds. A two-thread
+diagnostic pinned to SMT siblings 0–1 remained slower than ORT: roughly
+2.28–2.30 ms before and 2.21–2.22 ms after, versus 0.94–1.02 ms ORT.
+This optimization does not resolve that pre-existing scheduling/SMT gap.
+Boundary, unaligned-buffer, special-value, and concurrent-executor tests cover
+the new tile, including the exact benchmark shape and all partial column widths.

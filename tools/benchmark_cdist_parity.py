@@ -59,6 +59,8 @@ CASES = (
     CDistCase("threshold_at", 512, 32, 64),
     CDistCase("threshold_after", 513, 32, 64),
     CDistCase("representative", 256, 128, 64),
+    CDistCase("large", 512, 512, 128),
+    CDistCase("large_tail", 511, 513, 129),
 )
 DTYPES = ("float32", "float64")
 METRICS = ("sqeuclidean", "euclidean")
@@ -186,13 +188,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import (
+        __version__,
         clear_used_kernel_names,
+        detect_simd_level,
         register_kernels,
         set_kernel_usage_recording,
         used_kernel_names,
     )
 
     register_kernels()
+    cpu_spin_policy = "park_immediately"
+    ort_allow_spinning = "0"
     random = np.random.default_rng(args.seed)
     rows = []
     for case in CASES:
@@ -228,7 +234,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 model_bytes = model.SerializeToString()
                 feeds = {"A": a, "B": b}
-                cpu = ReferenceEvaluator(model_bytes, cpu_execution={"num_threads": args.threads})
+                cpu = ReferenceEvaluator(
+                    model_bytes,
+                    cpu_execution={
+                        "num_threads": args.threads,
+                        "spin_policy": cpu_spin_policy,
+                    },
+                )
 
                 def make_ort_session(enable_profiling: bool, current_model=model_bytes):
                     options = onnxruntime.SessionOptions()
@@ -238,6 +250,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     options.enable_mem_pattern = True
                     options.enable_cpu_mem_arena = True
                     options.enable_profiling = enable_profiling
+                    options.add_session_config_entry(
+                        "session.intra_op.allow_spinning", ort_allow_spinning
+                    )
+                    options.add_session_config_entry(
+                        "session.inter_op.allow_spinning", ort_allow_spinning
+                    )
                     return onnxruntime.InferenceSession(
                         current_model, sess_options=options, providers=["CPUExecutionProvider"]
                     )
@@ -318,6 +336,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
             "git_revision": _command_output(("git", "rev-parse", "HEAD")),
+            "git_dirty": bool(_command_output(("git", "status", "--porcelain"))),
+            "onnx_light_cpu_source_version": __version__,
             "platform": platform.platform(),
             "machine": platform.machine(),
             "processor": platform.processor(),
@@ -326,6 +346,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
             ),
             "threads": args.threads,
+            "simd_level": int(detect_simd_level()),
+            "cpu_spin_policy": cpu_spin_policy,
+            "ort_intra_op_allow_spinning": ort_allow_spinning,
+            "ort_inter_op_allow_spinning": ort_allow_spinning,
             "ort_execution_mode": "sequential",
             "ort_inter_op_threads": 1,
             "allocator_policy": (
@@ -333,6 +357,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "input_policy": "same NumPy buffers reused by both runtimes",
             "warmup": args.warmup,
+            "repeat": args.repeat,
+            "max_repeat_time": args.max_repeat_time,
             "seed": args.seed,
             "compiler": _command_output(
                 (*shlex.split(os.environ.get("CXX", "c++")), "--version")
