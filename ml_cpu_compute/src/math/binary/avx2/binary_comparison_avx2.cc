@@ -65,6 +65,36 @@ void Compare(const T *left, const T *right, std::uint8_t *out, std::size_t count
 
 } // namespace
 
+void BulkFloatGreater_AVX2(const void *left, const void *right, void *out, std::size_t count) {
+  const auto *a = static_cast<const float *>(left);
+  const auto *b = static_cast<const float *>(right);
+  auto *output = static_cast<std::uint8_t *>(out);
+  const auto ones = _mm256_set1_epi8(1);
+  const auto order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+  const auto compare = [&](std::size_t i) {
+    return _mm256_castps_si256(
+        _mm256_cmp_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), _CMP_GT_OQ));
+  };
+  std::size_t i = 0;
+  for (; count - i >= 32; i += 32) {
+    const auto ab = _mm256_packs_epi32(compare(i), compare(i + 8));
+    const auto cd = _mm256_packs_epi32(compare(i + 16), compare(i + 24));
+    // Packing is lane-local; restore element order before storing 0/1 bytes.
+    const auto bytes = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(ab, cd), order);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), _mm256_and_si256(bytes, ones));
+  }
+  for (; count - i >= 8; i += 8) {
+    const auto mask = compare(i);
+    const auto words =
+        _mm_packs_epi32(_mm256_castsi256_si128(mask), _mm256_extracti128_si256(mask, 1));
+    const auto bytes = _mm_and_si128(_mm_packs_epi16(words, words), _mm_set1_epi8(1));
+    _mm_storel_epi64(reinterpret_cast<__m128i *>(output + i), bytes);
+  }
+  for (; i < count; ++i) {
+    output[i] = a[i] > b[i];
+  }
+}
+
 void BinaryCompareInt64_AVX2(const std::int64_t *left, const std::int64_t *right, std::uint8_t *out,
                              std::size_t count, BinaryOperator op, bool left_scalar,
                              bool right_scalar) {
