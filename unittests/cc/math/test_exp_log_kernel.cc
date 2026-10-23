@@ -323,6 +323,77 @@ TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
   }
 }
 
+TEST(SigmoidFloat32AVX2FMA, EveryTailUnalignedInPlaceAndSpecialValues) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  const float inf = std::numeric_limits<float>::infinity();
+  const float tiny = std::numeric_limits<float>::denorm_min();
+  const std::vector<float> corpus = {-inf,
+                                     -104.0f,
+                                     -100.0f,
+                                     -90.0f,
+                                     -87.33655f,
+                                     -87.33654f,
+                                     -8.0f,
+                                     -1.0f,
+                                     -tiny,
+                                     -0.0f,
+                                     0.0f,
+                                     tiny,
+                                     0.25f,
+                                     1.0f,
+                                     8.0f,
+                                     87.33654f,
+                                     90.0f,
+                                     inf,
+                                     std::numeric_limits<float>::quiet_NaN()};
+  for (std::size_t count = 0; count <= 65; ++count) {
+    for (const bool special_values : {false, true}) {
+      for (const bool in_place : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "count=" << count << " special=" << special_values
+                                          << " in_place=" << in_place);
+        std::vector<float> input(count + 2, 42.0f), output(count + 2, 42.0f);
+        for (std::size_t i = 0; i < count; ++i) {
+          input[i + 1] = special_values ? corpus[i % corpus.size()]
+                                        : static_cast<float>(static_cast<int>(i) - 32) * 0.25f;
+        }
+        const auto original = input;
+        float *result = (in_place ? input.data() : output.data()) + 1;
+        ml_cpu_compute::SigmoidFloat32_AVX2_FMA(input.data() + 1, result, count);
+        for (std::size_t i = 0; i < count; ++i) {
+          SCOPED_TRACE(i);
+          const double x = original[i + 1];
+          if (std::isnan(x)) {
+            EXPECT_TRUE(std::isnan(result[i]));
+          } else {
+            const double exponent = std::exp(-std::abs(x));
+            const double expected = (std::signbit(x) ? exponent : 1.0) / (1.0 + exponent);
+            EXPECT_NEAR(result[i], expected, std::max(expected * 3e-7, 2.0 * tiny));
+            if (std::isinf(x) || x == 0.0) {
+              EXPECT_EQ(result[i], expected);
+            }
+          }
+        }
+        EXPECT_EQ(input.front(), 42.0f);
+        EXPECT_EQ(input.back(), 42.0f);
+        EXPECT_EQ(output.front(), 42.0f);
+        EXPECT_EQ(output.back(), 42.0f);
+        if (!in_place) {
+          for (std::size_t i = 0; i < count; ++i) {
+            if (std::isnan(original[i + 1])) {
+              EXPECT_TRUE(std::isnan(input[i + 1]));
+            } else {
+              EXPECT_EQ(input[i + 1], original[i + 1]);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {

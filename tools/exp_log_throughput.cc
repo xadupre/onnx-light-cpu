@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated float32 Exp/Log throughput driver (pass "tanh" as the second argument
+// Isolated float32 Exp/Log throughput driver (pass "tanh" or "sigmoid" as the second argument
 // for a direct scalar/AVX2/AVX-512 comparison). This deliberately measures
 // preallocated buffers and reports the environment separately from the
 // end-to-end parity runner.
@@ -99,16 +99,20 @@ std::pair<double, double> Summary(std::vector<double> values) {
   return {median, values[(values.size() * 3) / 4] - values[values.size() / 4]};
 }
 
-int MeasureTanh(std::size_t samples) {
+int MeasureActivation(std::size_t samples, bool sigmoid) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {
-    std::fprintf(stderr, "direct Tanh comparison requires AVX2 and FMA\n");
+    std::fprintf(stderr, "direct activation comparison requires AVX2 and FMA\n");
     return 2;
   }
   std::printf("operator,size,offset_floats,median_seconds,iqr_seconds,speedup\n");
-  for (const std::size_t count :
-       {8, 15, 16, 17, 31, 32, 33, 100, 1000, 10000, 100000, 202048, 202055, 3232768, 25862144}) {
+  const std::vector<std::size_t> sizes =
+      sigmoid ? std::vector<std::size_t>{8,    15,    16,    17,    31,     32,      33,
+                                         1024, 32768, 65535, 65536, 131072, 1048576, 4194304}
+              : std::vector<std::size_t>{8,    15,    16,     17,     31,     32,      33,      100,
+                                         1000, 10000, 100000, 202048, 202055, 3232768, 25862144};
+  for (const std::size_t count : sizes) {
     for (const std::size_t offset : {0, 1}) {
       std::vector<float> input_storage(count + 32), output_storage(count + 32);
       const auto aligned = [offset](std::vector<float> &storage) {
@@ -121,13 +125,23 @@ int MeasureTanh(std::size_t samples) {
         input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
       }
       using Kernel = void (*)(const float *, float *, std::size_t);
-      std::vector<Kernel> kernels{ml_cpu_compute::TanhFloat32_Scalar,
-                                  ml_cpu_compute::TanhFloat32_AVX2_FMA};
-      std::vector<const char *> names{"TanhScalar", "TanhAVX2FMA"};
+      const Kernel scalar_sigmoid = [](const float *x, float *y, std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) {
+          const float exponent = std::exp(-std::abs(x[i]));
+          y[i] = (std::signbit(x[i]) ? exponent : 1.0f) / (1.0f + exponent);
+        }
+      };
+      std::vector<Kernel> kernels{sigmoid ? scalar_sigmoid : ml_cpu_compute::TanhFloat32_Scalar,
+                                  sigmoid ? ml_cpu_compute::SigmoidFloat32_AVX2_FMA
+                                          : ml_cpu_compute::TanhFloat32_AVX2_FMA};
+      std::vector<const char *> names =
+          sigmoid ? std::vector<const char *>{"SigmoidScalar", "SigmoidAVX2FMA"}
+                  : std::vector<const char *>{"TanhScalar", "TanhAVX2FMA"};
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
       if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX512) {
-        kernels.push_back(ml_cpu_compute::TanhFloat32_AVX512);
-        names.push_back("TanhAVX512");
+        kernels.push_back(sigmoid ? ml_cpu_compute::SigmoidFloat32_AVX512
+                                  : ml_cpu_compute::TanhFloat32_AVX512);
+        names.push_back(sigmoid ? "SigmoidAVX512" : "TanhAVX512");
       }
 #endif
       for (int warmup = 0; warmup < 3; ++warmup) {
@@ -163,7 +177,8 @@ int MeasureTanh(std::size_t samples) {
   return 0;
 #else
   (void)samples;
-  std::fprintf(stderr, "direct Tanh comparison requires compiled AVX2/FMA support\n");
+  (void)sigmoid;
+  std::fprintf(stderr, "direct activation comparison requires compiled AVX2/FMA support\n");
   return 2;
 #endif
 }
@@ -191,8 +206,8 @@ int main(int argc, char **argv) {
               "unknown",
 #endif
               static_cast<long>(__cplusplus), IsaName(ml_cpu_compute::DetectSimdLevel()), samples);
-  if (argc > 2 && std::string(argv[2]) == "tanh") {
-    return MeasureTanh(samples);
+  if (argc > 2 && (std::string(argv[2]) == "tanh" || std::string(argv[2]) == "sigmoid")) {
+    return MeasureActivation(samples, std::string(argv[2]) == "sigmoid");
   }
   std::printf("operator,size,median_seconds,iqr_seconds,cycles_per_element\n");
   for (const std::size_t size : Sizes()) {
