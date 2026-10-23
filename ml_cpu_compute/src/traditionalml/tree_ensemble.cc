@@ -1441,7 +1441,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         !sparse_targets && attributes_.value_type == DataType::FLOAT &&
         attributes_.aggregate == TreeAggregate::kSum &&
         attributes_.post_transform == TreePostTransform::kNone) {
-      constexpr std::size_t kInterleavedRows = 8;
+      constexpr std::size_t kInterleavedRows = 4;
       const auto accumulate_tree = [&](std::size_t tree, std::size_t row_begin, std::size_t row_end,
                                        float *values, std::size_t value_row_offset = 0) {
         const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);

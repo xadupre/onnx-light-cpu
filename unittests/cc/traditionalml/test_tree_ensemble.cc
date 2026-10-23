@@ -630,6 +630,47 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
   }
 }
 
+TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds) {
+  for (auto attributes : {StumpForest(17, 1), BalancedForest(17)}) {
+    attributes.n_features = 4096;
+    attributes.value_type = DataType::FLOAT;
+    for (std::size_t node = 0; node < attributes.nodes_featureids.size(); ++node) {
+      attributes.nodes_featureids[node] = node % 2 == 0 ? 0 : 4095;
+    }
+    const TreeEnsembleOracle oracle(attributes);
+    for (const auto strategy : {TreeEnsembleExecutionStrategy::kRowParallel,
+                                TreeEnsembleExecutionStrategy::kTreeMajorBatch}) {
+      const auto policy = OneRegionPolicy(strategy, 1, 1, 16);
+      TreeEnsemblePlan plan(attributes, 1, policy);
+      plan.CompactRuntimeStorage();
+      for (std::size_t rows = 0; rows <= 33; ++rows) {
+        SCOPED_TRACE(::testing::Message() << "rows=" << rows << " depth=" << plan.max_depth());
+        std::vector<float> input(rows * 4096);
+        const float values[] = {-std::numeric_limits<float>::infinity(),
+                                -0.5F,
+                                -0.0F,
+                                0.0F,
+                                0.5F,
+                                std::numeric_limits<float>::infinity(),
+                                std::numeric_limits<float>::quiet_NaN()};
+        for (std::size_t row = 0; row < rows; ++row) {
+          input[row * 4096] = values[row % 7];
+          input[row * 4096 + 4095] = values[(row + 3) % 7];
+        }
+        const std::vector<double> reference_input(input.begin(), input.end());
+        const auto expected = oracle.Evaluate(reference_input, rows);
+        std::vector<float> actual(rows + 2, -42.0F);
+        plan.EvaluateInto(input.data(), input.size(), rows, actual.data() + 1);
+        EXPECT_EQ(actual.front(), -42.0F);
+        EXPECT_EQ(actual.back(), -42.0F);
+        for (std::size_t row = 0; row < rows; ++row) {
+          EXPECT_FLOAT_EQ(actual[row + 1], static_cast<float>(expected[row])) << row;
+        }
+      }
+    }
+  }
+}
+
 TEST(TreeEnsembleOracle, SingleRowBalancedFloatKeepsBaseInsideTreeReduction) {
   auto attributes = StumpForest(2, 1);
   attributes.base_values = {16777216.0};

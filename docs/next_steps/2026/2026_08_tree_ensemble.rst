@@ -767,3 +767,137 @@ Use ``--threads 1`` for the serial comparison. Correctness coverage exercises
 depth-one and depth-four forests, every 16-row tail width, nonzero bases,
 NaN/infinity inputs, policy/runtime participant limits, and nested execution
 through both AVX-512 and AVX2-ceiling builds.
+
+AVX2 follow-up for issue #978 (2026-10-23)
+---------------------------------------
+
+The published ORT advantage was not reproduced with four threads on this
+runner. This is not a reproduction on the published EPYC 7763: the runner
+reports an AMD EPYC 9V74, with four logical CPUs, two physical cores and SMT.
+The older measurements do not identify their processor or build commits.
+The five issue entries have four distinct shapes; the current backend registry
+provides the ``_float32_benchmark`` names. The historical names without that
+suffix are not available, so these measurements use their current equivalents,
+not reconstructed historical binaries.
+
+Environment and procedure:
+
+* Baseline: onnx-light-cpu 0.2.0, commit ``38a57ce`` (code from ``cb692da``);
+  candidate: the same checkout with ``kInterleavedRows`` reduced from 8 to 4.
+* onnx-light: published 0.2.0 CPython 3.13 Linux x86-64 wheel, release tag
+  commit ``6400f0f812b13bc32469e405bd2f762ba3cba7f0``.
+* ONNX Runtime: published 1.31.0 CPython 3.13 Linux x86-64 wheel;
+  ``get_build_info()`` reports commit ``402979a``, Release.
+* Python 3.13.16, NumPy 2.5.4, GCC 13.3.0, CMake Release;
+  ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``. The Python binding reports SIMD level 3.
+  The extension links the exact core/proto/threading libraries from the
+  onnx-light wheel; no second runtime is built.
+* Explicit intra-op thread limits of 1 and 4 on both backends; ORT inter-op 1,
+  sequential execution. No worker pinning; process affinity CPUs 0--3.
+  Spin policies are unchanged defaults: onnx-light adaptive, ORT spinning
+  enabled. These are not identical spin implementations.
+* Each backend gets 100 warm-ups and up to 1,000 timed calls, with separate
+  three-second limits for warm-up and measurement. Sessions and model
+  preparation are outside timing. CPU feeds are backend tensors; ORT feeds
+  are the corresponding NumPy arrays.
+* Repeated baseline/candidate runs use the same registered models and inputs.
+  The benchmark's runtime phases avoid overlapping timed CPU and ORT work.
+  No compilation or other test work runs concurrently with the reported
+  measurements. Hardware profiling was unavailable
+  (``perf_event_paranoid=4``).
+
+The confirmed batch path is scalar interleaving, even in an AVX2 build.
+Reducing its group size to four reduces the live node-index working set
+without changing traversal, scheduling, allocation, or per-row tree summation
+order. Expanding AVX2 gather dispatch to this path was also tested, but was
+about twice as slow and was rejected. Explicit shared-root traversal was
+rejected after a large-batch regression.
+
+The final paired run below reports median end-to-end latency in microseconds.
+``t/f/b`` denotes trees/features/batch; all inputs are float32 and forests
+retain depth 4 and one output.
+
+.. list-table::
+   :header-rows: 1
+
+   * - t/f/b
+     - Threads
+     - CPU before
+     - CPU after
+     - ORT before
+     - ORT after
+   * - 100/64/8
+     - 4
+     - 4.847
+     - 4.948
+     - 14.401
+     - 14.382
+   * - 1000/1024/32
+     - 4
+     - 139.260
+     - 119.605
+     - 198.109
+     - 197.993
+   * - 10000/4096/1
+     - 4
+     - 56.475
+     - 55.304
+     - 77.882
+     - 77.807
+   * - 10000/4096/128
+     - 4
+     - 2976.554
+     - 2006.715
+     - 4269.921
+     - 4487.637
+   * - 100/64/8
+     - 1
+     - 4.897
+     - 4.707
+     - 9.034
+     - 9.174
+   * - 1000/1024/32
+     - 1
+     - 148.870
+     - 120.361
+     - 197.948
+     - 198.399
+   * - 10000/4096/1
+     - 1
+     - 80.582
+     - 79.220
+     - 120.892
+     - 122.795
+   * - 10000/4096/128
+     - 1
+     - 8404.943
+     - 7086.406
+     - 7851.043
+     - 7884.454
+
+The medium batch improved repeatably (four-thread candidate medians
+110--120 us versus baseline 139--144 us). Large-case timings are noisier:
+four-thread baseline medians ranged from 2.08 to 2.98 ms and candidate medians
+from 1.60 to 2.09 ms. Single-thread large-batch candidate medians varied from
+3.84 to 7.23 ms; the baseline was sometimes slightly slower than ORT.
+Small differences on the smallest and single-row cases are not claimed as
+speedups. No conclusion about the original processor or historical versions
+follows from these results.
+
+Reproduce each revision using the existing benchmark CLI (repeat with
+``--threads 1``):
+
+.. code-block:: bash
+
+   PYTHONPATH=/home/runner/work/onnx-light-cpu/onnx-light-cpu:/tmp/tree-deps \
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_treeensemble_t(100|1000|10000)_.*_float32_benchmark$' \
+       --threads 4 --repeat 1000 --warmup 100 --max-repeat-time 3 \
+       --output /tmp/treeensemble.xlsx
+
+All 44 TreeEnsemble C++ tests pass. Additional differential coverage forces
+both row-parallel and tree-major execution with every batch size 0--33,
+4096-feature strides, NaNs, infinities, exact threshold comparisons, nonzero
+bases, multiple batch offsets and output sentinels. The four registered
+benchmark workloads were also checked against their generated backend oracle
+outputs and ORT at both thread limits (``rtol=atol=2e-5``).
