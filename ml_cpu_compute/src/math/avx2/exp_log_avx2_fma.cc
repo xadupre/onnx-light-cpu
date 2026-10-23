@@ -386,6 +386,7 @@ void TanhFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std
 
 void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   std::size_t index = 0;
+  // Keeping one vector live avoids spilling polynomial constants on AVX2.
   for (; index + 8 <= count; index += 8) {
     _mm256_storeu_ps(output + index, SigmoidPs256Fma(_mm256_loadu_ps(input + index)));
   }

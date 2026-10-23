@@ -82,6 +82,116 @@ Use identical models, inputs, shapes, and attributes for every backend. If
 constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.
 
+AVX2 Sigmoid (October 23, 2026)
+-------------------------------
+
+Issue #993's latency gap reproduced on an AMD EPYC 7763 virtual runner exposing
+four logical CPUs and two physical cores. This is diagnostic shared-runner
+data, not a parity gate or an exact reconstruction of the published campaign.
+The build selected AVX2/FMA (``simd_level=3``), GCC 13.3.0, Release, Python
+3.13.16, and NumPy 2.5.4. Baseline ``onnx-light-cpu`` 0.2.0 source was
+``6e96d12`` (kernel sources identical to ``765a814``); optimized source was
+``ad4c521``. ONNX Runtime was the 1.31.0 Release wheel, reporting commit
+``402979a``. ``onnx-light`` was the GitHub 0.2.0 cp313 manylinux x86-64 release
+wheel, SHA-256
+``8e47ccce3f3a70bbe31cd99c66c144bd3feb1e85b2dae1d1f4c5e849344595ae``;
+its source commit was not exposed by the wheel's build metadata.
+
+Disassembly showed register pressure in the two-vector loop: the generated
+float32 Sigmoid function had 37 stack references, versus two after keeping
+only one vector live. Setting the sign bit also replaces subtraction and
+absolute-value masking when forming ``-abs(x)``. The exponential polynomial,
+division, exceptional-range handling, executor tuning, inputs, and correctness
+tolerances are unchanged. Reciprocal refinement and more aggressive unrolling
+were measured and rejected because they regressed throughput.
+
+**Steady-state end-to-end:** the unchanged backend CLI measures the exact
+``test_cpu_sigmoid_n1048576_float32_benchmark`` and
+``test_cpu_sigmoid_n4194304_float32_benchmark`` cases, using their native tensor
+feeds and original seeded inputs. Kernel recording confirmed
+``onnx_light_cpu::Sigmoid`` before timing. Requested session threads were one
+or two, inter-op threads one, with no worker affinity, no process pinning
+(CPUs 0--3 available), and no spin overrides for either backend. These are the
+runtime defaults, not an assertion that the two pools have identical spin
+policies. The standard CLI times CPU first, then constructs and times ORT;
+the CPU session remains alive during the ORT phase.
+
+Three separate CLI invocations were run per build/thread setting. Each used
+20 warmups and 400 repetitions, separately capped at one second, instead of
+the CLI's 8/40 defaults to reduce the noise seen in the initial run. All 400
+samples were retained in each phase. The table reports the median of the
+three campaign medians, in milliseconds:
+
+.. list-table:: End-to-end float32 Sigmoid
+   :header-rows: 1
+
+   * - Elements
+     - Threads
+     - CPU before
+     - CPU after
+     - ORT before / after
+   * - 1,048,576
+     - 1
+     - 0.474917
+     - 0.450487
+     - 0.353392 / 0.359387
+   * - 4,194,304
+     - 1
+     - 1.930034
+     - 1.833611
+     - 1.495081 / 1.500843
+   * - 1,048,576
+     - 2
+     - 0.240246
+     - 0.227567
+     - 0.181477 / 0.181848
+   * - 4,194,304
+     - 2
+     - 0.994773
+     - 0.951007
+     - 0.778456 / 0.778631
+
+Two-thread campaign medians ranged from 0.238322--0.240858 ms before to
+0.226636--0.234610 ms after for 1,048,576 elements, and
+0.992990--1.005287 ms before to 0.928128--0.973949 ms after for 4,194,304.
+Thus the gap was repeatable and latency improved, but **ORT remains faster**.
+The standard CLI stores raw samples and percentile summaries in its workbook.
+Reproduce each campaign, changing ``--threads`` to one for the serial run:
+
+.. code-block:: bash
+
+   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   python -m onnx_light_cpu benchmark \
+       --test '^test_cpu_sigmoid_n(1048576|4194304)_float32_benchmark$' \
+       --dtype float32 --threads 2 --onnxruntime \
+       --warmup 20 --repeat 400 --max-repeat-time 1 \
+       --output /tmp/sigmoid-results.xlsx
+
+**Kernel throughput:** the extended existing driver uses preallocated buffers,
+three warmups, 101 samples, one thread pinned to CPU 0, alternating scalar/SIMD
+order, and a uniform sweep over [-8, 8). This is deliberately separate from
+the unchanged random-normal backend workload. For 64-byte-aligned buffers,
+median (IQR) seconds were 0.000456638 (0.000011100) before versus
+0.000404111 (0.000011050) after at 1,048,576 elements, and
+0.001863161 (0.000016330) versus 0.001683889 (0.000026049) at 4,194,304.
+With a one-float offset, the corresponding medians were
+0.000498466 versus 0.000450157, and 0.002087909 versus 0.001884280.
+The 65,535-element tail case improved from 0.000027732 to 0.000024777 seconds
+when aligned, and from 0.000029124 to 0.000026510 with the offset.
+
+.. code-block:: bash
+
+   cmake -S "$ROOT" -B "$ROOT/build/temp" \
+       -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
+       -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
+   cmake --build "$ROOT/build/temp" --target exp_log_throughput --parallel "$(nproc)"
+   taskset -c 0 "$ROOT/build/temp/exp_log_throughput" 101 sigmoid
+
+Hardware-counter profiling was unavailable (``perf_event_paranoid=4``).
+Disassembly and controlled timing experiments support the register-pressure
+diagnosis, not a measured hardware-counter attribution. AVX-512 hardware was
+not available; scalar and AVX-512 production paths were not changed.
+
 Normalization moments (October 8, 2026)
 ---------------------------------------
 
