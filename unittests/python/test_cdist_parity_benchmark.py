@@ -25,6 +25,12 @@ def test_matrix_covers_contract_boundaries_and_latency_threshold():
     assert cases["vector_before"].n == 15
     assert cases["vector_aligned"].n == 16
     assert cases["vector_after"].n == 17
+    assert (cases["large"].m, cases["large"].k, cases["large"].n) == (512, 512, 128)
+    assert (cases["large_tail"].m, cases["large_tail"].k, cases["large_tail"].n) == (
+        511,
+        513,
+        129,
+    )
     for dtype_size, threshold in ((4, 128 * 1024), (8, 256 * 1024)):
         assert cases["threshold_before"].m * cases["threshold_before"].n * dtype_size < threshold
         assert cases["threshold_at"].m * cases["threshold_at"].n * dtype_size == threshold

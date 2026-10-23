@@ -59,6 +59,8 @@ CASES = (
     CDistCase("threshold_at", 512, 32, 64),
     CDistCase("threshold_after", 513, 32, 64),
     CDistCase("representative", 256, 128, 64),
+    CDistCase("large", 512, 512, 128),
+    CDistCase("large_tail", 511, 513, 129),
 )
 DTYPES = ("float32", "float64")
 METRICS = ("sqeuclidean", "euclidean")
@@ -185,8 +187,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light.onnx_py._onnxpykernels import runtime
     from onnx_light_cpu import (
+        __version__,
         clear_used_kernel_names,
+        detect_simd_level,
         register_kernels,
         set_kernel_usage_recording,
         used_kernel_names,
@@ -228,7 +233,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 model_bytes = model.SerializeToString()
                 feeds = {"A": a, "B": b}
-                cpu = ReferenceEvaluator(model_bytes, cpu_execution={"num_threads": args.threads})
+                cpu_feeds = {
+                    name: runtime.tensor_from_numpy(
+                        name,
+                        tensor_type,
+                        list(value.shape),
+                        value.view(np.uint8).ravel(),
+                        copy=False,
+                    )
+                    for name, value in feeds.items()
+                }
+                cpu = ReferenceEvaluator(
+                    model_bytes,
+                    cpu_execution={
+                        "num_threads": args.threads,
+                        "spin_policy": "park_immediately",
+                    },
+                )
 
                 def make_ort_session(enable_profiling: bool, current_model=model_bytes):
                     options = onnxruntime.SessionOptions()
@@ -238,13 +259,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     options.enable_mem_pattern = True
                     options.enable_cpu_mem_arena = True
                     options.enable_profiling = enable_profiling
+                    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+                    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
                     return onnxruntime.InferenceSession(
                         current_model, sess_options=options, providers=["CPUExecutionProvider"]
                     )
 
                 ort = make_ort_session(False)
 
-                def cpu_run(session=cpu, current_feeds=feeds):
+                def cpu_run(session=cpu, current_feeds=cpu_feeds):
                     return session.run(None, current_feeds)[0]
 
                 def ort_run(session=ort, current_feeds=feeds):
@@ -318,6 +341,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
             "git_revision": _command_output(("git", "rev-parse", "HEAD")),
+            "git_dirty": bool(_command_output(("git", "status", "--porcelain"))),
+            "onnx_light_cpu_source_version": __version__,
             "platform": platform.platform(),
             "machine": platform.machine(),
             "processor": platform.processor(),
@@ -326,13 +351,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
             ),
             "threads": args.threads,
+            "simd_level": int(detect_simd_level()),
+            "spin_policy": "disabled for both runtimes",
             "ort_execution_mode": "sequential",
             "ort_inter_op_threads": 1,
             "allocator_policy": (
                 "default arenas and memory patterns; outputs allocated by session.run"
             ),
-            "input_policy": "same NumPy buffers reused by both runtimes",
+            "input_policy": "CPU tensor views and ORT NumPy feeds share the same buffers",
             "warmup": args.warmup,
+            "repeat": args.repeat,
+            "max_repeat_time": args.max_repeat_time,
             "seed": args.seed,
             "compiler": _command_output(
                 (*shlex.split(os.environ.get("CXX", "c++")), "--version")

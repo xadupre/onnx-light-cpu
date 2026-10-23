@@ -123,6 +123,24 @@ TEST(CDist, VectorizedFeatureTailMatchesDirectReference) {
   }
 }
 
+TEST(CDist, Float32BenchmarkShapeMatchesDirectReference) {
+  constexpr std::size_t m = 512, k = 512, n = 128;
+  std::vector<float> a(m * n), b(k * n), output(m * k);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 29) - 14) / 19.0f;
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b[i] = static_cast<float>(static_cast<int>(i % 23) - 11) / 31.0f;
+  }
+  for (auto metric : {CDistMetric::kSqEuclidean, CDistMetric::kEuclidean}) {
+    CDistFloat32(a.data(), b.data(), output.data(), m, k, n, metric);
+    const auto expected = Reference(a, b, m, k, n, metric);
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_NEAR(output[i], expected[i], 2e-5f * std::max(1.0f, expected[i])) << i;
+    }
+  }
+}
+
 TEST(CDist, ZeroRowsOrColumnsProduceNoWrites) {
   std::vector<float> sentinel(1, -42.0f);
   ml_cpu_compute::CDistFloat32(nullptr, nullptr, sentinel.data(), 0, 0, 3,
@@ -223,7 +241,7 @@ TYPED_TEST(CDistPacked, TileBoundariesAndAllSimdTails) {
   for (std::size_t n = 1; n <= 33; ++n) {
     features.push_back(n);
   }
-  features.insert(features.end(), {63, 64, 65, 255, 256, 257});
+  features.insert(features.end(), {63, 64, 65, 127, 128, 129, 255, 256, 257});
   std::vector<std::size_t> columns;
   for (std::size_t k = 1; k <= 33; ++k) {
     columns.push_back(k);
@@ -231,7 +249,7 @@ TYPED_TEST(CDistPacked, TileBoundariesAndAllSimdTails) {
   for (std::size_t k = 64; k <= 81; ++k) {
     columns.push_back(k);
   }
-  for (std::size_t m : {7, 31, 32, 33, 63, 64, 65}) {
+  for (std::size_t m : {7, 8, 10, 31, 32, 33, 63, 64, 65}) {
     for (std::size_t k : columns) {
       for (std::size_t n : features) {
         SCOPED_TRACE(::testing::Message() << "m=" << m << " k=" << k << " n=" << n);
@@ -268,7 +286,7 @@ TYPED_TEST(CDistPacked, StableDistancesAndSpecialValues) {
   constexpr std::size_t m = 67, k = 65;
   const T infinity = std::numeric_limits<T>::infinity();
   const T nan = std::numeric_limits<T>::quiet_NaN();
-  for (std::size_t n : {3, 17, 65, 256}) {
+  for (std::size_t n : {3, 17, 65, 128, 256}) {
     std::vector<T> a(m * n, T(1024)), b(k * n, T(1024)), output(m * k);
     b[n - 1] = std::nextafter(T(1024), infinity);
     a[n] = infinity;

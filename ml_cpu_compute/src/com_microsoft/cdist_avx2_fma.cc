@@ -29,6 +29,66 @@ double Reduce(__m256d value) {
   return _mm_cvtsd_f64(_mm_hadd_pd(sum, sum));
 }
 
+// A 4x16 tile reuses each A broadcast across two vectors of B while keeping
+// eight independent accumulators in registers. Accumulate (a-b)^2 directly.
+void CDistFloat32WidePackedRows(const float *a, const float *b, float *c, std::size_t k,
+                                std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                std::size_t row_end) {
+  constexpr std::size_t columns_per_tile = 16;
+  alignas(64) float packed[kCDistPackedMaxFeatures * columns_per_tile];
+  for (std::size_t col = 0; col < k; col += columns_per_tile) {
+    const std::size_t columns = std::min(columns_per_tile, k - col);
+    for (std::size_t feature = 0; feature < n; ++feature) {
+      for (std::size_t lane = 0; lane < columns; ++lane) {
+        packed[feature * columns_per_tile + lane] = b[(col + lane) * n + feature];
+      }
+      std::fill(packed + feature * columns_per_tile + columns,
+                packed + (feature + 1) * columns_per_tile, 0.0f);
+    }
+    const auto compute = [&]<std::size_t Rows>(std::size_t row) {
+      __m256 sums[Rows][2];
+      for (std::size_t r = 0; r < Rows; ++r) {
+        sums[r][0] = _mm256_setzero_ps();
+        sums[r][1] = _mm256_setzero_ps();
+      }
+      for (std::size_t feature = 0; feature < n; ++feature) {
+        const __m256 low = _mm256_loadu_ps(packed + feature * columns_per_tile);
+        const __m256 high = _mm256_loadu_ps(packed + feature * columns_per_tile + 8);
+        for (std::size_t r = 0; r < Rows; ++r) {
+          const __m256 value = _mm256_set1_ps(a[(row + r) * n + feature]);
+          const __m256 diff_low = _mm256_sub_ps(value, low);
+          const __m256 diff_high = _mm256_sub_ps(value, high);
+          sums[r][0] = _mm256_fmadd_ps(diff_low, diff_low, sums[r][0]);
+          sums[r][1] = _mm256_fmadd_ps(diff_high, diff_high, sums[r][1]);
+        }
+      }
+      for (std::size_t r = 0; r < Rows; ++r) {
+        if (metric == CDistMetric::kEuclidean) {
+          sums[r][0] = _mm256_sqrt_ps(sums[r][0]);
+          sums[r][1] = _mm256_sqrt_ps(sums[r][1]);
+        }
+        float *output = c + (row + r) * k + col;
+        if (columns == columns_per_tile) {
+          _mm256_storeu_ps(output, sums[r][0]);
+          _mm256_storeu_ps(output + 8, sums[r][1]);
+        } else {
+          float tail[columns_per_tile];
+          _mm256_storeu_ps(tail, sums[r][0]);
+          _mm256_storeu_ps(tail + 8, sums[r][1]);
+          std::copy_n(tail, columns, output);
+        }
+      }
+    };
+    std::size_t row = row_begin;
+    for (; row + 4 <= row_end; row += 4) {
+      compute.template operator()<4>(row);
+    }
+    for (; row < row_end; ++row) {
+      compute.template operator()<1>(row);
+    }
+  }
+}
+
 template <typename T, typename Vector, std::size_t Lanes, typename Load, typename Sub,
           typename MultiplyAdd>
 void CDistRows(const T *a, const T *b, T *c, std::size_t k, std::size_t n, CDistMetric metric,
@@ -125,6 +185,10 @@ void CDistFloat64Rows_AVX2_FMA(const double *a, const double *b, double *c, std:
 void CDistFloat32PackedRows_AVX2_FMA(const float *a, const float *b, float *c, std::size_t k,
                                      std::size_t n, CDistMetric metric, std::size_t row_begin,
                                      std::size_t row_end) {
+  if (CDistUsePackedRows<8>(row_end - row_begin, k, n) && k >= 32 && n >= 32) {
+    CDistFloat32WidePackedRows(a, b, c, k, n, metric, row_begin, row_end);
+    return;
+  }
   if (CDistPackedRows<float, __m256, 8>(
           a, b, c, k, n, metric, row_begin, row_end, _mm256_setzero_ps(),
           [](const float *p) { return _mm256_loadu_ps(p); },
