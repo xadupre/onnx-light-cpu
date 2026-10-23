@@ -110,7 +110,7 @@ jobs:
 
       - name: Build and install onnx-light
         run: |
-          git clone --depth 1 --branch main \
+          git clone --depth 1 --branch 0.2.0 \
             https://github.com/xadupre/onnx-light.git \
             "${RUNNER_TEMP}/onnx-light"
           cmake -S "${RUNNER_TEMP}/onnx-light" -B "${RUNNER_TEMP}/build-onnx-light" \
