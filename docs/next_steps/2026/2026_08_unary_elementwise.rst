@@ -241,7 +241,7 @@ AVX/AVX2). Other cost-model decisions remain unchanged.
 ``Abs`` also accepts ``memory.streaming_store_threshold_bytes``; zero disables
 non-temporal stores, while a positive value enables them for FP32 tensors at
 or above that total input size. AVX/AVX2 defaults to at least 16 MiB and requires
-the combined input and output to exceed the detected L3 cache. Unknown cache
+the combined input and output to reach the detected L3 cache capacity. Unknown cache
 topology keeps streaming opt-in, so a threshold measured on a small-cache host
 is not imposed on a large-cache processor. Streaming writes cover only complete
 aligned cache lines; prefixes and tails use ordinary stores, and each worker

@@ -121,10 +121,10 @@ const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX
     if (level >= SimdLevel::kAVX) {
       const std::size_t cache_bytes = CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 3, 0);
-      // Keep cached stores when the input and output fit in the last-level
-      // cache. Unknown cache topology retains the opt-in streaming policy.
+      // Keep cached stores below last-level cache capacity; at capacity there
+      // is no room for other runtime data. Unknown topology keeps streaming opt-in.
       const std::size_t streaming_threshold =
-          cache_bytes == 0 ? 0 : std::max<std::size_t>(16 * 1024 * 1024, cache_bytes / 2 + 1);
+          cache_bytes == 0 ? 0 : std::max<std::size_t>(16 * 1024 * 1024, cache_bytes / 2);
       return AbsFloat32Dispatch{&AbsFloat32_AVX,
                                 &AbsFloat32_AVXStreaming,
                                 AbsComputeCycles(8),

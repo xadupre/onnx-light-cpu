@@ -114,8 +114,8 @@ TEST(AbsFloat32, DefaultsRespectSelectedIsaAndCacheCapacity) {
     if (cache == 0) {
       EXPECT_EQ(tuning.streaming_store_threshold_bytes, 0);
     } else {
-      EXPECT_GE(tuning.streaming_store_threshold_bytes, 16 * 1024 * 1024);
-      EXPECT_GT(tuning.streaming_store_threshold_bytes, cache / 2);
+      EXPECT_EQ(tuning.streaming_store_threshold_bytes,
+                std::max<std::size_t>(16 * 1024 * 1024, cache / 2));
     }
   } else {
     EXPECT_EQ(tuning.target_block_bytes, 256 * 1024);
