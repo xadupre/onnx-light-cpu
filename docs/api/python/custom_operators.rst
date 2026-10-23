@@ -184,6 +184,7 @@ Each selected code is dequantized as ``(code - zero_point) * scale``.
 Negative indices wrap from the end; out-of-range indices produce zero
 embeddings, matching the `ONNX Runtime CPU implementation
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/quantization/gather_block_quantized.cc>`_.
+Older ORT releases, including 1.30, may instead reject out-of-range indices.
 The output shape is ``indices.shape + weights.shape[1:-1] + [D]``.
 
 Register with :func:`register_kernels_global` before creating evaluators,

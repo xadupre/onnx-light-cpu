@@ -229,6 +229,11 @@ TEST(GatherBlockQuantized, RuntimeExecutorAndNestedSerialExecution) {
   float small_output[2];
   GatherBlockQuantized(&small_data, indices, &small_scale, nullptr, small_output, {1, 1, 1, 1});
   EXPECT_EQ(state.calls, 1);
+  std::vector<float> huge_block_output(16);
+  GatherBlockQuantized(&small_data, indices, &small_scale, nullptr, huge_block_output.data(),
+                       {1, 1, 1, 8, 4, int64_t{1} << 62});
+  EXPECT_EQ(state.calls, 1);
+  EXPECT_EQ(huge_block_output, std::vector<float>(huge_block_output.size(), 2));
 }
 
 } // namespace

@@ -62,15 +62,25 @@ void RegisterTwoBitCase(std::vector<TestCase> &registry) {
     packed.insert(packed.end(), 9, 0x55);
     // Three groups occupy one byte per row; the fourth code is padding, not the next row.
     return IoData{{Tensor::FromUint8("data", {2, 9}, packed),
-                   Tensor::FromInt32("indices", {2, 2}, {1, -2, 2, -3}),
+                   Tensor::FromInt32("indices", {2, 2}, {1, -2, -1, 0}),
                    Tensor::FromFloat("scales", {2, 3}, {1, 2, 4, 0.5f, 1, 2}),
                    Tensor::FromUint8("zero_points", {2, 1}, {0xf9, 0xe4})},
-                  {Tensor::FromFloat(
-                      "output", {2, 2, 36},
-                      Runs({{16, 0.5f}, {16, 0}, {4, -2}, {16, 2}, {16, 2}, {4, 0}, {72, 0}}))}};
+                  {Tensor::FromFloat("output", {2, 2, 36},
+                                     Runs({{16, 0.5f},
+                                           {16, 0},
+                                           {4, -2},
+                                           {16, 2},
+                                           {16, 2},
+                                           {4, 0},
+                                           {16, 0.5f},
+                                           {16, 0},
+                                           {4, -2},
+                                           {16, 2},
+                                           {16, 2},
+                                           {4, 0}}))}};
   };
   Expect(registry, MakeGatherBlockQuantizedNode(2, true),
-         "test_cpu_gather_block_quantized_bits2_float_indices32_multidim_oob_padded_zp",
+         "test_cpu_gather_block_quantized_bits2_float_indices32_multidim_valid_negative_padded_zp",
          {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)}, build_data, "backend-test",
          bt_ns::TestCaseTag::AI_RT);
 }
@@ -100,15 +110,23 @@ void RegisterEightBitCase(std::vector<TestCase> &registry) {
     std::vector<std::uint8_t> packed(20, 130);
     packed.insert(packed.end(), 20, 126);
     return IoData{{Tensor::FromUint8("data", {2, 20}, packed),
-                   Tensor::FromInt64("indices", {5}, {1, 0, -1, 2, -3}),
+                   Tensor::FromInt64("indices", {5}, {1, 0, -1, -2, 1}),
                    Tensor::FromFloat("scales", {2, 2}, {1, 2, 0.5f, 4}),
                    Tensor::FromUint8("zero_points", {2, 2}, {127, 129, 125, 128})},
-                  {Tensor::FromFloat(
-                      "output", {5, 20},
-                      Runs({{16, 0.5f}, {4, -8}, {16, 3}, {4, 2}, {16, 0.5f}, {4, -8}, {40, 0}}))}};
+                  {Tensor::FromFloat("output", {5, 20},
+                                     Runs({{16, 0.5f},
+                                           {4, -8},
+                                           {16, 3},
+                                           {4, 2},
+                                           {16, 0.5f},
+                                           {4, -8},
+                                           {16, 3},
+                                           {4, 2},
+                                           {16, 0.5f},
+                                           {4, -8}}))}};
   };
   Expect(registry, MakeGatherBlockQuantizedNode(8, true),
-         "test_cpu_gather_block_quantized_bits8_float_indices64_negative_oob_partial_block",
+         "test_cpu_gather_block_quantized_bits8_float_indices64_valid_negative_partial_block",
          {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)}, build_data, "backend-test",
          bt_ns::TestCaseTag::AI_RT);
 }

@@ -104,7 +104,11 @@ class TestGatherBlockQuantized(ExtTestCase):
         _, dtypes = infer_pr_benchmark_selection(
             ["onnx_light_cpu/kernels/com_microsoft/gather_block_quantized_kernel.cc"],
             "",
-            [record for record in registered_kernels() if record.op_type == "GatherBlockQuantized"],
+            [
+                record
+                for record in registered_kernels()
+                if record.op_type == "GatherBlockQuantized"
+            ],
         )
         self.assertEqual(dtypes, ["uint8"])
         cases = collect_test_cases("GatherBlockQuantized", mode=TestMode.BENCHMARK)
@@ -151,7 +155,6 @@ class TestGatherBlockQuantized(ExtTestCase):
         for indices in (
             np.array(-1, dtype=np.int64),
             np.empty((2, 0), dtype=np.int64),
-            np.array([[-8, 7, np.iinfo(np.int64).min]], dtype=np.int64),
         ):
             with self.subTest(shape=indices.shape):
                 model = _embedding(indices_shape=indices.shape)
@@ -159,6 +162,12 @@ class TestGatherBlockQuantized(ExtTestCase):
                 np.testing.assert_array_equal(
                     _cpu(model).run(None, feeds)[0], _ort(model).run(None, feeds)[0]
                 )
+        indices = np.array([[-8, 7, np.iinfo(np.int64).min]], dtype=np.int64)
+        model = _embedding(indices_shape=indices.shape)
+        np.testing.assert_array_equal(
+            _cpu(model).run(None, {"input_ids": indices})[0],
+            np.zeros((1, 3, 256), dtype=np.float32),
+        )
 
     def test_rank_three_data(self):
         model = _embedding((7, 2, 17), quantize_axis=-1, block_size=16)
