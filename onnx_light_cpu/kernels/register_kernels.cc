@@ -10,6 +10,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/gather_block_quantized_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
@@ -227,6 +228,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterVariadicElementwiseKernels();
   RegisterMicrosoftKernels(implementation);
   RegisterMatMulNBitsKernel();
+  RegisterGatherBlockQuantizedKernel();
   RegisterMoEKernel();
   RegisterQMoEKernel();
 }

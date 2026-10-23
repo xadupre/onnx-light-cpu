@@ -23,6 +23,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
       {"BiasGelu", &RegisterCpuBiasGeluCases},
       {"CDist", &RegisterCpuCDistCases},
       {"CausalConvWithState", &RegisterCpuCausalConvWithStateCases},
+      {"GatherBlockQuantized", &RegisterCpuGatherBlockQuantizedCases},
       {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
       {"MultiHeadAttention", &RegisterCpuMultiHeadAttentionCases},
       {"LinearAttention", &RegisterCpuMicrosoftLinearAttentionCases},
