@@ -8,6 +8,7 @@ from tools.benchmark_cdist_parity import (
     measure_alternating,
     numerical_tolerance,
     parse_args,
+    run,
     summarize,
 )
 
@@ -84,3 +85,31 @@ def test_defaults_match_single_thread_reproducibility_contract():
     assert args.threads == 1
     assert args.warmup > 0
     assert args.enforce
+
+
+def test_numpy_feeds_and_explicit_spin_metadata():
+    report = run(
+        parse_args(
+            [
+                "--case",
+                "singleton",
+                "--case",
+                "empty_a",
+                "--repeat",
+                "1",
+                "--warmup",
+                "0",
+            ]
+        )
+    )
+
+    assert len(report["results"]) == 8
+    assert {row["dtype"] for row in report["results"]} == set(DTYPES)
+    assert {row["metric"] for row in report["results"]} == set(METRICS)
+    assert all(
+        len(row["cpu_samples_seconds"]) == len(row["ort_samples_seconds"]) == 1
+        for row in report["results"]
+    )
+    assert report["metadata"]["cpu_spin_policy"] == "park_immediately"
+    assert report["metadata"]["ort_intra_op_allow_spinning"] == "0"
+    assert report["metadata"]["ort_inter_op_allow_spinning"] == "0"

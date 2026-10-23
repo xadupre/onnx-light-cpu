@@ -474,10 +474,11 @@ wheel, ONNX Runtime 1.31.0 (build commit ``402979a``), and onnx-light-cpu
 before and with this change after. Both builds link the same onnx-light
 wheel libraries and use matching non-stable Python/nanobind ABIs.
 
-Each backend uses one intra-op thread (ORT inter-op threads: one, sequential
-execution); there are no worker threads to spin. The original benchmark CLI
-retains each runtime's default spin policy. Outputs are allocated by each
-session; CPU tensor feeds and ORT NumPy views reuse the registered input data.
+For the named-case CLI measurements below, each backend uses one intra-op
+thread (ORT inter-op threads: one, sequential execution); there are no worker
+threads to spin. That CLI retains each runtime's default spin policy, unlike
+the alternating parity driver described separately below. Outputs are allocated
+by each session; CPU tensor feeds and ORT NumPy views reuse the registered input data.
 Two invocations per build use 100 warmups and up to 1,000 repetitions, each
 phase bounded at one second. CPU phases precede ORT phases, with ORT sessions
 created afterwards. CPU phases retained 921–931 samples before and 1,000
@@ -545,7 +546,16 @@ Small shapes, double precision, scalar, and AVX-512 retain their existing paths.
 Existing runtime scheduling is unchanged.
 
 The alternating parity driver independently confirmed the one-thread win
-with random inputs and spinning disabled for both backends. A two-thread
+with random inputs and explicit non-spinning settings: CPU
+``spin_policy="park_immediately"`` and ORT
+``session.intra_op.allow_spinning="0"`` /
+``session.inter_op.allow_spinning="0"``. The driver records these settings
+separately as ``cpu_spin_policy``, ``ort_intra_op_allow_spinning``, and
+``ort_inter_op_allow_spinning``. Its current implementation passes the same
+NumPy arrays through each evaluator's public ``run`` API rather than constructing
+CPU tensors through a private binding. Those calls include each runtime's
+input adaptation overhead; the named-case CLI measurements above still use
+the registered tensor feeds. A two-thread
 diagnostic pinned to SMT siblings 0–1 remained slower than ORT: roughly
 2.28–2.30 ms before and 2.21–2.22 ms after, versus 0.94–1.02 ms ORT.
 This optimization does not resolve that pre-existing scheduling/SMT gap.

@@ -187,7 +187,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light.onnx_py._onnxpykernels import runtime
     from onnx_light_cpu import (
         __version__,
         clear_used_kernel_names,
@@ -198,6 +197,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     register_kernels()
+    cpu_spin_policy = "park_immediately"
+    ort_allow_spinning = "0"
     random = np.random.default_rng(args.seed)
     rows = []
     for case in CASES:
@@ -233,21 +234,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 model_bytes = model.SerializeToString()
                 feeds = {"A": a, "B": b}
-                cpu_feeds = {
-                    name: runtime.tensor_from_numpy(
-                        name,
-                        tensor_type,
-                        list(value.shape),
-                        value.view(np.uint8).ravel(),
-                        copy=False,
-                    )
-                    for name, value in feeds.items()
-                }
                 cpu = ReferenceEvaluator(
                     model_bytes,
                     cpu_execution={
                         "num_threads": args.threads,
-                        "spin_policy": "park_immediately",
+                        "spin_policy": cpu_spin_policy,
                     },
                 )
 
@@ -259,15 +250,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     options.enable_mem_pattern = True
                     options.enable_cpu_mem_arena = True
                     options.enable_profiling = enable_profiling
-                    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
-                    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+                    options.add_session_config_entry(
+                        "session.intra_op.allow_spinning", ort_allow_spinning
+                    )
+                    options.add_session_config_entry(
+                        "session.inter_op.allow_spinning", ort_allow_spinning
+                    )
                     return onnxruntime.InferenceSession(
                         current_model, sess_options=options, providers=["CPUExecutionProvider"]
                     )
 
                 ort = make_ort_session(False)
 
-                def cpu_run(session=cpu, current_feeds=cpu_feeds):
+                def cpu_run(session=cpu, current_feeds=feeds):
                     return session.run(None, current_feeds)[0]
 
                 def ort_run(session=ort, current_feeds=feeds):
@@ -352,13 +347,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "threads": args.threads,
             "simd_level": int(detect_simd_level()),
-            "spin_policy": "disabled for both runtimes",
+            "cpu_spin_policy": cpu_spin_policy,
+            "ort_intra_op_allow_spinning": ort_allow_spinning,
+            "ort_inter_op_allow_spinning": ort_allow_spinning,
             "ort_execution_mode": "sequential",
             "ort_inter_op_threads": 1,
             "allocator_policy": (
                 "default arenas and memory patterns; outputs allocated by session.run"
             ),
-            "input_policy": "CPU tensor views and ORT NumPy feeds share the same buffers",
+            "input_policy": "same NumPy buffers reused by both runtimes",
             "warmup": args.warmup,
             "repeat": args.repeat,
             "max_repeat_time": args.max_repeat_time,
