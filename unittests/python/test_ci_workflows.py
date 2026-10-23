@@ -20,6 +20,9 @@ _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml"
 )
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
 _DEPENDABOT_CONFIG = (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+_COVERAGE_WORKFLOW = (_ROOT / ".github" / "workflows" / "coverage_nightly.yml").read_text(
+    encoding="utf-8"
+)
 
 
 def test_documentation_build_is_linux_only():
@@ -202,7 +205,34 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert "0.1.19" not in source_job
 
 
-def test_cpp_coverage_is_carried_forward_between_weekly_runs():
+def test_coverage_runs_every_night_and_allows_manual_runs():
+    assert 'cron: "0 5 * * *"' in _COVERAGE_WORKFLOW
+    assert "workflow_dispatch:" in _COVERAGE_WORKFLOW
+    assert "check_recent_commit" not in _COVERAGE_WORKFLOW
+    assert 'os: ["ubuntu-latest", "ubuntu-24.04-arm"]' in _COVERAGE_WORKFLOW
+
+
+def test_nightly_coverage_measures_cpp_and_python_integration():
+    assert "repository: xadupre/onnx-light" in _COVERAGE_WORKFLOW
+    assert 'ref: "0.2.0"' in _COVERAGE_WORKFLOW
+    assert "PYTHONPATH: ${{ github.workspace }}" in _COVERAGE_WORKFLOW
+    assert "-DONNX_LIGHT_CPU_ENABLE_COVERAGE=ON" in _COVERAGE_WORKFLOW
+    assert "--cpp-tests --onnx-light-source" in _COVERAGE_WORKFLOW
+    assert "--cov=onnx_light_cpu" in _COVERAGE_WORKFLOW
+    assert "--cov-report=xml:python-coverage.xml" in _COVERAGE_WORKFLOW
+    assert "--cov-report=html:python-coverage-html" in _COVERAGE_WORKFLOW
+    assert "--cov-report=term-missing unittests" in _COVERAGE_WORKFLOW
+    assert "gcovr --root . build" in _COVERAGE_WORKFLOW
+    assert "--xml-pretty --output coverage.xml" in _COVERAGE_WORKFLOW
+    assert "Coverage report contains no measured lines." in _COVERAGE_WORKFLOW
+    for language, report in (("cpp", "coverage.xml"), ("python", "python-coverage.xml")):
+        assert f"name: {language}-coverage-${{{{ matrix.os }}}}" in _COVERAGE_WORKFLOW
+        assert f"files: {report}\n" in _COVERAGE_WORKFLOW
+    assert "flags: cpp\n" in _COVERAGE_WORKFLOW
+    assert "flags: python-${{ runner.os }}" in _COVERAGE_WORKFLOW
+
+
+def test_cpp_coverage_is_carried_forward_between_nightly_runs():
     assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
 
 
