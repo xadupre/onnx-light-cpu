@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,6 +27,53 @@ using ml_cpu_compute::BinaryBroadcastPlanCache;
 using BinaryDataType = ml_cpu_compute::DataType;
 using ml_cpu_compute::BinaryOperationDescriptor;
 using LoopFamily = ml_cpu_compute::BinaryBroadcastPlan::LoopFamily;
+
+TEST(BinaryBroadcastPlan, FloatGreaterContiguousAndRows) {
+  const std::array<float, 12> values{-std::numeric_limits<float>::infinity(),
+                                     -17.0f,
+                                     -1.0f,
+                                     -0.0f,
+                                     0.0f,
+                                     1.0f,
+                                     17.0f,
+                                     std::numeric_limits<float>::infinity(),
+                                     std::numeric_limits<float>::quiet_NaN(),
+                                     std::numeric_limits<float>::denorm_min(),
+                                     -std::numeric_limits<float>::denorm_min(),
+                                     2.0f};
+  BinaryOperationDescriptor descriptor("Greater", 13, {});
+  for (std::size_t count = 0; count <= 257; ++count) {
+    for (bool rows : {false, true}) {
+      const std::size_t row_count = rows ? 3 : 1;
+      const std::vector<std::int64_t> shape{static_cast<std::int64_t>(row_count),
+                                            static_cast<std::int64_t>(count)};
+      const std::vector<std::int64_t> right_shape{static_cast<std::int64_t>(count)};
+      // Offset the inputs and output to exercise unaligned loads and stores.
+      std::vector<float> left(row_count * count + 1), right(count + 1);
+      for (std::size_t i = 0; i < row_count * count; ++i) {
+        left[i + 1] = values[i % values.size()];
+      }
+      for (std::size_t i = 0; i < count; ++i) {
+        right[i + 1] = values[(i / values.size() + i) % values.size()];
+      }
+      for (bool swapped : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << count << " rows=" << rows << " swapped=" << swapped);
+        BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                 BinaryDataType::BOOL, swapped ? right_shape : shape,
+                                 swapped ? shape : right_shape);
+        std::vector<std::uint8_t> output(row_count * count + 2, 0xA5);
+        plan.Execute(swapped ? right.data() + 1 : left.data() + 1,
+                     swapped ? left.data() + 1 : right.data() + 1, output.data() + 1);
+        EXPECT_EQ(output.front(), 0xA5);
+        EXPECT_EQ(output.back(), 0xA5);
+        for (std::size_t i = 0; i < row_count * count; ++i) {
+          const float a = left[i + 1], b = right[i % count + 1];
+          EXPECT_EQ(output[i + 1], static_cast<std::uint8_t>(swapped ? b > a : a > b));
+        }
+      }
+    }
+  }
+}
 
 TEST(BinaryBroadcastPlan, IntegerImplementationDiagnostics) {
   const std::vector<std::int64_t> vector{33}, scalar{}, channel{3, 1}, tensor{2, 3, 33}, empty{0};

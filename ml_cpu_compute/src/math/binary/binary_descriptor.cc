@@ -2756,6 +2756,14 @@ BinaryOperationDescriptor::BinaryOperationDescriptor(std::string op_type,
       SelectBulk(manifest_.op, signature.left, adapter);
     }
     SelectAdditionalBulk(manifest_.op, signature.left, signature.right, attributes_, adapter);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+    if (manifest_.op == BinaryOperator::kGreater && signature.left == DT::FLOAT) {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        adapter.bulk_contiguous = &BulkFloatGreater_AVX2;
+      }
+    }
+#endif
     if (signature.left == DT::INT64) {
       SelectCompare64Bulk<std::int64_t>(manifest_.op, adapter);
     } else if (signature.left == DT::UINT64) {
