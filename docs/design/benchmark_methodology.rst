@@ -455,7 +455,7 @@ machine. Retain existing dispatch and scalar tails until a representative
 end-to-end benchmark demonstrates a repeatable improvement.
 
 CDist AVX2 output tiling (October 23, 2026)
-------------------------------------------
+-------------------------------------------
 
 Measurement layer: **steady-state end-to-end**, addressing issue #987.
 The two unchanged registered cases
