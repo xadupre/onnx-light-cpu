@@ -1,6 +1,6 @@
 """
 Packed embedding gather against ONNX Runtime
-===========================================
+============================================
 
 Compare ``com.microsoft::GatherBlockQuantized`` on packed 2-, 4-, and 8-bit
 embedding tables. The C++ backend fixtures retain packed weights: neither
