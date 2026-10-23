@@ -2,7 +2,7 @@ Binary Elementwise Performance Follow-up
 =========================================
 
 :Date: 2026-08
-:Updated: 2026-09-08
+:Updated: 2026-10-23
 
 **complete**
 
@@ -71,6 +71,114 @@ measurements showed no improvement.
    python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
        --test '^test_cpu_pow_v15_(outer_float32xfloat32_to_float32_swapped|per_channel_float32xfloat32_to_float32)_n1048576_benchmark$' \
        --threads 96 -r 100 -w 30 -t 0.5 -o pow-broadcast.xlsx
+
+FP32 GreaterOrEqual AVX2 follow-up (#996)
+----------------------------------------
+
+The FP32 adapter previously used the baseline-ISA compiler-generated bulk
+loop. GCC 13.3 generated SSE comparisons with a long unpack sequence to
+produce boolean bytes. The new path reuses the existing AVX2 ``Greater``
+packing loop: four eight-float comparisons, saturating packs, a lane-order
+permutation, and one 32-byte store. Ordered ``>=`` preserves NaN semantics;
+both scalar-broadcast directions broadcast once per range. Runtime scheduling,
+other types, general broadcasting, and the portable fallback are unchanged.
+Dispatch assertions and disassembly confirmed the AVX2 path, including
+``vcmpge_oqps`` and ``vpermd``. Hardware-counter profiling was unavailable
+(``perf_event_paranoid=4``); this is disassembly and end-to-end timing evidence,
+not a hardware-counter attribution.
+
+Environment: AMD EPYC 7763 VM, two physical cores / four logical CPUs, Linux
+x86-64, AVX2 (SIMD level 3); GCC 13.3, CMake Release (``-O3 -DNDEBUG``),
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``. Baseline: onnx-light-cpu 0.2.0,
+``91ce5e37016a5db17279847b86e63b71e475e0d5`` (code based on main
+``b3fc52ef3c52f0378b56664e4c11c02837c07e2c``). Both measurements link the
+onnx-light 0.2.0 release wheel (tag commit
+``6400f0f812b13bc32469e405bd2f762ba3cba7f0``), with Python 3.13 and matching
+non-stable nanobind ABI. ORT is the CPU wheel 1.31.0, Release, build commit
+``402979a``. This differs from the issue's global onnx-light 0.2.1 metadata.
+
+The original named backend cases and inputs were used without changes.
+Every run used 200 warm-ups and 1,000 measured calls per backend (5 s cap,
+not reached), three trials, native tensor feeds for CPU and NumPy feeds for
+ORT. Both backends had the same explicit thread limit, no worker pinning,
+and unchanged default spin settings: adaptive for onnx-light, enabled for ORT.
+ORT used sequential graph execution and one inter-op thread. One-thread
+processes were restricted to CPU 0; two-thread processes to CPUs 0-3.
+
+The existing benchmark CLI, which times CPU before creating the ORT session,
+did **not** consistently reproduce the published ORT advantage. Its median
+before/after CPU gains were 1.29x / 1.31x for contiguous / swapped contiguous
+and 2.01x for scalar-left at one thread; 1.16x / 1.08x / 1.76x at two threads.
+For example (the CLI dtype filter selects the boolean output):
+
+.. code-block:: bash
+
+   taskset -c 0 python -m onnx_light_cpu benchmark --threads 1 \
+       --tests '^test_cpu_greaterorequal_v16_(contiguous_float32xfloat32_to_bool(_swapped)?_n4194304|right_scalar_float32xfloat32_to_bool_swapped_n1048576)_benchmark$' \
+       --dtypes bool -r 1000 -w 200 -t 5 --onnxruntime -o /tmp/greaterorequal.xlsx
+
+An additional comparison used ``measure_alternating`` from
+``tools/benchmark_binary_parity.py`` with those same warm-up/repetition limits,
+sessions and feeds. Both sessions were created before timing, and backend
+order reversed every iteration. Baseline dispatch was restored for the before
+measurement, then the AVX2 registration was re-enabled for the after
+measurement. With both pools active, the two-thread baseline showed an ORT
+advantage in all three trials for all three cases.
+
+Below are medians of the three trial medians, in milliseconds.
+All case names have prefix ``test_cpu_greaterorequal_v16_`` and suffix
+``_benchmark``:
+
+* A: ``contiguous_float32xfloat32_to_bool_n4194304``.
+* B: ``right_scalar_float32xfloat32_to_bool_swapped_n1048576`` (scalar left).
+* C: ``contiguous_float32xfloat32_to_bool_swapped_n4194304``.
+
+.. list-table:: Alternating backend measurements (ms)
+   :header-rows: 1
+
+   * - Case / threads
+     - CPU before
+     - CPU after
+     - ORT before
+     - ORT after
+   * - A / 1
+     - 1.362993
+     - 1.138686
+     - 1.384113
+     - 1.385538
+   * - B / 1
+     - 0.157285
+     - 0.078908
+     - 0.159294
+     - 0.153147
+   * - C / 1
+     - 1.341067
+     - 1.142744
+     - 1.384046
+     - 1.315162
+   * - A / 2
+     - 1.155082
+     - 0.966794
+     - 0.998498
+     - 1.008897
+   * - B / 2
+     - 0.172895
+     - 0.082750
+     - 0.118428
+     - 0.108583
+   * - C / 2
+     - 1.149933
+     - 1.055295
+     - 0.973497
+     - 1.087200
+
+The large two-thread cases remain noisy: after-trial CPU medians ranged
+0.904963-1.109556 ms for A and 1.044899-1.287495 ms for C. ORT still won one
+of C's three after trials. These results support a faster implementation,
+not a universal parity claim or an exact reproduction of the dashboard's
+latencies (whose per-case thread/spin/build settings are unknown).
+The 17 float32 GreaterOrEqual backend cases, including these three benchmark
+inputs, matched onnx-light's built-in kernels exactly at one and two threads.
 
 Integer arithmetic and 64-bit comparisons
 -----------------------------------------

@@ -693,6 +693,75 @@ TEST(BinaryOperationDescriptor, BFloat16DivBulkPreservesScalarSemanticsTailsAndA
   }
 }
 
+TEST(BinaryOperationDescriptor, FloatComparisonBulkPreservesIeeeSemanticsAndTails) {
+  constexpr std::array<float, 13> values = {
+      0.0f,
+      -0.0f,
+      1.0f,
+      -1.0f,
+      2.0f,
+      -3.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::min(),
+      -std::numeric_limits<float>::min(),
+      std::numeric_limits<float>::denorm_min(),
+      -std::numeric_limits<float>::denorm_min(),
+  };
+  for (const auto *op : {"Greater", "GreaterOrEqual"}) {
+    const BinaryOperationDescriptor descriptor(op, 16, {});
+    const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                                    BinaryDataType::BOOL);
+    ASSERT_NE(adapter.bulk_contiguous, nullptr);
+    ASSERT_NE(adapter.bulk_left_scalar, nullptr);
+    ASSERT_NE(adapter.bulk_right_scalar, nullptr);
+    if (descriptor.op() == BinaryOperator::kGreaterOrEqual) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+      if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
+        EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkFloatGreaterOrEqual_AVX2);
+        EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkFloatGreaterOrEqualLeft_AVX2);
+        EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkFloatGreaterOrEqualRight_AVX2);
+      }
+#endif
+    }
+    adapter.bulk_contiguous(nullptr, nullptr, nullptr, 0);
+    adapter.bulk_left_scalar(nullptr, nullptr, nullptr, 0);
+    adapter.bulk_right_scalar(nullptr, nullptr, nullptr, 0);
+    for (std::size_t count = 0; count <= 97; ++count) {
+      SCOPED_TRACE(::testing::Message() << op << " count=" << count);
+      // Offset inputs and output to exercise unaligned loads and stores.
+      std::vector<float> left(count + 1), right(count + 1);
+      for (std::size_t i = 0; i < count; ++i) {
+        left[i + 1] = values[i % values.size()];
+        right[i + 1] = values[(i * 7 + 3) % values.size()];
+      }
+      constexpr std::uint8_t sentinel = 0xA5;
+      std::vector<std::uint8_t> output(count + 2, sentinel);
+      const auto check = [&](const float *a, const float *b, bool left_scalar, bool right_scalar) {
+        EXPECT_EQ(output.front(), sentinel);
+        EXPECT_EQ(output.back(), sentinel);
+        for (std::size_t i = 0; i < count; ++i) {
+          std::uint8_t expected;
+          adapter.scalar(a + (left_scalar ? 0 : i), b + (right_scalar ? 0 : i), &expected);
+          EXPECT_EQ(output[i + 1], expected) << i;
+        }
+        std::fill(output.begin(), output.end(), sentinel);
+      };
+      adapter.bulk_contiguous(left.data() + 1, right.data() + 1, output.data() + 1, count);
+      check(left.data() + 1, right.data() + 1, false, false);
+      adapter.bulk_contiguous(right.data() + 1, left.data() + 1, output.data() + 1, count);
+      check(right.data() + 1, left.data() + 1, false, false);
+      for (const float scalar : values) {
+        adapter.bulk_left_scalar(&scalar, right.data() + 1, output.data() + 1, count);
+        check(&scalar, right.data() + 1, true, false);
+        adapter.bulk_right_scalar(left.data() + 1, &scalar, output.data() + 1, count);
+        check(left.data() + 1, &scalar, false, true);
+      }
+    }
+  }
+}
+
 TEST(BinaryOperationDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails) {
   struct ComparisonCase {
     const char *name;
