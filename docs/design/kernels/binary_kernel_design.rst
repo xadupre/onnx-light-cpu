@@ -111,7 +111,7 @@ existing implementations. Dispatch is resolved at descriptor construction, not
 inside each row, and scheduling is unchanged.
 
 Issue #998 measurements (2026-10-23)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Host: AMD EPYC 7763, Linux x86-64 VM exposing four logical CPUs (two cores,
 two threads per core), process affinity CPUs 0-3. GCC 13.3.0 Release build,
