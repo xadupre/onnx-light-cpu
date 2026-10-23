@@ -195,6 +195,9 @@ class TestGatherBlockQuantized(ExtTestCase):
         model = _embedding(indices_shape=("batch", "sequence"))
         output = model.graph.output[0]
         output.type.tensor_type.ClearField("shape")
+        from onnx_light_cpu import register_operator_support
+
+        register_operator_support()
         builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
         result = builder.to_onnx().graph.output[0]
         self.assertEqual(
