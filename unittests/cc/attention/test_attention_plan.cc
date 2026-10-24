@@ -1704,6 +1704,105 @@ std::vector<float> FromBFloat16(const std::vector<std::uint16_t> &values) {
 
 } // namespace half_precision
 
+TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
+  for (const auto &[q_len, kv_len, dim, vdim] :
+       {std::tuple{7, 17, 16, 16}, std::tuple{8, 17, 16, 16}, std::tuple{8, 0, 64, 64},
+        std::tuple{8, 1, 64, 64}, std::tuple{8, 513, 64, 63}, std::tuple{15, 512, 63, 65},
+        std::tuple{16, 511, 64, 64}, std::tuple{17, 33, 17, 17}, std::tuple{8, 17, 15, 16},
+        std::tuple{8, 17, 16, 15}, std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
+        std::tuple{129, 17, 64, 256}, std::tuple{128, 17, 64, 64}, std::tuple{128, 17, 64, 65}}) {
+    for (const bool rank3 : {false, true}) {
+      for (int mode = 0; mode < 4; ++mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << "q=" << q_len << " kv=" << kv_len << " d=" << dim << " vd=" << vdim
+                     << " rank3=" << rank3 << " mode=" << mode);
+        AttentionDescriptor descriptor;
+        descriptor.opset = 24;
+        descriptor.q_num_heads = 2;
+        descriptor.kv_num_heads = 1;
+        descriptor.is_causal = mode == 1;
+        descriptor.has_nonpad_kv_seqlen = mode == 1;
+        const std::vector<std::int64_t> qs = rank3 ? std::vector<std::int64_t>{2, q_len, 2 * dim}
+                                                   : std::vector<std::int64_t>{2, 2, q_len, dim};
+        const std::vector<std::int64_t> ks = rank3 ? std::vector<std::int64_t>{2, kv_len, dim}
+                                                   : std::vector<std::int64_t>{2, 1, kv_len, dim};
+        const std::vector<std::int64_t> vs = rank3 ? std::vector<std::int64_t>{2, kv_len, vdim}
+                                                   : std::vector<std::int64_t>{2, 1, kv_len, vdim};
+        const auto kind = mode == 2   ? AttentionMaskKind::kBoolean
+                          : mode == 3 ? AttentionMaskKind::kAdditive
+                                      : AttentionMaskKind::kNone;
+        const std::vector<std::int64_t> ms =
+            mode >= 2 ? std::vector<std::int64_t>{q_len, kv_len} : std::vector<std::int64_t>{};
+        const AttentionPlan plan(descriptor,
+                                 rank3 ? AttentionLayout::kRank3 : AttentionLayout::kRank4, qs, ks,
+                                 vs, ms, kind);
+        const auto q16 = half_precision::ToFloat16(RandomTensor(4 * q_len * dim, 1981));
+        const auto k16 = half_precision::ToFloat16(RandomTensor(2 * kv_len * dim, 1982));
+        const auto v16 = half_precision::ToFloat16(RandomTensor(2 * kv_len * vdim, 1983));
+        const auto q = half_precision::FromFloat16(q16);
+        const auto k = half_precision::FromFloat16(k16);
+        const auto v = half_precision::FromFloat16(v16);
+        std::vector<std::uint8_t> boolean(q_len * kv_len, 1);
+        std::vector<float> additive(q_len * kv_len, 0.2f);
+        for (std::size_t index = 0; index < boolean.size(); ++index) {
+          // Include a fully masked query and mixed noncanonical true bytes.
+          boolean[index] = index < static_cast<std::size_t>(kv_len) || index % 5 == 0 ? 0 : 128;
+          if (boolean[index] == 0) {
+            additive[index] = -std::numeric_limits<float>::infinity();
+          }
+        }
+        const void *mask = mode == 2   ? static_cast<const void *>(boolean.data())
+                           : mode == 3 ? static_cast<const void *>(additive.data())
+                                       : nullptr;
+        const std::int64_t lengths[] = {0, std::max(kv_len - 1, 0)};
+        const auto *nonpad = mode == 1 ? lengths : nullptr;
+        std::vector<float> expected(4 * q_len * vdim), actual(expected.size());
+        ml_cpu_compute::ComputeAttentionFloat32Materialized(
+            plan, q.data(), k.data(), v.data(), mask, expected.data(), nullptr, nullptr, nonpad);
+        ml_cpu_compute::AttentionExecutionInfo info;
+        InlineExecutor executor;
+        ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+        {
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask, actual.data(),
+                                           nullptr, nullptr, nonpad, &info);
+        }
+        EXPECT_FALSE(executor.nested);
+        if (q_len == 8 && kv_len == 513) {
+          EXPECT_GT(executor.maximum_blocks, 1);
+        }
+        if (!rank3 && q_len == 8 && kv_len == 17 && dim == 16 && vdim == 16) {
+          EXPECT_EQ(executor.dispatches, 0);
+        }
+        ExpectClose(actual, expected, 2e-5f);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+        if (ml_cpu_compute::DetectSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+            ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
+            dim <= 256 && vdim >= 16 && vdim <= 256) {
+          EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        }
+#endif
+        std::vector<std::uint16_t> actual16(expected.size());
+        executor = {};
+        {
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask,
+                                           actual16.data(), nullptr, nullptr, nonpad, &info);
+        }
+        EXPECT_FALSE(executor.nested);
+        ExpectClose(half_precision::FromFloat16(actual16), expected, 1e-3f);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+        if (ml_cpu_compute::DetectSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+            ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
+            dim <= 256 && vdim >= 16 && vdim <= 256) {
+          EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        }
+#endif
+      }
+    }
+  }
+}
+
 // Roadmap PR14: the FP16 streaming path rounds Q/K/V once on the way in and
 // Y once on the way out, but performs the score/softmax/P@V recurrence in
 // FP32 throughout. Round-tripping the same FP16-representable inputs through
