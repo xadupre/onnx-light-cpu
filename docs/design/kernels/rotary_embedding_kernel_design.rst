@@ -1,5 +1,5 @@
 RotaryEmbedding
-==============
+===============
 
 Both ``ai.onnx::RotaryEmbedding`` and ``com.microsoft::RotaryEmbedding`` use
 the same validated adapter. Split-half FLOAT heads use eight-pair AVX
@@ -17,7 +17,7 @@ indexing, rank-three/rank-four layouts, and runtime-owned row scheduling are
 unchanged. No temporary tensor or worker allocation is introduced.
 
 AVX2 investigation, 2026-10-23
------------------------------
+------------------------------
 
 The four cases from issue #977 reproduced a repeatable gap on an AMD EPYC
 9V74 80-Core Processor VM (four visible logical CPUs, two physical cores).
