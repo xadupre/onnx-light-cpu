@@ -630,6 +630,65 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
   }
 }
 
+TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds) {
+  constexpr std::size_t kFeatures = 4096;
+  constexpr std::size_t kBatchRows = 16;
+  constexpr float kSentinel = -42.0F;
+  for (auto attributes : {StumpForest(17, 1), BalancedForest(17)}) {
+    attributes.n_features = kFeatures;
+    attributes.value_type = DataType::FLOAT;
+    for (std::size_t node = 0; node < attributes.nodes_featureids.size(); ++node) {
+      attributes.nodes_featureids[node] = node % 2 == 0 ? 0 : kFeatures - 1;
+    }
+    const TreeEnsembleOracle oracle(attributes);
+    for (const auto strategy : {TreeEnsembleExecutionStrategy::kRowParallel,
+                                TreeEnsembleExecutionStrategy::kTreeMajorBatch}) {
+      const auto policy = OneRegionPolicy(strategy, 2, 1, kBatchRows);
+      TreeEnsemblePlan plan(attributes, 2, policy);
+      plan.CompactRuntimeStorage();
+      for (std::size_t rows = 0; rows <= 33; ++rows) {
+        SCOPED_TRACE(::testing::Message() << "rows=" << rows << " depth=" << plan.max_depth()
+                                          << " strategy=" << static_cast<int>(strategy));
+        std::vector<float> input(rows * kFeatures);
+        const float values[] = {-std::numeric_limits<float>::infinity(),
+                                -0.5F,
+                                -0.0F,
+                                0.0F,
+                                0.5F,
+                                std::numeric_limits<float>::infinity(),
+                                std::numeric_limits<float>::quiet_NaN()};
+        for (std::size_t row = 0; row < rows; ++row) {
+          input[row * kFeatures] = values[row % 7];
+          input[row * kFeatures + kFeatures - 1] = values[(row + 3) % 7];
+        }
+        const std::vector<double> reference_input(input.begin(), input.end());
+        const auto expected = oracle.Evaluate(reference_input, rows);
+        std::vector<float> actual(rows + 2, kSentinel);
+        ThreadedExecutor executor;
+        ml_cpu_compute::ExecutionExecutorView view{&executor, 2, &ThreadedExecutor::Run};
+        ml_cpu_compute::ExecutionExecutorScope scope(&view);
+        if (rows != 0) {
+          const auto decision = plan.SelectExecution(rows);
+          ASSERT_EQ(decision.strategy, strategy);
+          ASSERT_EQ(decision.batch_rows, std::min(rows, kBatchRows));
+        }
+        plan.EvaluateInto(rows == 0 ? nullptr : input.data(), input.size(), rows,
+                          actual.data() + 1);
+        if (strategy == TreeEnsembleExecutionStrategy::kRowParallel && rows > kBatchRows) {
+          EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        } else if (strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch) {
+          EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        }
+        EXPECT_EQ(actual.front(), kSentinel);
+        EXPECT_EQ(actual.back(), kSentinel);
+        for (std::size_t row = 0; row < rows; ++row) {
+          EXPECT_FLOAT_EQ(actual[row + 1], static_cast<float>(expected[row])) << row;
+        }
+      }
+    }
+  }
+}
+
 TEST(TreeEnsembleOracle, SingleRowBalancedFloatKeepsBaseInsideTreeReduction) {
   auto attributes = StumpForest(2, 1);
   attributes.base_values = {16777216.0};
