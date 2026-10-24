@@ -392,3 +392,96 @@ spinning, and ``measure_alternating`` with the same repetition settings.
 The existing benchmark CLI can also select these eight cases directly, but
 uses separate backend phases and default spin policies rather than this
 controlled alternating procedure.
+
+Bool And on AVX2
+----------------
+
+``And`` also resolves contiguous and left/right-scalar AVX2 callbacks once at
+descriptor construction. Each 32-byte vector compares both inputs against zero,
+ORs the zero masks, then uses AND-NOT with ones to produce canonical BOOL bytes.
+A bitwise AND of the input bytes would be incorrect for noncanonical true values
+such as 2 and 128. A false broadcast scalar fills the output with zeros without
+reading the vector; a true scalar normalizes the vector. Empty ranges return
+before reading either input. Unaligned buffers, scalar tails, and exact
+vector/output aliasing are supported. The portable callbacks, broadcast
+traversal, executor scheduling, and tuning thresholds are unchanged.
+
+Issue #975 measurements (2026-10-24)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Host: AMD EPYC 7763 64-Core Processor, Linux x86-64 VM exposing four logical
+CPUs (two cores, two threads per core), process affinity CPUs 0-3. GCC 13.3.0
+Release build with ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2`` (runtime level 3).
+Baseline source: ``766dc0c0f3ead8d8d29d9ed6021fa8724bfcab0c``; optimized
+source: ``4c1aa6f``. Both builds used the same AVX2 ceiling and compiler flags.
+The baseline additionally registered the eight historical And benchmark shapes,
+without changing their input generation or any computation.
+Dependencies: released Linux CPython 3.13 wheels for onnx-light 0.2.0 and
+ONNX Runtime 1.31.0, NumPy 2.5.4. Dependency build commits were unavailable.
+Neither these dependencies nor this processor are attributed to the older
+dashboard measurements.
+
+The cases have exactly the eight shapes and element counts in the issue #974
+shape table above, with prefix ``test_cpu_and_v7_`` instead of
+``test_cpu_or_v7_``. Both runtimes used explicit thread limits of 1 or 4, no
+worker affinity, and disabled spinning (onnx-light ``park_immediately``, both
+ORT ``allow_spinning`` settings zero). ORT used sequential graph execution and
+one inter-op thread. Three campaigns each used 200 warm-up calls and 1,000
+timed calls per backend, alternating backend order on every iteration, with a
+five-second cumulative per-backend limit (not reached). Native backend tensors
+fed onnx-light-cpu; NumPy views fed ORT. Kernel recording confirmed
+``onnx_light_cpu::And`` and was disabled during timing. Outputs matched ORT
+exactly before and after, and optimized outputs also matched built-in
+onnx-light sessions run before registering the accelerated kernels.
+
+Median of the three campaign medians, milliseconds:
+
+======================= ======= ========== ========== ========= =========
+Case                    Threads CPU before ORT before CPU after ORT after
+======================= ======= ========== ========== ========= =========
+repeated_block_4d_large  1       0.181157   0.110245   0.107039  0.106454
+repeated_block_4d        1       0.015775   0.016606   0.013295  0.016090
+inner_vector_4d_large    1       0.558665   0.980333   0.500377  0.990087
+general_5d              1       0.683117   0.992628   0.584904  0.997326
+inner_vector_4d          1       0.147024   0.256448   0.127973  0.254033
+contiguous_3d            1       0.013159   0.015970   0.013836  0.016360
+contiguous_4d            1       0.012904   0.015339   0.013546  0.016190
+contiguous_2d            1       0.011266   0.013736   0.011401  0.014066
+repeated_block_4d_large  4       0.159327   0.099761   0.109760  0.102686
+repeated_block_4d        4       0.015749   0.016105   0.013185  0.016075
+inner_vector_4d_large    4       0.340153   0.552188   0.298546  0.558806
+general_5d              4       0.399198   0.563108   0.337168  0.572546
+inner_vector_4d          4       0.114944   0.179800   0.104660  0.178728
+contiguous_3d            4       0.013290   0.016200   0.012744  0.015599
+contiguous_4d            4       0.012929   0.015619   0.012653  0.015504
+contiguous_2d            4       0.011126   0.013886   0.011121  0.013846
+======================= ======= ========== ========== ========= =========
+
+Only the largest repeated-block gap reproduced: ORT led by 1.64x with one thread
+and 1.60x with four. CPU latency improved by 1.69x and 1.45x, respectively.
+The residual ORT advantage is approximately 1% and 7%, not a universal win.
+Optimized campaign medians for this case ranged from 0.106198 to 0.107260 ms
+(one thread) and 0.109424 to 0.111788 ms (four threads). The other seven
+historical gaps did not reproduce, even before this change. The other broadcast
+cases improved by 1.10-1.19x. Small contiguous cases changed by approximately
+-4% to +5% in latency, including single-thread regressions; no decisive
+improvement is claimed for them. All seven remain faster than ORT.
+These results do not explain the older campaign's unknown processor or build
+provenance. A later timing attempt overlapped lingering CodeQL extraction after
+its tool timeout; it slowed both backends and was discarded, not included here.
+
+Hardware-counter profiling was unavailable (``perf_event_paranoid=4``).
+Assembly inspection showed baseline 16-byte SSE loops with repeated
+scalar-broadcast comparisons. The optimized callbacks use 32-byte AVX2
+``vpcmpeqb``, ``vpor``, and ``vpandn``; false scalar blocks take the zero-fill
+path. Dispatch-pointer assertions confirm the intended callbacks ran.
+No broadcast expansion or allocation was moved out of the timed workload.
+
+To reproduce, use the issue #998 timing procedure with this selector::
+
+   ^test_cpu_and_v7_(repeated_block_4d|inner_vector_4d|general_5d|contiguous_[234]d).*_benchmark$
+
+Use the explicit no-spin policies above, thread limits 1 and 4, and
+``measure_alternating(repeat=1000, warmup=200, max_repeat_time=5)`` three times.
+The existing benchmark CLI also selects these cases, but uses separate backend
+phases and default spin policies rather than the controlled alternating loop.
