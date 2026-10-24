@@ -29,6 +29,36 @@ def test_documentation_build_is_linux_only():
     assert "PYTHONPATH: ${{ github.workspace }}" in _DOCS_WORKFLOW
 
 
+def test_documentation_runs_weekly_outside_regular_ci():
+    triggers = _DOCS_WORKFLOW.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+    assert "  workflow_dispatch:\n" in triggers
+    assert "  schedule:\n" in triggers
+    assert triggers.count("- cron:") == 1
+    assert '- cron: "0 6 * * 1"' in triggers
+    assert "  push:" not in triggers
+    assert "  pull_request:" not in triggers
+    assert "  workflow_call:" not in triggers
+
+
+def test_documentation_failures_open_an_issue_with_a_run_link():
+    build_job, report_job = _DOCS_WORKFLOW.split("  report_failure:\n", 1)
+    assert "issues: write" not in build_job
+    assert "    needs: ci-core-night-doc\n" in report_job
+    assert (
+        "    if: ${{ failure() && needs.ci-core-night-doc.result == 'failure' }}\n" in report_job
+    )
+    assert "      issues: write\n" in report_job
+    assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in report_job
+    assert "GH_REPO: ${{ github.repository }}" in report_job
+    assert (
+        "DOCS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}"
+        "/actions/runs/${{ github.run_id }}" in report_job
+    )
+    assert "gh issue create" in report_job
+    assert '--title "Documentation build failed"' in report_job
+    assert '--body "The documentation build failed. See ${DOCS_RUN_URL} for logs."' in report_job
+
+
 def test_pixi_environment_cache_requires_an_existing_lockfile():
     setup = _PIXI_WORKFLOW.split("      - name: Set up pixi", 1)[1].split(
         "      - name: Show pixi info", 1
