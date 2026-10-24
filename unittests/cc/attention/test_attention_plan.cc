@@ -7,6 +7,10 @@
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+#include "ml_cpu_compute/attention/avx2/attention_avx2_fma.h"
+#endif
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1703,6 +1707,75 @@ std::vector<float> FromBFloat16(const std::vector<std::uint16_t> &values) {
 }
 
 } // namespace half_precision
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveMaskedNonfiniteValues) {
+  for (const std::int64_t rows : {8, 16}) {
+    if (rows == 16) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+      if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+          !ml_cpu_compute::CpuSupportsFma()) {
+        continue;
+      }
+#else
+      continue;
+#endif
+    }
+    const std::int64_t qs[] = {1, 1, rows, 64};
+    const std::int64_t kvs[] = {1, 1, 17, 64};
+    const std::int64_t ms[] = {17};
+    const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, ms,
+                             AttentionMaskKind::kBoolean);
+    const std::vector<float> q(rows * 64, 0.0f), k(17 * 64, 0.0f);
+    std::vector<float> v(17 * 64, 1.0f), actual(q.size());
+    v[64] = std::numeric_limits<float>::quiet_NaN();
+    v[128] = std::numeric_limits<float>::infinity();
+    v[192] = -std::numeric_limits<float>::infinity();
+    std::vector<std::uint8_t> mask(17, 0);
+    const auto q16 = half_precision::ToFloat16(q);
+    const auto k16 = half_precision::ToFloat16(k);
+    const auto v16 = half_precision::ToFloat16(v);
+    std::vector<std::uint16_t> actual16(actual.size());
+    for (const std::uint8_t allowed : {0, 1}) {
+      mask[0] = allowed;
+      if (rows == 8) {
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                         actual.data());
+        ExpectClose(actual, std::vector<float>(actual.size(), allowed));
+      }
+      ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                       actual16.data());
+      ExpectClose(half_precision::FromFloat16(actual16),
+                  std::vector<float>(actual.size(), allowed));
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, FiniteValueCheckHandlesEveryVectorTail) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is unavailable";
+  }
+  for (std::size_t count = 0; count <= 33; ++count) {
+    std::vector<float> values(count, -0.5f);
+    auto half = half_precision::ToFloat16(values);
+    EXPECT_TRUE(ml_cpu_compute::AttentionAllFiniteFloat32_AVX2_FMA(values.data(), count));
+    EXPECT_TRUE(ml_cpu_compute::AttentionAllFiniteFloat16_AVX2_FMA(half.data(), count));
+    for (std::size_t index = 0; index < count; ++index) {
+      for (const float special :
+           {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity()}) {
+        values[index] = special;
+        half[index] = ml_cpu_compute::detail::FloatToFloat16Bits(special);
+        EXPECT_FALSE(ml_cpu_compute::AttentionAllFiniteFloat32_AVX2_FMA(values.data(), count));
+        EXPECT_FALSE(ml_cpu_compute::AttentionAllFiniteFloat16_AVX2_FMA(half.data(), count));
+        values[index] = -0.5f;
+        half[index] = ml_cpu_compute::detail::FloatToFloat16Bits(-0.5f);
+      }
+    }
+  }
+#endif
+}
 
 TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
   for (const auto &[q_len, kv_len, dim, vdim] :

@@ -678,6 +678,33 @@ struct BFloat16Codec {
   static Storage Store(float value) noexcept { return detail::FloatToBFloat16Bits(value); }
 };
 
+template <typename Codec>
+bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec::Storage *v) {
+  if (!UseAvx2AttentionTiles(plan) || plan.q_length < 8 || plan.q_length > 16 ||
+      plan.past_length != 0 || plan.head_sink != nullptr) {
+    return false;
+  }
+  if constexpr (std::is_same_v<Codec, Float32Codec>) {
+    if (plan.q_length == 16) {
+      return false;
+    }
+  }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  const std::size_t count = CheckedProduct(
+      {plan.batch, plan.kv_num_heads, plan.kv_length, plan.v_head_dim}, "Attention", "value count");
+  // Streaming skips zero probabilities, including masked NaN/Inf values. A dense GEMM cannot
+  // preserve that behavior for nonfinite V, so keep those short queries on the existing path.
+  if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    return AttentionAllFiniteFloat16_AVX2_FMA(v, count);
+  } else {
+    return AttentionAllFiniteFloat32_AVX2_FMA(v, count);
+  }
+#else
+  (void)v;
+  return false;
+#endif
+}
+
 template <typename T>
 const T *PackRows(const T *source, std::size_t rows, std::size_t dimension, std::ptrdiff_t stride,
                   std::vector<T> &scratch) {
@@ -1855,9 +1882,9 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
   static const SimdLevel simd = DetectSimdLevel();
 #endif
+  const bool short_tiles = UseAvx2ShortAttentionTiles<Float32Codec>(plan, v);
   bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 &&
-                   plan.q_length >= (UseAvx2AttentionTiles(plan) ? 8 : 16) &&
-                   plan.total_kv_length != 0;
+                   plan.q_length >= (short_tiles ? 8 : 16) && plan.total_kv_length != 0;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
   use_tiled =
       use_tiled ||
@@ -1887,14 +1914,14 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
+  const bool short_tiles = UseAvx2ShortAttentionTiles<Float16Codec>(plan, v);
   bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 &&
-                   plan.q_length >= (UseAvx2AttentionTiles(plan) ? 8 : 16) &&
-                   plan.total_kv_length != 0;
+                   plan.q_length >= (short_tiles ? 8 : 16) && plan.total_kv_length != 0;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool aligned_short =
       plan.q_length == 16 && plan.head_dim % 8 == 0 && plan.v_head_dim % 8 == 0;
-  use_tiled = use_tiled && !(aligned_short && use_avx2_short && !UseAvx2AttentionTiles(plan));
+  use_tiled = use_tiled && !(aligned_short && use_avx2_short && !short_tiles);
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
