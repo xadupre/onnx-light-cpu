@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/kernels/execution.h"
 
 #include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/com_microsoft/causal_conv_with_state.h"
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -65,6 +66,13 @@ void Compute(const Tensor &input, const Tensor &weight, const Tensor *bias, cons
   auto *y = reinterpret_cast<T *>(output.mutable_bytes());
   auto *s = reinterpret_cast<T *>(present.mutable_bytes());
   const DataType dtype = static_cast<DataType>(input.data_type);
+  if constexpr (sizeof(T) == sizeof(std::uint16_t)) {
+    if (dtype == DataType::FLOAT16 && width == 3 && dilation == 1 && !silu && length >= 2) {
+      ml_cpu_compute::CausalConvWidth3Float16(x, w, b, p, y, s, batch, channels, length,
+                                              channels_last);
+      return;
+    }
+  }
   ml_cpu_compute::ExecuteRanges(
       ml_cpu_compute::CheckedIndexMultiply(static_cast<std::int64_t>(batch),
                                            static_cast<std::int64_t>(channels),
