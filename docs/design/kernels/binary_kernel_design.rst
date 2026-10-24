@@ -477,6 +477,13 @@ scalar-broadcast comparisons. The optimized callbacks use 32-byte AVX2
 path. Dispatch-pointer assertions confirm the intended callbacks ran.
 No broadcast expansion or allocation was moved out of the timed workload.
 
+Validation passed 52 targeted C++ tests (broadcast plan, descriptor, and
+runtime manifest), seven generated And backend tests, and exact checks for all
+eight benchmark shapes at both thread counts. All 43 broadcast/descriptor tests
+also passed ASan/UBSan; all 17 broadcast-plan tests passed ASan/UBSan with
+AVX2/F16C source groups excluded. Formatting and secret checks passed.
+The requested CodeQL tool timed out without returning an analysis result.
+
 To reproduce, use the issue #998 timing procedure with this selector::
 
    ^test_cpu_and_v7_(repeated_block_4d|inner_vector_4d|general_5d|contiguous_[234]d).*_benchmark$
