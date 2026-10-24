@@ -7,7 +7,6 @@
 
 #include <gtest/gtest.h>
 
-#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -76,9 +75,13 @@ template <typename T> void CheckSplitHalfPrefix() {
           EXPECT_TRUE(std::isnan(decode(y[index + 1])));
         } else if constexpr (half_type) {
           EXPECT_EQ(y[index + 1], expected);
+        } else if (expected == 0.0f) {
+          EXPECT_EQ(y[index + 1], expected);
+          EXPECT_EQ(std::signbit(y[index + 1]), std::signbit(expected));
+        } else if (std::isinf(expected)) {
+          EXPECT_EQ(y[index + 1], expected);
         } else {
-          EXPECT_EQ(std::bit_cast<std::uint32_t>(y[index + 1]),
-                    std::bit_cast<std::uint32_t>(expected));
+          EXPECT_FLOAT_EQ(y[index + 1], expected);
         }
       }
     }

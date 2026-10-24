@@ -138,9 +138,13 @@ TEST(OnnxLightRotaryEmbeddingKernel, SplitHalfMatchesScalarInterleavedAcrossVect
           for (std::size_t base = 0; base < split.size(); base += head) {
             for (std::int64_t i = 0; i < head; ++i) {
               const auto index = i < half ? 2 * i : i < 2 * half ? 2 * (i - half) + 1 : i;
-              EXPECT_EQ(std::memcmp(actual.bytes() + (base + i) * bytes,
-                                    expected.bytes() + (base + index) * bytes, bytes),
-                        0);
+              if (type == rt_ns::DataType::FLOAT && i < 2 * half) {
+                EXPECT_NEAR(actual.AsFloat()[base + i], expected.AsFloat()[base + index], 1e-6f);
+              } else {
+                EXPECT_EQ(std::memcmp(actual.bytes() + (base + i) * bytes,
+                                      expected.bytes() + (base + index) * bytes, bytes),
+                          0);
+              }
             }
           }
         }

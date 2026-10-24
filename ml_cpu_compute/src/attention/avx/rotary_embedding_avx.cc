@@ -14,8 +14,9 @@ std::size_t RotaryEmbeddingSplitHalf_AVX(const void *input, const void *cos, con
   const auto *c = static_cast<const float *>(cos);
   const auto *s = static_cast<const float *>(sin);
   auto *y = static_cast<float *>(output);
+  const std::size_t vector_end = half - half % 8;
   std::size_t i = 0;
-  for (; half - i >= 8; i += 8) {
+  for (; i < vector_end; i += 8) {
     const auto a = _mm256_loadu_ps(x + i);
     const auto b = _mm256_loadu_ps(x + half + i);
     const auto cv = _mm256_loadu_ps(c + i);

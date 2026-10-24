@@ -103,7 +103,10 @@ No sampled profile or per-phase percentage is claimed.
 
 Correctness checks cover every vector remainder, unaligned buffers, signed
 zero, subnormals, infinities, NaNs, partial rotation, both layouts, and
-BFLOAT16/interleaved fallback. The four original benchmark outputs also
+BFLOAT16/interleaved fallback. FLOAT comparisons allow rounding-level
+differences while checking signed zeros and infinities explicitly. Half-type
+outputs and unrotated suffixes retain bit-exact checks.
+The four original benchmark outputs also
 matched ORT: FLOAT16 was bit-identical, and FLOAT maximum absolute error
 was below 1e-6.
 
