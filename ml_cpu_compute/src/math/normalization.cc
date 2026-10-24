@@ -404,6 +404,27 @@ void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint
   GetFloat16Dispatch().affine(input, scale, output, count, multiplier);
 }
 
+void SimplifiedLayerNormalizationFloat16Rows(const std::uint16_t *input, const std::uint16_t *scale,
+                                             std::uint16_t *output, float *inverse_output,
+                                             std::size_t row_begin, std::size_t row_end,
+                                             std::size_t width, float epsilon) {
+#ifdef ML_CPU_COMPUTE_HAVE_RMS_F16C
+  if (GetFloat16Dispatch().f16c) {
+    SimplifiedLayerNormalizationFloat16Rows_F16C(input, scale, output, inverse_output, row_begin,
+                                                 row_end, width, epsilon);
+    return;
+  }
+#endif
+  for (std::size_t row = row_begin; row < row_end; ++row) {
+    const std::size_t base = row * width;
+    const float inverse = 1.0F / std::sqrt(MeanSquareFloat16Scalar(input + base, width) + epsilon);
+    if (inverse_output != nullptr) {
+      inverse_output[row] = inverse;
+    }
+    AffineFloat16Scalar(input + base, scale, output + base, width, inverse);
+  }
+}
+
 float ComputeNormalizationMeanSquareBFloat16(const std::uint16_t *input, std::size_t count) {
   if (count == 0) {
     throw std::invalid_argument("normalization reduction size must be positive.");

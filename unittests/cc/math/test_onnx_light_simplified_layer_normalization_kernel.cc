@@ -94,6 +94,13 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, BroadcastAndMiddleAxes) {
   }
 }
 
+TEST(OnnxLightSimplifiedLayerNormalizationKernel, Float16BenchmarkShapes) {
+  for (const Shape &shape :
+       {Shape{1, 128, 2048}, Shape{1, 128, 4096}, Shape{1, 128, 5120}, Shape{1, 4096, 128}}) {
+    Compare(Payload(DataType::FLOAT16, shape), Payload(DataType::FLOAT16, {shape.back()}));
+  }
+}
+
 TEST(OnnxLightSimplifiedLayerNormalizationKernel,
      StashControlsAccumulationWithAndWithoutStatistics) {
   const onnx_light_cpu::SimplifiedLayerNormalizationKernel kernel(Context());
@@ -307,6 +314,24 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, RuntimeOwnedSchedulingAndNeste
   {
     ml_cpu_compute::detail::ExecutionRegionScope nested;
     Compare(Payload(DataType::FLOAT, {256, 1024}), Payload(DataType::FLOAT, {1024}));
+  }
+  EXPECT_EQ(executor.calls, previous);
+}
+
+TEST(OnnxLightSimplifiedLayerNormalizationKernel, Float16RuntimeOwnedScheduling) {
+  InlineExecutor executor;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  Compare(Payload(DataType::FLOAT16, {1, 128}), Payload(DataType::FLOAT16, {128}));
+  EXPECT_EQ(executor.calls, 0);
+  Compare(Payload(DataType::FLOAT16, {128, 2048}), Payload(DataType::FLOAT16, {2048}));
+  EXPECT_GT(executor.calls, 0);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, 128);
+  const auto previous = executor.calls;
+  {
+    ml_cpu_compute::detail::ExecutionRegionScope nested;
+    Compare(Payload(DataType::FLOAT16, {128, 2048}), Payload(DataType::FLOAT16, {2048}));
   }
   EXPECT_EQ(executor.calls, previous);
   Compare(Payload(DataType::FLOAT16, {256, 1024}), Payload(DataType::FLOAT16, {1024}), -1, 1.0e-6F,
