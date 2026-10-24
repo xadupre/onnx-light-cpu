@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -107,6 +108,93 @@ TEST(CausalConvWithState, NaiveReferenceCoversTypesLayoutsAndStateBoundaries) {
   }
 }
 
+TEST(CausalConvWithState, Float16ThreeTapTilesAndBenchmarkShapes) {
+  const onnx_light_cpu::CausalConvWithStateKernel kernel(Context());
+  const onnx_light_cpu::NaiveCausalConvWithStateKernel naive(Context());
+  for (const bool channels_last : {false, true}) {
+    for (const std::int64_t channels : {1, 7, 8, 9, 15, 16, 17, 64, 65}) {
+      for (const std::int64_t length : {2, 7, 8, 9, 63, 64, 65, 128, 513}) {
+        for (const bool with_past : {false, true}) {
+          for (const bool with_bias : {false, true}) {
+            SCOPED_TRACE(::testing::Message()
+                         << "last=" << channels_last << " C=" << channels << " L=" << length
+                         << " past=" << with_past << " bias=" << with_bias);
+            const rt_ns::Shape shape = channels_last ? rt_ns::Shape{2, length, channels}
+                                                     : rt_ns::Shape{2, channels, length};
+            const rt_ns::Shape state_shape =
+                channels_last ? rt_ns::Shape{2, 2, channels} : rt_ns::Shape{2, channels, 2};
+            const auto input = MakeTensor(rt_ns::DataType::FLOAT16, shape, 1);
+            const auto weight = MakeTensor(rt_ns::DataType::FLOAT16, {channels, 1, 3}, 2);
+            const auto bias = MakeTensor(rt_ns::DataType::FLOAT16, {channels}, 3);
+            const auto past = MakeTensor(rt_ns::DataType::FLOAT16, state_shape, 4);
+            const auto expected = naive(input, weight, with_bias ? &bias : nullptr,
+                                        with_past ? &past : nullptr, "none", channels_last);
+            const auto actual = kernel(input, weight, with_bias ? &bias : nullptr,
+                                       with_past ? &past : nullptr, "none", channels_last);
+            ExpectParity(actual.first, expected.first);
+            ExpectParity(actual.second, expected.second);
+            EXPECT_EQ(std::memcmp(actual.first.bytes(), expected.first.bytes(),
+                                  actual.first.element_count() * sizeof(std::uint16_t)),
+                      0);
+            EXPECT_EQ(std::memcmp(actual.second.bytes(), expected.second.bytes(),
+                                  actual.second.element_count() * sizeof(std::uint16_t)),
+                      0);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(CausalConvWithState, Float16ThreeTapSpecialValuesAndExactState) {
+  const onnx_light_cpu::CausalConvWithStateKernel kernel(Context());
+  const onnx_light_cpu::NaiveCausalConvWithStateKernel naive(Context());
+  const std::vector<std::uint16_t> bits{0,      0x8000, 0x0001, 0x03ff, 0x0400, 0x7bff, 0xfbff,
+                                        0x7c00, 0xfc00, 0x7e01, 0xfe55, 0x3c00, 0xbc00};
+  for (const bool channels_last : {false, true}) {
+    const std::size_t channels = 17, length = 65;
+    const rt_ns::Shape shape =
+        channels_last ? rt_ns::Shape{1, length, channels} : rt_ns::Shape{1, channels, length};
+    const rt_ns::Shape state_shape =
+        channels_last ? rt_ns::Shape{1, 2, channels} : rt_ns::Shape{1, channels, 2};
+    auto input = MakeTensor(rt_ns::DataType::FLOAT16, shape, 1);
+    auto weight = MakeTensor(rt_ns::DataType::FLOAT16, {channels, 1, 3}, 2);
+    auto past = MakeTensor(rt_ns::DataType::FLOAT16, state_shape, 3);
+    auto *x = reinterpret_cast<std::uint16_t *>(input.mutable_bytes());
+    auto *w = reinterpret_cast<std::uint16_t *>(weight.mutable_bytes());
+    auto *p = reinterpret_cast<std::uint16_t *>(past.mutable_bytes());
+    for (std::size_t i = 0; i < channels * length; ++i) {
+      x[i] = bits[i % bits.size()];
+    }
+    for (std::size_t i = 0; i < channels * 3; ++i) {
+      w[i] = bits[(i + 3) % bits.size()];
+    }
+    for (std::size_t i = 0; i < channels * 2; ++i) {
+      p[i] = bits[(i + 5) % bits.size()];
+    }
+    const auto expected = naive(input, weight, nullptr, &past, "none", channels_last);
+    const auto actual = kernel(input, weight, nullptr, &past, "none", channels_last);
+    const auto *y = reinterpret_cast<const std::uint16_t *>(actual.first.bytes());
+    const auto *reference = reinterpret_cast<const std::uint16_t *>(expected.first.bytes());
+    for (std::size_t i = 0; i < channels * length; ++i) {
+      if (std::isnan(ml_cpu_compute::detail::Float16BitsToFloat(reference[i]))) {
+        EXPECT_TRUE(std::isnan(ml_cpu_compute::detail::Float16BitsToFloat(y[i])));
+      } else {
+        EXPECT_EQ(y[i], reference[i]) << i;
+      }
+    }
+    const auto *state = reinterpret_cast<const std::uint16_t *>(actual.second.bytes());
+    for (std::size_t c = 0; c < channels; ++c) {
+      for (std::size_t t = 0; t < 2; ++t) {
+        const std::size_t dst = channels_last ? t * channels + c : c * 2 + t;
+        const std::size_t src =
+            channels_last ? (length - 2 + t) * channels + c : c * length + length - 2 + t;
+        EXPECT_EQ(state[dst], x[src]);
+      }
+    }
+  }
+}
+
 struct InlineExecutor {
   std::int64_t calls = 0;
   std::int64_t blocks = 0;
@@ -121,6 +209,41 @@ struct InlineExecutor {
     }
   }
 };
+
+TEST(CausalConvWithState, Float16ThreeTapSchedulingAndNesting) {
+  InlineExecutor executor;
+  const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  const ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  const onnx_light_cpu::CausalConvWithStateKernel kernel(Context());
+  const onnx_light_cpu::NaiveCausalConvWithStateKernel naive(Context());
+  for (const bool channels_last : {false, true}) {
+    const auto check = [&](std::int64_t length, std::int64_t batch = 2) {
+      const rt_ns::Shape shape =
+          channels_last ? rt_ns::Shape{batch, length, 65} : rt_ns::Shape{batch, 65, length};
+      const auto input = MakeTensor(rt_ns::DataType::FLOAT16, shape, 1);
+      const auto weight = MakeTensor(rt_ns::DataType::FLOAT16, {65, 1, 3}, 2);
+      const auto expected = naive(input, weight, nullptr, nullptr, "none", channels_last);
+      const auto actual = kernel(input, weight, nullptr, nullptr, "none", channels_last);
+      ExpectParity(actual.first, expected.first);
+      ExpectParity(actual.second, expected.second);
+    };
+    executor.calls = executor.blocks = 0;
+    check(2);
+    EXPECT_EQ(executor.calls, 0);
+    check(128, 1);
+    check(513, 1);
+    EXPECT_EQ(executor.calls, 0);
+    check(513);
+    EXPECT_EQ(executor.calls, 1);
+    EXPECT_GT(executor.blocks, 1);
+    executor.calls = executor.blocks = 0;
+    {
+      ml_cpu_compute::detail::ExecutionRegionScope nested;
+      check(513);
+    }
+    EXPECT_EQ(executor.calls, 0);
+  }
+}
 
 TEST(CausalConvWithState, SchedulingAccountsForConvolutionAndStateCopies) {
   InlineExecutor executor;

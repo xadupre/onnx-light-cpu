@@ -7,7 +7,7 @@ tensors and delegates to an immutable or per-invocation execution plan, and
 parallel work is submitted only through the current session's ``CpuExecutor``.
 No kernel family owns a private worker pool.
 
-The pages below describe six implemented kernel families. Other registered
+The pages below describe implemented kernel families. Other registered
 families, including variadic elementwise, integer MatMul, normalization,
 SwiGLU, TreeEnsemble, and custom-domain kernels, are not yet covered here.
 Performance targets and future work remain in :doc:`../../next_steps/index`.
@@ -21,3 +21,4 @@ Performance targets and future work remain in :doc:`../../next_steps/index`.
     matmul_kernel_design
     attention_kernel_design
     rotary_embedding_kernel_design
+    causal_conv_with_state_kernel_design
