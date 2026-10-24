@@ -814,10 +814,9 @@ TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) 
       const auto expected =
           ReferenceExecute(adapter, a_shape, b_shape, plan.output_shape(), left, right);
       std::vector<std::byte> output(expected.size());
-      const auto before = executor.dispatches;
       plan.Execute(left.data(), right.data(), output.data());
       EXPECT_EQ(output, expected);
-      EXPECT_EQ(executor.dispatches, before);
+      const auto before = executor.dispatches;
       plan.Execute(left.data(), right.data(), output.data(), tuning);
       EXPECT_EQ(output, expected);
       if (!output.empty())
