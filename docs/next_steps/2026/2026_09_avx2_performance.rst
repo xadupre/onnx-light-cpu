@@ -337,6 +337,14 @@ empty ranges, and check F16C floating-point-state restoration. Runtime-owned
 scheduling and nested-parallel suppression remain covered. The original
 EPYC 7763 and multithreaded campaign still require a separate reproduction.
 
+Validation passed 92 affected C++ tests and seven Python integration tests.
+All six original seeded benchmark fixtures also matched their generated
+reference outputs at the existing FP16 tolerances.
+Reconfiguring the same build with ``ML_CPU_COMPUTE_HAVE_F16C_FLAG=OFF`` also
+passed 31 focused tests; the F16C-only floating-point-state test was skipped.
+The build was then restored to AVX2/F16C. Secret scanning and formatting checks
+passed; CodeQL timed out without returning an analysis result.
+
 Reproducible baseline
 ---------------------
 
