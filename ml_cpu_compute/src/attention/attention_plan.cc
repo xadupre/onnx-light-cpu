@@ -681,7 +681,7 @@ struct BFloat16Codec {
 template <typename Codec>
 bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec::Storage *v) {
   if (!UseAvx2AttentionTiles(plan) || plan.q_length < 8 || plan.q_length > 16 ||
-      plan.past_length != 0 || plan.head_sink != nullptr) {
+      plan.past_length != 0 || plan.head_sink != nullptr || plan.q_num_heads == 0) {
     return false;
   }
   if constexpr (std::is_same_v<Codec, Float32Codec>) {

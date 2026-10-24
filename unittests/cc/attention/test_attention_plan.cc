@@ -1750,6 +1750,16 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveMaskedNonfiniteValues) 
   }
 }
 
+TEST(ComputeAttentionFloat32Streaming, ZeroQueryHeadsDoNotReadValues) {
+  const std::int64_t qs[] = {2, 0, 8, 64};
+  const std::int64_t kvs[] = {2, 1, 17, 64};
+  const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+  EXPECT_NO_THROW(
+      ComputeAttentionFloat32Streaming(plan, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_NO_THROW(
+      ComputeAttentionFloat16Streaming(plan, nullptr, nullptr, nullptr, nullptr, nullptr));
+}
+
 TEST(ComputeAttentionFloat32Streaming, FiniteValueCheckHandlesEveryVectorTail) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||

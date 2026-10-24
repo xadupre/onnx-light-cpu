@@ -367,7 +367,7 @@ with the existing runner, and apply the same settings to each row:
      --case '^test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16_benchmark$' \
      --output /tmp/attention-case.json
 
-Validation comprises all 83 ``test_attention_plan`` tests, the 37 runner
+Validation comprises all 84 ``test_attention_plan`` tests, the 37 runner
 correctness comparisons, and clang-format checks. New tests cover tile and
 eligibility boundaries, both layouts, grouped heads, empty/single-key inputs,
 nonpad and fully masked rows, runtime-owned scheduling without nesting, and
