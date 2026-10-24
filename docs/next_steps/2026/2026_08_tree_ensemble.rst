@@ -885,15 +885,16 @@ speedups. No conclusion about the original processor or historical versions
 follows from these results.
 
 Reproduce each revision using the existing benchmark CLI (repeat with
-``--threads 1``):
+``--threads 1``). Set ``REPO_ROOT`` to the checkout and ``DEPS_DIR`` to the
+directory containing the Python dependencies:
 
 .. code-block:: bash
 
-   PYTHONPATH=/home/runner/work/onnx-light-cpu/onnx-light-cpu:/tmp/tree-deps \
+   PYTHONPATH="$REPO_ROOT:$DEPS_DIR" \
    python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
        --test '^test_cpu_treeensemble_t(100|1000|10000)_.*_float32_benchmark$' \
        --threads 4 --repeat 1000 --warmup 100 --max-repeat-time 3 \
-       --output /tmp/treeensemble.xlsx
+       --output treeensemble.xlsx
 
 All 44 TreeEnsemble C++ tests pass. Additional differential coverage forces
 both row-parallel and tree-major execution with every batch size 0--33,

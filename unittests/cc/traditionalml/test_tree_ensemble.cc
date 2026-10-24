@@ -633,6 +633,7 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
 TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds) {
   constexpr std::size_t kFeatures = 4096;
   constexpr std::size_t kBatchRows = 16;
+  constexpr float kSentinel = -42.0F;
   for (auto attributes : {StumpForest(17, 1), BalancedForest(17)}) {
     attributes.n_features = kFeatures;
     attributes.value_type = DataType::FLOAT;
@@ -662,7 +663,7 @@ TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds
         }
         const std::vector<double> reference_input(input.begin(), input.end());
         const auto expected = oracle.Evaluate(reference_input, rows);
-        std::vector<float> actual(rows + 2, -42.0F);
+        std::vector<float> actual(rows + 2, kSentinel);
         ThreadedExecutor executor;
         ml_cpu_compute::ExecutionExecutorView view{&executor, 2, &ThreadedExecutor::Run};
         ml_cpu_compute::ExecutionExecutorScope scope(&view);
@@ -671,14 +672,15 @@ TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds
           ASSERT_EQ(decision.strategy, strategy);
           ASSERT_EQ(decision.batch_rows, std::min(rows, kBatchRows));
         }
-        plan.EvaluateInto(input.data(), input.size(), rows, actual.data() + 1);
+        plan.EvaluateInto(rows == 0 ? nullptr : input.data(), input.size(), rows,
+                          actual.data() + 1);
         if (strategy == TreeEnsembleExecutionStrategy::kRowParallel && rows > kBatchRows) {
           EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
         } else if (strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch) {
           EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0U);
         }
-        EXPECT_EQ(actual.front(), -42.0F);
-        EXPECT_EQ(actual.back(), -42.0F);
+        EXPECT_EQ(actual.front(), kSentinel);
+        EXPECT_EQ(actual.back(), kSentinel);
         for (std::size_t row = 0; row < rows; ++row) {
           EXPECT_FLOAT_EQ(actual[row + 1], static_cast<float>(expected[row])) << row;
         }
