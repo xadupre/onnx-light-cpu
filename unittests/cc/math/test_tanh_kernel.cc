@@ -186,6 +186,34 @@ TEST(TanhKernel, Float32CancellationAndExponentBoundaries) {
   }
 }
 
+TEST(TanhKernel, Float32LogarithmicMagnitudesAndReductionNeighbors) {
+  std::vector<float> input;
+  for (int exponent = -126; exponent <= 4; ++exponent) {
+    for (int mantissa = 0; mantissa < 256; ++mantissa) {
+      const float value = std::ldexp(1.0f + static_cast<float>(mantissa) / 256.0f, exponent);
+      input.push_back(value);
+      input.push_back(-value);
+    }
+  }
+  // Cover both scale changes and zero reduced arguments in exp(-2*abs(x)).
+  for (int step = 1; step <= 58; ++step) {
+    const float boundary = static_cast<float>(step * std::log(2.0) / 4.0);
+    const auto bits = std::bit_cast<std::uint32_t>(boundary);
+    for (int offset = -32; offset <= 32; ++offset) {
+      const float value = std::bit_cast<float>(bits + offset);
+      input.push_back(value);
+      input.push_back(-value);
+    }
+  }
+  std::vector<float> output(input.size());
+  for (const auto kernel : FloatKernels()) {
+    kernel(input.data(), output.data(), input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      ExpectTanh(input[i], output[i]);
+    }
+  }
+}
+
 float HalfToFloat(std::uint16_t bits, bool bfloat16) {
   return bfloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(bits)
                   : ml_cpu_compute::detail::Float16BitsToFloat(bits);
