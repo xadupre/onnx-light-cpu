@@ -769,7 +769,7 @@ NaN/infinity inputs, policy/runtime participant limits, and nested execution
 through both AVX-512 and AVX2-ceiling builds.
 
 AVX2 follow-up for issue #978 (2026-10-23)
----------------------------------------
+------------------------------------------
 
 The published ORT advantage was not reproduced with four threads on this
 runner. This is not a reproduction on the published EPYC 7763: the runner
