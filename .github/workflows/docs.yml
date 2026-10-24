@@ -1,10 +1,10 @@
 name: docs
 
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+  workflow_dispatch:
+  schedule:
+    # Every Monday at 06:00 UTC.
+    - cron: "0 6 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -83,3 +83,20 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           UNITTEST_GOING: 1
         run: sphinx-build -W -b html docs dist/html
+
+  report_failure:
+    needs: ci-core-night-doc
+    if: ${{ failure() && needs.ci-core-night-doc.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue for the failed documentation build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOCS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "Documentation build failed" \
+            --body "The documentation build failed. See ${DOCS_RUN_URL} for logs."
