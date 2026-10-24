@@ -106,7 +106,7 @@ TEST(OnnxLightRotaryEmbeddingKernel, SplitHalfMatchesScalarInterleavedAcrossVect
       }
       return rt_ns::Tensor::FromFloat("", shape, values);
     };
-    for (std::int64_t half = 7; half <= 33; ++half) {
+    for (std::int64_t half = 1; half <= 33; ++half) {
       for (const bool rank4 : {false, true}) {
         for (const std::int64_t padding : {0, 3}) {
           SCOPED_TRACE(::testing::PrintToString(

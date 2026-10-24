@@ -63,10 +63,10 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
   auto *y = output.mutable_bytes();
   const std::size_t half = rotate_dim / 2;
   const bool rank4 = input.shape.size() == 4;
-  const auto vector_rotate =
-      !interleaved && Type != DataType::BFLOAT16
-          ? ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(Type == DataType::FLOAT16)
-          : nullptr;
+  const auto vector_rotate = !interleaved && half >= 8
+                                 ? ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(
+                                       static_cast<ml_cpu_compute::DataType>(Type))
+                                 : nullptr;
   ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(batch * seq), static_cast<double>(heads * head_size),
       [&](std::int64_t begin, std::int64_t end) {

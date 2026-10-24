@@ -7,6 +7,9 @@ arithmetic; FLOAT16 heads use AVX2/F16C conversion followed by FLOAT
 arithmetic and round-to-nearest-even narrowing. F16C is checked independently
 of AVX2. Dispatch is selected once per invocation with cached CPU detection,
 and ISA-specific sources retain their per-source compiler flags.
+The selector takes an explicit storage ``DataType`` and returns no SIMD
+implementation for unsupported types. Heads with fewer than eight pairs
+bypass SIMD dispatch and use the scalar loop directly.
 
 The existing scalar loop handles vector tails, interleaved rotation, BFLOAT16,
 and CPUs/builds without the required instructions. Multiplication and

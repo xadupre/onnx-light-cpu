@@ -17,7 +17,8 @@ namespace {
 
 template <typename T> void CheckSplitHalfPrefix() {
   constexpr bool half_type = std::is_same_v<T, std::uint16_t>;
-  const auto rotate = ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(half_type);
+  const auto rotate = ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(
+      half_type ? ml_cpu_compute::DataType::FLOAT16 : ml_cpu_compute::DataType::FLOAT);
   if (rotate == nullptr) {
     GTEST_SKIP() << "No SIMD implementation for this type on this CPU/build.";
   }
@@ -94,6 +95,13 @@ TEST(RotaryEmbedding, FloatVectorPrefixAndSpecialValues) { CheckSplitHalfPrefix<
 
 TEST(RotaryEmbedding, Float16VectorPrefixAndSpecialValues) {
   CheckSplitHalfPrefix<std::uint16_t>();
+}
+
+TEST(RotaryEmbedding, UnsupportedStorageTypesUseScalarFallback) {
+  for (const auto type : {ml_cpu_compute::DataType::BFLOAT16, ml_cpu_compute::DataType::DOUBLE,
+                          ml_cpu_compute::DataType::INT32, ml_cpu_compute::DataType::UNDEFINED}) {
+    EXPECT_EQ(ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(type), nullptr);
+  }
 }
 
 } // namespace

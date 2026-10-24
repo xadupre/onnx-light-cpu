@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ml_cpu_compute/data_type.h"
+
 #include <cstddef>
 
 namespace ml_cpu_compute {
@@ -14,6 +16,6 @@ using RotaryEmbeddingSplitHalfFn = std::size_t (*)(const void *input, const void
                                                    const void *sin, void *output, std::size_t half);
 
 // Returns nullptr when the requested type has no supported SIMD implementation.
-RotaryEmbeddingSplitHalfFn SelectRotaryEmbeddingSplitHalf(bool float16);
+RotaryEmbeddingSplitHalfFn SelectRotaryEmbeddingSplitHalf(DataType type);
 
 } // namespace ml_cpu_compute
