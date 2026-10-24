@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -90,6 +91,66 @@ TEST(OnnxLightRotaryEmbeddingKernel, MicrosoftOffsetAndInvalidPositions) {
   const auto invalid = rt_ns::Tensor::FromInt64("p", {1, 2}, {1, 3});
   EXPECT_THROW(kernel(x, cos, sin, &invalid, false, 0, 1, true), std::invalid_argument);
   EXPECT_THROW(kernel(x, cos, sin, nullptr, false, 3, 1), std::invalid_argument);
+}
+
+TEST(OnnxLightRotaryEmbeddingKernel, SplitHalfMatchesScalarInterleavedAcrossVectorTails) {
+  const onnx_light_cpu::RotaryEmbeddingKernel kernel(Context());
+  for (const auto type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    const auto tensor = [&](const rt_ns::Shape &shape, const std::vector<float> &values) {
+      if (type == rt_ns::DataType::FLOAT16) {
+        return rt_ns::MakeFloat16Tensor("", shape, values);
+      }
+      if (type == rt_ns::DataType::BFLOAT16) {
+        return rt_ns::MakeBfloat16Tensor("", shape, values);
+      }
+      return rt_ns::Tensor::FromFloat("", shape, values);
+    };
+    for (std::int64_t half = 1; half <= 33; ++half) {
+      for (const bool rank4 : {false, true}) {
+        for (const std::int64_t padding : {0, 3}) {
+          SCOPED_TRACE(::testing::PrintToString(
+              std::vector<std::int64_t>{static_cast<std::int64_t>(type), half, rank4, padding}));
+          const auto head = 2 * half + padding;
+          const rt_ns::Shape shape =
+              rank4 ? rt_ns::Shape{2, 2, 3, head} : rt_ns::Shape{2, 3, 2 * head};
+          std::vector<float> split(static_cast<std::size_t>(12 * head)), interleaved(split.size());
+          for (std::size_t i = 0; i < split.size(); ++i) {
+            split[i] = static_cast<float>(static_cast<int>(i % 97) - 48) / 31.0f;
+          }
+          interleaved = split;
+          for (std::size_t base = 0; base < split.size(); base += head) {
+            for (std::int64_t i = 0; i < half; ++i) {
+              interleaved[base + 2 * i] = split[base + i];
+              interleaved[base + 2 * i + 1] = split[base + half + i];
+            }
+          }
+          std::vector<float> cos(static_cast<std::size_t>(6 * half)), sin(cos.size());
+          for (std::size_t i = 0; i < cos.size(); ++i) {
+            cos[i] = static_cast<float>(i % 13) / 17.0f;
+            sin[i] = static_cast<float>(i % 19) / 23.0f;
+          }
+          const auto c = tensor({6, half}, cos), s = tensor({6, half}, sin);
+          const auto ids = rt_ns::Tensor::FromInt64("", {2, 3}, {5, 1, 3, 2, 0, 4});
+          const auto actual = kernel(tensor(shape, split), c, s, &ids, false, 2 * half, 2);
+          const auto expected = kernel(tensor(shape, interleaved), c, s, &ids, true, 2 * half, 2);
+          const auto bytes = actual.element_size();
+          for (std::size_t base = 0; base < split.size(); base += head) {
+            for (std::int64_t i = 0; i < head; ++i) {
+              const auto index = i < half ? 2 * i : i < 2 * half ? 2 * (i - half) + 1 : i;
+              if (type == rt_ns::DataType::FLOAT && i < 2 * half) {
+                EXPECT_NEAR(actual.AsFloat()[base + i], expected.AsFloat()[base + index], 1e-6f);
+              } else {
+                EXPECT_EQ(std::memcmp(actual.bytes() + (base + i) * bytes,
+                                      expected.bytes() + (base + index) * bytes, bytes),
+                          0);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST(OnnxLightRotaryEmbeddingKernel, RejectsCacheShapeAndAcceptsEmptySequence) {

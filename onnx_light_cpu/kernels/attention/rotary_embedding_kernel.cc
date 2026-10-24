@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "ml_cpu_compute/attention/rotary_embedding.h"
 #include "ml_cpu_compute/checked_arithmetic.h"
 #include "ml_cpu_compute/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -62,6 +63,12 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
   auto *y = output.mutable_bytes();
   const std::size_t half = rotate_dim / 2;
   const bool rank4 = input.shape.size() == 4;
+  constexpr auto simd_type = Type == DataType::FLOAT     ? ml_cpu_compute::DataType::FLOAT
+                             : Type == DataType::FLOAT16 ? ml_cpu_compute::DataType::FLOAT16
+                                                         : ml_cpu_compute::DataType::UNDEFINED;
+  const auto vector_rotate = !interleaved && half >= 8
+                                 ? ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(simd_type)
+                                 : nullptr;
   ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(batch * seq), static_cast<double>(heads * head_size),
       [&](std::int64_t begin, std::int64_t end) {
@@ -77,7 +84,13 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
             const std::size_t base =
                 rank4 ? ((b * heads + h) * seq + t) * head_size : (row * heads + h) * head_size;
             const std::size_t cache_base = cache_row * cache_width;
-            for (std::size_t i = 0; i < half; ++i) {
+            const std::size_t vector_end =
+                vector_rotate == nullptr
+                    ? 0
+                    : vector_rotate(x + base * sizeof(Storage), c + cache_base * sizeof(Storage),
+                                    s + cache_base * sizeof(Storage), y + base * sizeof(Storage),
+                                    half);
+            for (std::size_t i = vector_end; i < half; ++i) {
               const std::size_t first = base + (interleaved ? i * 2 : i);
               const std::size_t second = first + (interleaved ? 1 : half);
               Storage a, z, cosine, sine;
@@ -201,7 +214,9 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
   if (elements == 0) {
     return output;
   }
-  std::memcpy(output.mutable_bytes(), input.bytes(), input.size_bytes());
+  if (rotate_dim != head_size) {
+    std::memcpy(output.mutable_bytes(), input.bytes(), input.size_bytes());
+  }
   if (type == DataType::FLOAT) {
     Rotate<DataType::FLOAT>(input, cos, sin, output, positions, batch, seq, heads, head_size,
                             rotate_dim, static_cast<std::size_t>(cos.shape.back()), interleaved);
