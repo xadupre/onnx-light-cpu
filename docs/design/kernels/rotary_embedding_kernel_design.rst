@@ -4,9 +4,12 @@ RotaryEmbedding
 Both ``ai.onnx::RotaryEmbedding`` and ``com.microsoft::RotaryEmbedding`` use
 the same validated adapter. Split-half FLOAT heads use eight-pair AVX
 arithmetic; FLOAT16 heads use AVX2/F16C conversion followed by FLOAT
-arithmetic and round-to-nearest-even narrowing. F16C is checked independently
-of AVX2. Dispatch is selected once per invocation with cached CPU detection,
-and ISA-specific sources retain their per-source compiler flags.
+arithmetic and round-to-nearest-even narrowing. FLOAT16 dispatch requires both
+AVX2 and a separate F16C capability check. AVX+F16C-only CPUs retain the scalar
+path because the FLOAT16 translation unit is compiled with AVX2 enabled
+(``-mavx2 -mf16c`` or ``/arch:AVX2``). Dispatch is selected once per invocation
+with cached CPU detection, and ISA-specific sources retain their per-source
+compiler flags.
 The selector takes an explicit storage ``DataType`` and returns no SIMD
 implementation for unsupported types. Heads with fewer than eight pairs
 bypass SIMD dispatch and use the scalar loop directly.

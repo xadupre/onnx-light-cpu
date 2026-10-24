@@ -63,9 +63,11 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
   auto *y = output.mutable_bytes();
   const std::size_t half = rotate_dim / 2;
   const bool rank4 = input.shape.size() == 4;
+  constexpr auto simd_type = Type == DataType::FLOAT     ? ml_cpu_compute::DataType::FLOAT
+                             : Type == DataType::FLOAT16 ? ml_cpu_compute::DataType::FLOAT16
+                                                         : ml_cpu_compute::DataType::UNDEFINED;
   const auto vector_rotate = !interleaved && half >= 8
-                                 ? ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(
-                                       static_cast<ml_cpu_compute::DataType>(Type))
+                                 ? ml_cpu_compute::SelectRotaryEmbeddingSplitHalf(simd_type)
                                  : nullptr;
   ml_cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(batch * seq), static_cast<double>(heads * head_size),
