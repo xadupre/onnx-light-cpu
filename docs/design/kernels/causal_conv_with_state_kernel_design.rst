@@ -127,8 +127,9 @@ Source inspection identified the repeated software half conversions in the
 scalar tap loop. Tiling removes those conversions without moving allocation,
 packing or other work outside the timed invocation.
 
-All 12 focused C++ tests pass before and after the optimization, including exact
-finite FLOAT16 comparisons, both operator outputs, special values, fallback
-configurations and executor scheduling. No AVX-512 host was available and a
+Baseline parity and special-value checks passed before enabling the fast path.
+The final focused C++ suite passes all 12 tests, including exact finite FLOAT16
+comparisons, both operator outputs, special values, fallback configurations and
+the updated executor scheduling checks. No AVX-512 host was available and a
 separate scalar-only build was not run; this result is specifically for the
 documented AVX2 host.
