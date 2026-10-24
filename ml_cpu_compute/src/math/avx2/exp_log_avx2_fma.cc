@@ -193,24 +193,29 @@ ML_CPU_COMPUTE_FORCE_INLINE __m256 SigmoidPs256Fma(__m256 value) {
 ML_CPU_COMPUTE_FORCE_INLINE __m256 TanhPs256Fma(__m256 value) {
   const __m256 sign = _mm256_and_ps(value, _mm256_set1_ps(-0.0f));
   const __m256 magnitude = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value);
-  // Beyond 10 the correctly rounded float32 result is one. Clamping also keeps
-  // the exponential in its normal range, including for infinite inputs.
+  // Evaluate the 13-level continued fraction x/(1+x*x/(3+...+x*x/25)) as
+  // a rational polynomial, avoiding exponential reduction and cancellation near zero.
   const __m256 bounded = _mm256_min_ps(magnitude, _mm256_set1_ps(10.0f));
-  const __m256 exponent = ExpNormalNegativePs256Fma(_mm256_mul_ps(bounded, _mm256_set1_ps(-2.0f)));
+  const __m256 squared = _mm256_mul_ps(bounded, bounded);
   const __m256 one = _mm256_set1_ps(1.0f);
-  __m256 result = _mm256_div_ps(_mm256_sub_ps(one, exponent), _mm256_add_ps(one, exponent));
-
-  // The exponential subtraction loses relative accuracy near zero. Use the odd
-  // Taylor polynomial through x^11 on [0, 1/4], with error below a float32 ULP.
-  const __m256 small = _mm256_min_ps(magnitude, _mm256_set1_ps(0.25f));
-  const __m256 squared = _mm256_mul_ps(small, small);
-  __m256 polynomial = _mm256_set1_ps(-1382.0f / 155925.0f);
-  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(62.0f / 2835.0f));
-  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(-17.0f / 315.0f));
-  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(2.0f / 15.0f));
-  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(-1.0f / 3.0f));
-  polynomial = _mm256_fmadd_ps(_mm256_mul_ps(small, squared), polynomial, small);
-  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(0.25f), _CMP_LE_OQ), polynomial, result);
+  __m256 numerator = _mm256_add_ps(squared, _mm256_set1_ps(4095.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(2552550.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(523783260.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(41247931725.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(1159525191825.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(7905853580625.0f));
+  numerator = _mm256_mul_ps(numerator, bounded);
+  __m256 denominator = _mm256_fmadd_ps(squared, _mm256_set1_ps(91.0f), _mm256_set1_ps(120120.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(41351310.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(5237832600.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(252070693875.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(3794809718700.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(7905853580625.0f));
+  __m256 reciprocal = _mm256_rcp_ps(denominator);
+  reciprocal =
+      _mm256_fmadd_ps(reciprocal, _mm256_fnmadd_ps(denominator, reciprocal, one), reciprocal);
+  __m256 result = _mm256_min_ps(_mm256_mul_ps(numerator, reciprocal), one);
+  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(10.0f), _CMP_GE_OQ), one, result);
   result = _mm256_or_ps(result, sign);
   // Copy tiny inputs rather than performing arithmetic on subnormal lanes.
   result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(0x1p-13f), _CMP_LT_OQ), value, result);
@@ -352,15 +357,8 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
 
 void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   std::size_t index = 0;
-  for (; count - index >= 16; index += 16) {
-    const __m256 result0 = TanhPs256Fma(_mm256_loadu_ps(input + index));
-    const __m256 result1 = TanhPs256Fma(_mm256_loadu_ps(input + index + 8));
-    _mm256_storeu_ps(output + index, result0);
-    _mm256_storeu_ps(output + index + 8, result1);
-  }
-  if (count - index >= 8) {
+  for (; count - index >= 8; index += 8) {
     _mm256_storeu_ps(output + index, TanhPs256Fma(_mm256_loadu_ps(input + index)));
-    index += 8;
   }
   if (index < count) {
     const __m256i mask = TailMask(count - index);

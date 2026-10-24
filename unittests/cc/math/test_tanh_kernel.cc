@@ -214,6 +214,25 @@ TEST(TanhKernel, Float32LogarithmicMagnitudesAndReductionNeighbors) {
   }
 }
 
+TEST(TanhKernel, Float32ExactSaturationInEveryTail) {
+  for (const auto kernel : FloatKernels()) {
+    for (const float magnitude :
+         {10.0f, std::nextafter(10.0f, 11.0f), std::numeric_limits<float>::max(),
+          std::numeric_limits<float>::infinity()}) {
+      for (std::size_t count = 1; count <= 33; ++count) {
+        std::vector<float> input(count), output(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          input[i] = i % 2 ? -magnitude : magnitude;
+        }
+        kernel(input.data(), output.data(), count);
+        for (std::size_t i = 0; i < count; ++i) {
+          EXPECT_EQ(output[i], i % 2 ? -1.0f : 1.0f);
+        }
+      }
+    }
+  }
+}
+
 float HalfToFloat(std::uint16_t bits, bool bfloat16) {
   return bfloat16 ? ml_cpu_compute::detail::Bfloat16BitsToFloat(bits)
                   : ml_cpu_compute::detail::Float16BitsToFloat(bits);
