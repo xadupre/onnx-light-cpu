@@ -206,6 +206,145 @@ Reproduce the full single-thread corpus from the repository checkout:
       --repeat 2000 --warmup 100 --max-repeat-time 1 --onnxruntime \
       --output /tmp/simplified-layer-normalization.xlsx
 
+SimplifiedLayerNormalization FP16 row-range follow-up
+-----------------------------------------------------
+
+Issue `#984 <https://github.com/xadupre/onnx-light-cpu/issues/984>`_ lists
+six AVX2 FP16 cases. On 2026-10-24, none reproduced the reported ORT advantage
+on this runner, even before this change. This does not disprove the original
+EPYC 7763 measurements: their per-case commits and thread/spin settings are
+unknown, and this runner is an AMD EPYC 9V74 under virtualization (four logical
+CPUs, two physical cores).
+
+The baseline is ``0d7606c2105791b2846007c6d860f129bd2663dc``, whose production
+code matches ``ca018642cfb90f7569730deadf4c2d60daa1f3aa``. Remote refs were
+fetched before measuring; the branch already contained remote main.
+Both builds used GCC 13.3.0, Release, and
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2`` (detected level 3). The after build adds
+this row-range change. Dependencies were the onnx-light 0.2.0 CPython 3.13
+Linux release wheel (native Python ABI, source commit not embedded in build
+metadata), ONNX Runtime 1.31.0 (Release, commit ``402979a``), NumPy 2.5.4,
+and onnx-light-cpu 0.2.0 from this checkout.
+
+The unchanged backend fixtures use seeds 941/942, FP16 X and scale,
+``axis=-1``, ``epsilon=1e-6``, and ``stash_type=1``. Each backend used one
+thread, affinity ``taskset -c 0``, 100 warmups and 2,000 single-call samples
+with a two-second phase limit (all 2,000 samples completed). ORT used
+CPUExecutionProvider, sequential execution, and one inter-op thread.
+With one participant neither backend has worker spinning; spin settings were
+otherwise left at their defaults. The existing backend benchmark API times
+CPU first, before creating the ORT session, then ORT. Three complete passes
+were collected before rebuilding, then three after; build order was not
+randomized. CPU feeds remained backend tensors, and only ORT received NumPy
+views. Allocation and runtime overhead remain inside the timed session calls.
+
+Median latency in **milliseconds** below is the median of the three per-pass
+medians. ``inv`` denotes the optional FP32 inverse-RMS output.
+
+.. list-table::
+   :header-rows: 1
+
+   * - X shape / output
+     - CPU before
+     - CPU after
+     - ORT before
+     - ORT after
+     - CPU latency reduction
+   * - [1,128,5120] / Y
+     - 0.098576
+     - 0.097024
+     - 0.142872
+     - 0.143112
+     - 1.6%
+   * - [1,128,4096] / Y
+     - 0.080690
+     - 0.079017
+     - 0.115822
+     - 0.115832
+     - 2.1%
+   * - [1,128,4096] / Y, inv
+     - 0.082262
+     - 0.079859
+     - 0.116833
+     - 0.116713
+     - 2.9%
+   * - [1,128,2048] / Y
+     - 0.044395
+     - 0.042352
+     - 0.062202
+     - 0.062653
+     - 4.6%
+   * - [1,128,2048] / Y, inv
+     - 0.045908
+     - 0.043345
+     - 0.063213
+     - 0.063495
+     - 5.6%
+   * - [1,4096,128] / Y, inv
+     - 0.172907
+     - 0.137294
+     - 0.183182
+     - 0.183272
+     - 20.6%
+
+The q_norm before medians ranged from 0.172736 to 0.177283 ms; after medians
+ranged from 0.137074 to 0.137333 ms. Its three after p10/p90 intervals were
+0.137023--0.145686, 0.137054--0.145678, and 0.136813--0.145308 ms.
+The smaller prefill improvements should not be treated as universal wins:
+sample distributions overlap, and the shared runner showed occasional
+outliers, including one before 4096/inv median of 0.090164 ms.
+
+Hardware-counter profiling was denied (``perf_event_paranoid=4``).
+Assembly inspection identified per-row MXCSR save/mask/restore and separate
+primitive calls. The FP16 exact-suffix, FP32-stash path now dispatches once
+per executor range, saves/restores MXCSR once for that range, and writes
+optional inverse statistics directly. It reuses the existing F16C reduction,
+affine arithmetic, NaN handling, and final-only FP16 rounding; no scratch
+allocation or private pool is added. Recording still reports
+``SimplifiedLayerNormalization/f16c/row-scale``. Broadcast, mixed-type,
+unaligned, and double-stash fallbacks are unchanged. Width-one inputs retain
+their original adapter path.
+
+Reproduce after building the matching onnx-light integration in Release with
+the AVX2 ceiling and ``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI`` matching the runtime:
+
+.. code-block:: bash
+
+    cd /home/runner/work/onnx-light-cpu/onnx-light-cpu
+    taskset -c 0 python - <<'PY'
+    from onnx_light_cpu._benchmark import run_backend_benchmark
+
+    pattern = (
+        r"^test_cpu_simplified_layer_normalization_qwen_("
+        r"hidden(2048|4096)_prefill_x_float16_stash1_(y|with_inv)|"
+        r"hidden5120_prefill_x_float16_stash1_y|"
+        r"q_norm_x_float16_stash1_with_inv)_float16_benchmark$"
+    )
+    for _ in range(3):
+        raw, rows = run_backend_benchmark(
+            [pattern], ["float16"], 2000, 100, 2.0, 1, True
+        )
+        for row in rows:
+            print(row["case"], row["median_s"], row["onnxruntime_median_s"],
+                  row["p10_s"], row["p90_s"], row["cpu_kernel_paths"])
+    PY
+
+The focused tests compare all four issue shapes with the builtin-operator
+reference, including Y-only and inverse outputs. Primitive tests also compare
+the batched path bit-for-bit with the original per-row primitives across
+vector boundaries, partial ranges, in-place output, special values, and
+empty ranges, and check F16C floating-point-state restoration. Runtime-owned
+scheduling and nested-parallel suppression remain covered. The original
+EPYC 7763 and multithreaded campaign still require a separate reproduction.
+
+Validation passed 92 affected C++ tests and seven Python integration tests.
+All six original seeded benchmark fixtures also matched their generated
+reference outputs at the existing FP16 tolerances.
+Reconfiguring the same build with ``ML_CPU_COMPUTE_HAVE_F16C_FLAG=OFF`` also
+passed 31 focused tests; the F16C-only floating-point-state test was skipped.
+The build was then restored to AVX2/F16C. Secret scanning and formatting checks
+passed; CodeQL timed out without returning an analysis result.
+
 Reproducible baseline
 ---------------------
 

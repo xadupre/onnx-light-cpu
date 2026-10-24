@@ -84,6 +84,17 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
   const bool aligned_scale = Aligned<VType>(scale);
   const auto *input = reinterpret_cast<const norm::StorageType<XType> *>(x.bytes());
   const auto *weights = reinterpret_cast<const norm::StorageType<VType> *>(scale.bytes());
+  if constexpr (XType == DataType::FLOAT16 && VType == DataType::FLOAT16 &&
+                std::is_same_v<Acc, float>) {
+    if (aligned_x && aligned_scale && scale_by_inner && width > 1) {
+      auto *inverse =
+          output_inverse ? norm::MutableData<DataType::FLOAT>(result.inv_std_var) : nullptr;
+      ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(
+          input, weights, output, inverse, static_cast<std::size_t>(begin),
+          static_cast<std::size_t>(end), width, epsilon);
+      return;
+    }
+  }
   for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
        ++row) {
     const std::size_t base = row * width;

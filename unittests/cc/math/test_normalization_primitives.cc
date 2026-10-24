@@ -359,6 +359,81 @@ TEST(NormalizationPrimitives, HalfBatchedNormalizationMatchesPerSlicePrimitives)
   EXPECT_EQ(actual, expected);
 }
 
+TEST(NormalizationPrimitives, HalfSimplifiedRowsMatchPrimitives) {
+  for (std::size_t width :
+       {1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 2048, 4096, 5120}) {
+    SCOPED_TRACE(width);
+    constexpr std::size_t rows = 5;
+    std::vector<std::uint16_t> input(rows * width + 1), scale(width + 1);
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      input[i] = FloatToFloat16Bits((static_cast<float>(i % 29) - 14.0F) * 0.0625F);
+    }
+    for (std::size_t i = 0; i < scale.size(); ++i) {
+      scale[i] = FloatToFloat16Bits(0.3F + static_cast<float>(i % 7) * 0.125F);
+    }
+    std::vector<std::uint16_t> expected(rows * width + 2, 0x1234);
+    std::vector<float> expected_inv(rows, -999.0F);
+    for (std::size_t row = 1; row < 4; ++row) {
+      const float inverse = 1.0F / std::sqrt(ml_cpu_compute::ComputeNormalizationMeanSquareFloat16(
+                                                 input.data() + 1 + row * width, width) +
+                                             1.0e-6F);
+      expected_inv[row] = inverse;
+      ml_cpu_compute::ApplyNormalizationAffineFloat16(
+          input.data() + 1 + row * width, scale.data() + 1, expected.data() + 1 + row * width,
+          width, inverse);
+    }
+    for (bool statistics : {false, true}) {
+      auto actual = std::vector<std::uint16_t>(expected.size(), 0x1234);
+      std::vector<float> inverse(rows, -999.0F);
+      ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(
+          input.data() + 1, scale.data() + 1, actual.data() + 1,
+          statistics ? inverse.data() : nullptr, 1, 4, width, 1.0e-6F);
+      EXPECT_EQ(actual, expected);
+      if (statistics) {
+        EXPECT_EQ(inverse, expected_inv);
+      }
+    }
+    auto inplace = input;
+    ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(
+        inplace.data() + 1, scale.data() + 1, inplace.data() + 1, nullptr, 1, 4, width, 1.0e-6F);
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      EXPECT_EQ(inplace[i], i >= 1 + width && i < 1 + 4 * width ? expected[i] : input[i]);
+    }
+  }
+  ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(nullptr, nullptr, nullptr, nullptr, 0, 0,
+                                                          128, 1.0e-6F);
+}
+
+TEST(NormalizationPrimitives, HalfSimplifiedRowsPreserveSpecialValues) {
+  for (std::uint16_t bits :
+       {0x0000, 0x8000, 0x0001, 0x03ff, 0x7bff, 0x7c00, 0xfc00, 0x7e55, 0xfe55}) {
+    for (std::size_t width = 1; width <= 33; ++width) {
+      std::vector<std::uint16_t> input(3 * width, bits), scale(width, FloatToFloat16Bits(0.3F));
+      std::vector<std::uint16_t> expected(input.size()), actual(input.size());
+      std::vector<float> inverse(3);
+      const float expected_inv =
+          1.0F /
+          std::sqrt(ml_cpu_compute::ComputeNormalizationMeanSquareFloat16(input.data(), width) +
+                    1.0e-6F);
+      for (std::size_t row = 0; row < 3; ++row) {
+        ml_cpu_compute::ApplyNormalizationAffineFloat16(input.data() + row * width, scale.data(),
+                                                        expected.data() + row * width, width,
+                                                        expected_inv);
+      }
+      ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(
+          input.data(), scale.data(), actual.data(), inverse.data(), 0, 3, width, 1.0e-6F);
+      EXPECT_EQ(actual, expected);
+      for (float value : inverse) {
+        if (std::isnan(expected_inv)) {
+          EXPECT_TRUE(std::isnan(value));
+        } else {
+          EXPECT_EQ(value, expected_inv);
+        }
+      }
+    }
+  }
+}
+
 TEST(NormalizationPrimitives, HalfSubnormalsAndNanCanonicalization) {
   for (std::uint16_t bits : {0x0001, 0x03ff, 0x8001, 0x83ff, 0x7e55, 0xfe55}) {
     for (std::size_t count = 1; count <= 33; ++count) {
@@ -388,6 +463,24 @@ TEST(NormalizationPrimitives, HalfConversionDoesNotRaiseUnmaskedExceptions) {
     for (const auto actual : output) {
       EXPECT_EQ(actual, 0x7c00);
     }
+  }
+}
+
+TEST(NormalizationPrimitives, HalfSimplifiedRowsRestoreFloatingPointState) {
+  if (std::strcmp(ml_cpu_compute::NormalizationFloat16Path(), "f16c") != 0) {
+    GTEST_SKIP() << "F16C is not selected.";
+  }
+  for (std::size_t width : {1, 7, 8, 9, 31, 32, 33, 128}) {
+    std::vector<std::uint16_t> input(3 * width, 0x7bff), scale(width, 0x4000), output(input.size());
+    std::vector<float> inverse(3);
+    const unsigned int original = _mm_getcsr();
+    const unsigned int unmasked = original & ~(_MM_MASK_MASK | _MM_EXCEPT_MASK);
+    _mm_setcsr(unmasked);
+    ml_cpu_compute::SimplifiedLayerNormalizationFloat16Rows(
+        input.data(), scale.data(), output.data(), inverse.data(), 0, 3, width, 1.0e-6F);
+    const unsigned int after = _mm_getcsr();
+    _mm_setcsr(original);
+    EXPECT_EQ(after, unmasked);
   }
 }
 #endif

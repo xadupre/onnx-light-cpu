@@ -152,11 +152,8 @@ void ApplyGroupNormalizationFloat16Masked(const std::uint16_t *input, std::uint1
 }
 
 template <bool RoundNormalized>
-void AffineFloat16(const std::uint16_t *input, const std::uint16_t *scale, std::uint16_t *output,
-                   std::size_t width, float multiplier) {
-  // VCVTPS2PH ignores _MM_FROUND_NO_EXC; the integer scalar codec never traps.
-  const unsigned int mxcsr = _mm_getcsr();
-  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+void AffineFloat16Masked(const std::uint16_t *input, const std::uint16_t *scale,
+                         std::uint16_t *output, std::size_t width, float multiplier) {
   const __m256 inverse_rms = _mm256_set1_ps(multiplier);
   std::size_t column = 0;
   for (; column + 8 <= width; column += 8) {
@@ -172,7 +169,6 @@ void AffineFloat16(const std::uint16_t *input, const std::uint16_t *scale, std::
     const __m256 scaled = _mm256_mul_ps(normalized, weight);
     StoreHalf8(scaled, output + column);
   }
-  _mm_setcsr(mxcsr);
   for (; column < width; ++column) {
     const float value = detail::Float16BitsToFloat(input[column]);
     const float weight = detail::Float16BitsToFloat(scale[column]);
@@ -182,6 +178,16 @@ void AffineFloat16(const std::uint16_t *input, const std::uint16_t *scale, std::
     }
     output[column] = detail::FloatToFloat16Bits(normalized * weight);
   }
+}
+
+template <bool RoundNormalized>
+void AffineFloat16(const std::uint16_t *input, const std::uint16_t *scale, std::uint16_t *output,
+                   std::size_t width, float multiplier) {
+  // VCVTPS2PH ignores _MM_FROUND_NO_EXC; the integer scalar codec never traps.
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+  AffineFloat16Masked<RoundNormalized>(input, scale, output, width, multiplier);
+  _mm_setcsr(mxcsr);
 }
 
 } // namespace
@@ -194,6 +200,24 @@ void ApplyNormalizationAffineFloat16_F16C(const std::uint16_t *input, const std:
                                           std::uint16_t *output, std::size_t count,
                                           float multiplier) {
   AffineFloat16<false>(input, scale, output, count, multiplier);
+}
+
+void SimplifiedLayerNormalizationFloat16Rows_F16C(const std::uint16_t *input,
+                                                  const std::uint16_t *scale, std::uint16_t *output,
+                                                  float *inverse_output, std::size_t row_begin,
+                                                  std::size_t row_end, std::size_t width,
+                                                  float epsilon) {
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+  for (std::size_t row = row_begin; row < row_end; ++row) {
+    const std::size_t base = row * width;
+    const float inverse = 1.0F / std::sqrt(MeanSquareFloat16(input + base, width) + epsilon);
+    if (inverse_output != nullptr) {
+      inverse_output[row] = inverse;
+    }
+    AffineFloat16Masked<false>(input + base, scale, output + base, width, inverse);
+  }
+  _mm_setcsr(mxcsr);
 }
 
 void RmsNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,

@@ -34,6 +34,10 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat16(const std::uint16
                                                                std::size_t count);
 void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                      std::uint16_t *output, std::size_t count, float multiplier);
+void SimplifiedLayerNormalizationFloat16Rows(const std::uint16_t *input, const std::uint16_t *scale,
+                                             std::uint16_t *output, float *inverse_output,
+                                             std::size_t row_begin, std::size_t row_end,
+                                             std::size_t width, float epsilon);
 float ComputeNormalizationMeanSquareBFloat16(const std::uint16_t *input, std::size_t count);
 void ApplyNormalizationAffineBFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                       std::uint16_t *output, std::size_t count, float multiplier);
@@ -75,6 +79,11 @@ float ComputeNormalizationMeanSquareFloat16_F16C(const std::uint16_t *input, std
 void ApplyNormalizationAffineFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
                                           std::uint16_t *output, std::size_t count,
                                           float multiplier);
+void SimplifiedLayerNormalizationFloat16Rows_F16C(const std::uint16_t *input,
+                                                  const std::uint16_t *scale, std::uint16_t *output,
+                                                  float *inverse_output, std::size_t row_begin,
+                                                  std::size_t row_end, std::size_t width,
+                                                  float epsilon);
 #endif
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX_F16C
