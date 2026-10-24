@@ -731,15 +731,21 @@ TEST(BinaryBroadcastPlan, MultiDimensionalBulkPathUsesAllAvailableParticipants) 
   }
 }
 
-TEST(BinaryBroadcastPlan, OrBulkHandlesNoncanonicalBytesTailsAndAliasing) {
-  const BinaryOperationDescriptor descriptor("Or", 7, {});
+void CheckLogicalBulk(const char *op_type) {
+  const BinaryOperationDescriptor descriptor(op_type, 7, {});
   const auto &adapter =
       descriptor.ResolveAdapter(BinaryDataType::BOOL, BinaryDataType::BOOL, BinaryDataType::BOOL);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2
   if (ml_cpu_compute::DetectSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2) {
-    EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkOrBool_AVX2);
-    EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkOrBoolLeft_AVX2);
-    EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkOrBoolRight_AVX2);
+    if (descriptor.op() == ml_cpu_compute::BinaryOperator::kOr) {
+      EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkOrBool_AVX2);
+      EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkOrBoolLeft_AVX2);
+      EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkOrBoolRight_AVX2);
+    } else {
+      EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkAndBool_AVX2);
+      EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkAndBoolLeft_AVX2);
+      EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkAndBoolRight_AVX2);
+    }
     adapter.bulk_contiguous(nullptr, nullptr, nullptr, 0);
     adapter.bulk_left_scalar(nullptr, nullptr, nullptr, 0);
     adapter.bulk_right_scalar(nullptr, nullptr, nullptr, 0);
@@ -782,8 +788,16 @@ TEST(BinaryBroadcastPlan, OrBulkHandlesNoncanonicalBytesTailsAndAliasing) {
   }
 }
 
-TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) {
-  const BinaryOperationDescriptor descriptor("Or", 7, {});
+TEST(BinaryBroadcastPlan, OrBulkHandlesNoncanonicalBytesTailsAndAliasing) {
+  CheckLogicalBulk("Or");
+}
+
+TEST(BinaryBroadcastPlan, AndBulkHandlesNoncanonicalBytesTailsAndAliasing) {
+  CheckLogicalBulk("And");
+}
+
+void CheckLogicalBroadcasts(const char *op_type) {
+  const BinaryOperationDescriptor descriptor(op_type, 7, {});
   const auto &adapter =
       descriptor.ResolveAdapter(BinaryDataType::BOOL, BinaryDataType::BOOL, BinaryDataType::BOOL);
   const std::vector<std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>> shapes = {
@@ -805,8 +819,8 @@ TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) 
       const auto &b_shape = swapped ? left_shape : right_shape;
       const BinaryBroadcastPlan plan(descriptor, BinaryDataType::BOOL, BinaryDataType::BOOL,
                                      BinaryDataType::BOOL, a_shape, b_shape);
-      auto left = MakeBuffer(BinaryDataType::BOOL, a_shape, true, "Or");
-      auto right = MakeBuffer(BinaryDataType::BOOL, b_shape, false, "Or");
+      auto left = MakeBuffer(BinaryDataType::BOOL, a_shape, true, op_type);
+      auto right = MakeBuffer(BinaryDataType::BOOL, b_shape, false, op_type);
       for (std::size_t i = 0; i < left.size(); ++i)
         left[i] = static_cast<std::byte>(i % 3 == 0 ? 0 : 128);
       for (std::size_t i = 0; i < right.size(); ++i)
@@ -830,6 +844,14 @@ TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) 
       EXPECT_EQ(executor.dispatches, parallel_dispatches);
     }
   }
+}
+
+TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) {
+  CheckLogicalBroadcasts("Or");
+}
+
+TEST(BinaryBroadcastPlan, AndBroadcastsMatchScalarWithExecutorAndNestedFallback) {
+  CheckLogicalBroadcasts("And");
 }
 
 TEST(BinaryBroadcastPlanCache, HitsEvictsAndKeepsInUsePlansAlive) {
