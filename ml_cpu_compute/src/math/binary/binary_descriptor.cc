@@ -4,6 +4,7 @@
 
 #include "ml_cpu_compute/math/binary/binary_descriptor.h"
 
+#include "ml_cpu_compute/logical/logical.h"
 #include "ml_cpu_compute/math/binary/binary_arithmetic.h"
 #include "ml_cpu_compute/math/binary/binary_comparison.h"
 #include "ml_cpu_compute/math/binary/binary_integer_arithmetic.h"
@@ -2616,6 +2617,16 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     adapter.bulk_contiguous = &BulkLogicalContiguous<'|'>;
     adapter.bulk_left_scalar = &BulkLogicalLeftScalar<'|'>;
     adapter.bulk_right_scalar = &BulkLogicalRightScalar<'|'>;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+    {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        adapter.bulk_contiguous = &BulkOrBool_AVX2;
+        adapter.bulk_left_scalar = &BulkOrBoolLeft_AVX2;
+        adapter.bulk_right_scalar = &BulkOrBoolRight_AVX2;
+      }
+    }
+#endif
     break;
   case BinaryOperator::kXor:
     adapter.bulk_contiguous = &BulkLogicalContiguous<'^'>;
