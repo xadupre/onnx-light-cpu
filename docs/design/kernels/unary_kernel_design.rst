@@ -102,8 +102,11 @@ and infinities (mapped to signed one). FP16 and BF16 compute in FP32 and round
 once on output. Each worker uses at most a 1,024-element FP32 conversion block;
 there is no full-tensor intermediate beyond the output.
 
-The AVX2/FMA range evaluates a small-argument polynomial to avoid cancellation
-near zero and reuses the exponential approximation for larger arguments.
+The AVX2/FMA FP32 range evaluates the 13-level continued fraction
+``x / (1 + x*x / (3 + ... + x*x / 25))`` as two polynomials in ``x*x``.
+It uses a reciprocal estimate with one Newton refinement, clamps the magnitude
+and result, and explicitly preserves exact saturation, tiny inputs, and NaNs.
+This avoids exponential range reduction and cancellation near zero.
 The AVX-512 range instead reduces ``-2 * abs(x)`` and computes
 ``expm1(reduced)`` with the existing exponential coefficients. Reconstructing
 the numerator as ``(1 - scale) - scale * expm1(reduced)`` avoids cancellation
@@ -231,3 +234,141 @@ ONNX Runtime 1.30.0 (100 repeats, 10 warmups, pinned to CPU 0).
 The arithmetic optimization narrows the gap but does not yet match ORT on
 this case. Direct range timings exclude session overhead and must not be
 reported as end-to-end ORT speedups.
+
+Measured AVX2 logits optimization (issue #980)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+On October 24, 2026, the three named FP32 logits cases reproduced a repeatable
+ORT advantage on an AMD EPYC 9V45 virtual runner (four logical CPUs, two
+physical cores). This is not the dashboard's EPYC 7763. The build used GCC
+13.3.0, Release, Python 3.13.16, NumPy 2.5.4, and an AVX2/FMA ceiling
+(``simd_level=3``). The baseline kernel source was ``eb4a699``; the optimized
+source was ``05335f9``. ONNX Runtime was the 1.31.0 Release wheel, reporting
+commit ``402979a``. The AVX2 ceiling applies to onnx-light-cpu; ORT retains
+its normal hardware dispatch on this AVX-512-capable host.
+The onnx-light 0.2.0 cp313 manylinux x86-64 release wheel supplied matching
+headers and runtime libraries through ``PYTHONPATH``, with SHA-256
+``8e47ccce3f3a70bbe31cd99c66c144bd3feb1e85b2dae1d1f4c5e849344595ae``.
+Its source commit was not exposed by the wheel metadata.
+
+Code inspection and disassembly identified the exponential, separate
+small-argument polynomial, and vector division in the AVX2 hot loop. Hardware
+performance counters were unavailable (``perf_event_paranoid=4``). Porting the
+AVX-512 reconstruction and reciprocal approach did not improve direct AVX2
+throughput and was rejected. The retained rational approximation removes
+exponential reduction and uses one eight-lane vector per iteration.
+Disassembly confirms ``vrcpps`` with FMA refinement and no ``vdivps`` in the
+FP32 Tanh range. Dispatch, executor tuning, FP16 arithmetic, benchmark inputs,
+and accuracy tolerances are unchanged.
+
+**Steady-state end-to-end:** the existing backend benchmark runner measured
+``test_cpu_tanh_logits_1x{1,16,128}x202048_float32_benchmark`` with the original
+seed ``987654321`` and native tensor feeds. Each setting used three campaigns,
+10 warmups, 100 measured calls, and a 10-second phase cap; all 100 samples
+were retained. These longer-than-default settings reduce shared-runner noise.
+Requested and effective session threads were one or two, inter-op threads
+one. Neither process nor workers were pinned (CPUs 0--3 available).
+No spin overrides were applied: onnx-light uses its adaptive default and ORT
+its default spinning policy, not an assertion of identical spin budgets.
+The standard runner measures CPU first, then constructs and measures ORT;
+the CPU session remains alive during the ORT phase.
+Untimed kernel recording confirmed ``onnx_light_cpu::Tanh``.
+
+The table reports the median of the three campaign medians, in milliseconds:
+
+.. list-table:: End-to-end FP32 Tanh
+   :header-rows: 1
+
+   * - Tokens
+     - Threads
+     - CPU before
+     - CPU after
+     - ORT before / after
+     - CPU speedup
+   * - 1
+     - 1
+     - 0.093476
+     - 0.078399
+     - 0.042590 / 0.042855
+     - 1.19x
+   * - 16
+     - 1
+     - 1.520108
+     - 1.241419
+     - 0.665786 / 0.633624
+     - 1.22x
+   * - 128
+     - 1
+     - 12.380025
+     - 9.983109
+     - 5.665010 / 5.306403
+     - 1.24x
+   * - 1
+     - 2
+     - 0.049625
+     - 0.040697
+     - 0.045874 / 0.045970
+     - 1.22x
+   * - 16
+     - 2
+     - 0.810311
+     - 0.641020
+     - 0.343865 / 0.329748
+     - 1.26x
+   * - 128
+     - 2
+     - 6.699164
+     - 5.390190
+     - 4.621950 / 4.245648
+     - 1.24x
+
+For one thread, the envelopes of the campaigns' p10--p90 CPU intervals
+were 0.091117--0.101544 to 0.077626--0.081274 ms (one token),
+1.429328--1.586709 to 1.216600--1.273245 ms (16 tokens), and
+11.788844--12.514251 to 9.551528--10.329715 ms (128 tokens).
+Thus latency falls by 16--19% with one thread and 18--21% with two threads,
+but ORT remains faster on the larger cases. These diagnostic measurements
+do not establish parity or reconstruct the original campaign's settings.
+
+Reproduce the end-to-end settings with the existing CLI, running it three
+times per build and thread setting (replace ``--threads 1`` with ``2``):
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark \
+       --tests "^test_cpu_tanh_logits_.*_float32_benchmark$" --dtypes float32 \
+       --threads 1 --repeat 100 --warmup 10 --max-repeat-time 10 \
+       --onnxruntime --output /tmp/tanh.xlsx
+
+**Kernel throughput:** ``taskset -c 0 build/exp_log_throughput 31 tanh``
+used preallocated buffers, three warmups, and 31 samples, rotating scalar
+and AVX2 measurement order with identical inputs. Aligned median seconds
+(IQR) before and after were:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Elements
+     - Before seconds (IQR)
+     - After seconds (IQR)
+   * - 202048
+     - 0.000094264 (0.000005498)
+     - 0.000076666 (0.000001352)
+   * - 202055 (masked tail)
+     - 0.000093852 (0.000003866)
+     - 0.000077237 (0.000001161)
+   * - 3232768
+     - 0.001509332 (0.000016103)
+     - 0.001274207 (0.000031757)
+   * - 25862144
+     - 0.012244703 (0.000199844)
+     - 0.009744212 (0.000388759)
+
+Unaligned and small/tail-heavy sizes also improved in this driver.
+Full outputs for all three original logits tensors passed untimed comparison
+against built-in onnx-light and ORT at the existing FP32 tolerance
+(``rtol=2e-6``, ``atol=1e-7``), with maximum absolute differences of
+2.39e-7 and 4.18e-7 respectively. Focused C++ tests retain the stricter
+5e-7 relative check against double-precision ``std::tanh``, including random
+bit patterns, logarithmic magnitudes, reduction neighbors, signed zeros,
+subnormals, NaNs, exact saturation, in-place buffers, and every vector tail.
