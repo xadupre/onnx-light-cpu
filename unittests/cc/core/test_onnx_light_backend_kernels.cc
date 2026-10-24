@@ -1242,13 +1242,11 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
   const std::set<std::string> expected_shape_tags = {
       "contiguous", "left_scalar", "right_scalar", "row", "per_channel", "outer", "general",
   };
-  const std::set<int64_t> expected_output_sizes = {
-      4096,
-      65536,
-      1048576,
-      4194304,
-  };
   for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
+    std::set<int64_t> expected_output_sizes = {4096, 65536, 1048576, 4194304};
+    if (entry.op == ml_cpu_compute::BinaryOperator::kOr) {
+      expected_output_sizes.insert({32768, 65535, 131072});
+    }
     const std::vector<TestCase> cases =
         CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
     std::set<std::string> shape_tags;

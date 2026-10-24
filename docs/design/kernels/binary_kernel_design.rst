@@ -276,3 +276,119 @@ Construct the CPU session with ``num_threads`` set to 1 or 4,
 ``affinity_policy="none"``, and ``spin_policy="park_immediately"``.
 The binary parity tool's selector excludes swapped cases; select directly
 through ``collect_test_cases_by_name`` instead.
+
+Bool Or on AVX2
+---------------
+
+``Or`` resolves contiguous and left/right-scalar callbacks once when constructing
+the descriptor. AVX2-capable builds and CPUs use unaligned 32-byte loads,
+bitwise OR, a zero comparison, and masking to canonical BOOL bytes (0 or 1).
+Noncanonical nonzero input bytes remain true. Scalar broadcasts load the scalar
+once: true fills the output with ones without reading the vector; false
+normalizes the vector. Short ranges and tails stay within the input/output
+buffers, and exact vector/output aliasing is supported. Other CPUs retain the
+existing portable bulk callbacks. Broadcast traversal, scheduling thresholds,
+executor ownership, and input generation are unchanged.
+
+Issue #974 measurements (2026-10-24)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Host: AMD EPYC 9V45 96-Core Processor, Linux x86-64 VM exposing four logical
+CPUs (two cores, two threads per core), process affinity CPUs 0-3. GCC 13.3.0
+Release build, ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``; runtime SIMD level 3.
+Source before optimization: ``6818040``; optimized source: ``4e4660f``.
+Dependencies: released Linux CPython 3.13 wheels for onnx-light 0.2.0 and
+ONNX Runtime 1.31.0, NumPy 2.5.4. Dependency wheel build commits were not
+available. These versions and this processor are not attributed to the older
+dashboard campaign.
+
+The eight historical names/shapes were restored as additional Or-only backend
+benchmark cases. The table uses their shape-family tags; every case has the
+prefix ``test_cpu_or_v7_`` and suffix
+``_boolxbool_to_bool_n<output-elements>_benchmark``.
+
+======================= ================== ============= ========
+Case                    Left shape         Right shape   Elements
+======================= ================== ============= ========
+repeated_block_4d_large  8x32x256x64         32x1x1        4194304
+repeated_block_4d        2x8x128x64          8x1x1         131072
+inner_vector_4d_large    16x16x256x64        1x16x1x64     4194304
+general_5d              4x1x16x1x64         1x8x1x128x1   4194304
+inner_vector_4d          4x16x256x64         1x16x1x64     1048576
+contiguous_3d            4x16x1024           4x16x1024     65536
+contiguous_4d            3x5x17x257          3x5x17x257    65535
+contiguous_2d            128x256             128x256       32768
+======================= ================== ============= ========
+
+Both runtimes used explicit thread limits of 1 or 4 and no worker affinity.
+Spin-wait was disabled: ``spin_policy="park_immediately"`` for onnx-light,
+both ORT ``allow_spinning`` settings zero. ORT used sequential graph execution
+and one inter-op thread. Three campaigns each used 200 warm-ups and 1,000 timed
+calls per backend, alternating backend order on every iteration, with a
+five-second cumulative per-backend limit (not reached). CPU feeds were native
+backend tensors; ORT feeds were NumPy views. Kernel recording verified
+``onnx_light_cpu::Or`` before timing and was disabled during timing. Each
+output matched ORT and an onnx-light built-in session warmed before registering
+the accelerated kernels, with exact equality at both thread counts.
+
+For the controlled before run, source ``4e4660f`` was built with AVX2/F16C
+source groups excluded, selecting the unchanged pre-optimization Or callbacks.
+Both groups were excluded because excluding only AVX2 exposes an unrelated
+normalization F16C link dependency. The after run restored both groups. Or
+uses neither F16C nor FMA. Separate three-campaign single-thread runs of the
+original AVX2-ceiling build through the repository benchmark CLI also found
+only the large repeated-block gap (1.26x), reduced by this change.
+
+Median of the three campaign medians, milliseconds:
+
+======================= ======= ========== ========== ========= =========
+Case                    Threads CPU before ORT before CPU after ORT after
+======================= ======= ========== ========== ========= =========
+repeated_block_4d_large  1       0.078428   0.066701   0.060360  0.065468
+repeated_block_4d        1       0.004797   0.005489   0.004056  0.005398
+inner_vector_4d_large    1       0.250503   0.482887   0.254978  0.486891
+general_5d              1       0.322691   0.465271   0.305884  0.476445
+inner_vector_4d          1       0.064727   0.123266   0.064777  0.123405
+contiguous_3d            1       0.003795   0.005358   0.003706  0.005248
+contiguous_4d            1       0.003866   0.005318   0.003856  0.005238
+contiguous_2d            1       0.003175   0.004376   0.003195  0.004411
+repeated_block_4d_large  4       0.076526   0.054352   0.060085  0.054512
+repeated_block_4d        4       0.005068   0.005819   0.004066  0.005479
+inner_vector_4d_large    4       0.165474   0.284559   0.150807  0.280090
+general_5d              4       0.193682   0.280603   0.171047  0.278568
+inner_vector_4d          4       0.053360   0.088679   0.050621  0.087461
+contiguous_3d            4       0.003866   0.005489   0.003906  0.005348
+contiguous_4d            4       0.003856   0.005448   0.003936  0.005283
+contiguous_2d            4       0.003175   0.004497   0.003215  0.004467
+======================= ======= ========== ========== ========= =========
+
+The historical 3.7-72.7x gaps did not reproduce. Only the large repeated-block
+gap was repeatable here: before optimization, ORT led by 1.18x (one thread)
+and 1.41x (four). CPU latency improved by 1.30x and 1.27x, respectively.
+The four-thread residual ORT advantage is 1.10x; this is not a universal win.
+All seven other cases remained faster than ORT. Some near-unchanged cases
+regressed by up to 2%; no improvement is claimed for those cases.
+The optimized large repeated-block campaign medians ranged from
+0.060286 to 0.060501 ms (one thread) and 0.058884 to 0.060711 ms (four).
+These local measurements are not confidence intervals or evidence about the
+older campaign's unknown processor, input payloads, or build provenance.
+
+Hardware-counter profiling was denied (``perf_event_paranoid=4``). Assembly
+inspection showed baseline 16-byte SSE bulk loops, including repeated
+scalar-broadcast comparisons. The optimized callbacks use 32-byte AVX2
+``vpor``, ``vpcmpeqb``, and ``vpandn``; true broadcast scalars take the fill
+path. Dispatch-pointer tests verify callback selection. This removes bulk-loop
+work without adding broadcast expansion or moving allocations outside timing.
+All 41 targeted broadcast/descriptor tests passed normally and under
+ASan/UBSan, as did all seven generated Or backend tests. The 15 broadcast-plan
+tests also passed ASan/UBSan with AVX2/F16C groups excluded.
+
+To reproduce, use the issue #998 timing procedure above with this selector::
+
+   ^test_cpu_or_v7_(repeated_block_4d|inner_vector_4d|general_5d|contiguous_[234]d)
+
+Use the session policies and thread limits specified here, including disabled
+spinning, and ``measure_alternating`` with the same repetition settings.
+The existing benchmark CLI can also select these eight cases directly, but
+uses separate backend phases and default spin policies rather than this
+controlled alternating procedure.

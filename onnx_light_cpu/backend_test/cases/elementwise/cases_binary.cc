@@ -382,7 +382,20 @@ void RegisterLlmBenchmark(std::vector<TestCase> &registry,
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                                     const ml_cpu_compute::BinaryManifestEntry &entry,
                                     const ml_cpu_compute::BinaryTypeSignature &signature) {
-  const std::vector<ShapePair> &shape_pairs = BinaryBenchmarkShapePairs();
+  std::vector<ShapePair> shape_pairs = BinaryBenchmarkShapePairs();
+  if (entry.op == ml_cpu_compute::BinaryOperator::kOr) {
+    const std::vector<ShapePair> regression_shapes = {
+        {"repeated_block_4d_large", {8, 32, 256, 64}, {32, 1, 1}},
+        {"repeated_block_4d", {2, 8, 128, 64}, {8, 1, 1}},
+        {"inner_vector_4d_large", {16, 16, 256, 64}, {1, 16, 1, 64}},
+        {"general_5d", {4, 1, 16, 1, 64}, {1, 8, 1, 128, 1}},
+        {"inner_vector_4d", {4, 16, 256, 64}, {1, 16, 1, 64}},
+        {"contiguous_3d", {4, 16, 1024}, {4, 16, 1024}},
+        {"contiguous_4d", {3, 5, 17, 257}, {3, 5, 17, 257}},
+        {"contiguous_2d", {128, 256}, {128, 256}},
+    };
+    shape_pairs.insert(shape_pairs.end(), regression_shapes.begin(), regression_shapes.end());
+  }
   for (const ShapePair &shape_pair : shape_pairs) {
     const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
     const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
