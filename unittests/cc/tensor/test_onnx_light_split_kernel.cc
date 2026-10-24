@@ -487,4 +487,36 @@ TEST(OnnxLightSplitKernel, NarrowFourWayUsesFineGrainedSimdRanges) {
   EXPECT_EQ(executor.blocks, 8);
 }
 
+TEST(OnnxLightSplitKernel, MiddleAxisBenchmarkRowsAndSchedulingBoundaries) {
+  InlineExecutor executor;
+  executor.concurrent = true;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  for (int64_t threads : {1, 8}) {
+    view.effective_threads = threads;
+    for (int64_t rows : {15, 16, 17, 63, 64, 65}) {
+      SCOPED_TRACE(rows);
+      SCOPED_TRACE(threads);
+      const Tensor data = Payload(DataType::FLOAT, {rows, 128, 128});
+      for (const Values &sizes : {Values{32, 64, 32}, Values{0, 32, 0, 64, 32, 0}}) {
+        const int64_t previous = executor.dispatches;
+        Compare(data, 1, sizes);
+        if (threads > 1 && rows >= 16) {
+          EXPECT_EQ(executor.dispatches, previous + 1);
+          EXPECT_GT(executor.blocks, 1);
+          EXPECT_LE(executor.blocks, threads);
+        } else {
+          EXPECT_EQ(executor.dispatches, previous);
+        }
+      }
+    }
+  }
+  const int64_t previous = executor.dispatches;
+  {
+    ml_cpu_compute::detail::ExecutionRegionScope region;
+    Compare(Payload(DataType::FLOAT, {64, 128, 128}), -2, {32, 64, 32});
+  }
+  EXPECT_EQ(executor.dispatches, previous);
+}
+
 } // namespace

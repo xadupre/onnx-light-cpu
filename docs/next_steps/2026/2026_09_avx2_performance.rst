@@ -42,6 +42,96 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
+Split middle-axis follow-up
+--------------------------
+
+Issue `#992 <https://github.com/xadupre/onnx-light-cpu/issues/992>`_ reports
+0.301951 ms for onnx-light-cpu versus 0.217037 ms for ONNX Runtime on
+``test_cpu_split_middle_axis_float32_benchmark``. The gap was **not
+reproduced** on 2026-10-24. No production optimization was retained.
+
+The unchanged backend case uses FP32[64,128,128], axis 1, and an INT64[3]
+input containing [32,64,32]. It materializes three outputs, copying 4 MiB
+across 64 input rows. The current generic implementation already copies all
+outputs row by row and dynamically distributes large rows through the runtime
+executor. The narrow four-output SIMD transposes do not apply to this case.
+
+The sandbox processor was an AMD EPYC 7763 under virtualization, with four
+visible logical CPUs, two physical cores, and 32 MiB L3. The working branch
+matched its upstream after fetching remote refs. The baseline was
+``4d886f27af0c3fa648c36c5da11e38f1344a0e3c``; the after run added only the
+regression test and this report. Both used onnx-light-cpu 0.2.0, GCC 13.3.0,
+Release ``-O3 -DNDEBUG``, and ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``
+(runtime-reported SIMD level 3). Dependencies were the onnx-light 0.2.0
+CPython 3.13 Linux release wheel, ONNX Runtime 1.31.0, and NumPy 2.4.2.
+Dependency source commits were not available from the wheel metadata.
+Bindings linked the wheel's exact runtime libraries with the matching native
+Python ABI (``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF``).
+
+Each table entry lists three independent process medians in milliseconds.
+Each process used 100 warmups and 1,001 timed session calls per backend,
+with a 10-second cap that was not reached. Inputs, output allocation,
+validation, and session execution followed the existing benchmark harness:
+backend tensors feed onnx-light-cpu, NumPy arrays feed ORT, and session
+construction and feed conversion are outside timing. Output materialization
+remains inside timing.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 32 33
+
+   * - Revision
+     - Threads / affinity
+     - onnx-light-cpu (ms)
+     - ONNX Runtime (ms)
+   * - Before
+     - 1 / CPU 0
+     - 0.117488, 0.117028, 0.115606
+     - 0.121677, 0.124011, 0.127358
+   * - After (tests only)
+     - 1 / CPU 0
+     - 0.115806, 0.117138, 0.115596
+     - 0.124983, 0.124502, 0.123120
+   * - Before
+     - Default / CPUs 0-3
+     - 0.071794, 0.073627, 0.073737
+     - 0.080831, 0.079519, 0.081452
+   * - After (tests only)
+     - Default / CPUs 0-3
+     - 0.073156, 0.072124, 0.072565
+     - 0.080790, 0.080830, 0.080641
+
+The primary comparison is one-thread execution: neither backend has workers
+spinning. Additional default-thread runs retain each runtime's default
+thread/spin policy (onnx-light adaptive spin, ORT default spinning), so they
+are diagnostic rather than a spin-matched comparison. ORT uses sequential
+execution, one inter-op thread, and the CPU execution provider. The harness
+runs the CPU phase before constructing ORT, then measures ORT; it does not
+alternate backend order. Both phases use the same process affinity, with
+onnx-light worker affinity disabled.
+
+Reproduce a one-thread run from the built source tree with dependencies on
+``PYTHONPATH``::
+
+    taskset -c 0 python -m onnx_light_cpu benchmark \
+      --test '^test_cpu_split_middle_axis_float32_benchmark$' --dtype float32 \
+      --threads 1 --repeat 1001 --warmup 100 -t 10 --onnxruntime \
+      -o /tmp/split.xlsx
+
+For the default-thread diagnostic use ``taskset -c 0-3`` and ``--threads 0``.
+Hardware-counter profiling was denied (``perf_event_paranoid=4``), and no
+counter-verified bottleneck or new performance improvement is claimed.
+The original campaign lacks per-case commits and thread/spin settings, so
+these results cannot establish why its older measurement differed.
+
+The focused C++ regression compares the exact middle-axis shape and nearby
+row counts against onnx-light's built-in Split, byte for byte. It also checks
+the parallel threshold at 15/16/17 rows, empty output segments, concurrent
+execution, single-thread execution, and suppression of nested scheduling.
+All 13 Split tests pass. Since the reported gap is not repeatable here,
+changing the copy algorithm or benchmark workload is not justified by this
+evidence.
+
 Abs cache-capacity boundary follow-up
 -------------------------------------
 
