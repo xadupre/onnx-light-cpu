@@ -36,6 +36,9 @@ void NotBoolWithTuning(const uint8_t *input, uint8_t *output, std::size_t count,
                        const NotExecutionTuning &tuning);
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2
+void BulkAndBool_AVX2(const void *left, const void *right, void *output, std::size_t count);
+void BulkAndBoolLeft_AVX2(const void *left, const void *right, void *output, std::size_t count);
+void BulkAndBoolRight_AVX2(const void *left, const void *right, void *output, std::size_t count);
 void BulkOrBool_AVX2(const void *left, const void *right, void *output, std::size_t count);
 void BulkOrBoolLeft_AVX2(const void *left, const void *right, void *output, std::size_t count);
 void BulkOrBoolRight_AVX2(const void *left, const void *right, void *output, std::size_t count);
