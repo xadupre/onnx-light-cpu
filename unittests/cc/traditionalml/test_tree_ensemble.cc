@@ -631,11 +631,12 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
 }
 
 TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds) {
+  constexpr std::size_t kFeatures = 4096;
   for (auto attributes : {StumpForest(17, 1), BalancedForest(17)}) {
-    attributes.n_features = 4096;
+    attributes.n_features = kFeatures;
     attributes.value_type = DataType::FLOAT;
     for (std::size_t node = 0; node < attributes.nodes_featureids.size(); ++node) {
-      attributes.nodes_featureids[node] = node % 2 == 0 ? 0 : 4095;
+      attributes.nodes_featureids[node] = node % 2 == 0 ? 0 : kFeatures - 1;
     }
     const TreeEnsembleOracle oracle(attributes);
     for (const auto strategy : {TreeEnsembleExecutionStrategy::kRowParallel,
@@ -645,7 +646,7 @@ TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds
       plan.CompactRuntimeStorage();
       for (std::size_t rows = 0; rows <= 33; ++rows) {
         SCOPED_TRACE(::testing::Message() << "rows=" << rows << " depth=" << plan.max_depth());
-        std::vector<float> input(rows * 4096);
+        std::vector<float> input(rows * kFeatures);
         const float values[] = {-std::numeric_limits<float>::infinity(),
                                 -0.5F,
                                 -0.0F,
@@ -654,8 +655,8 @@ TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds
                                 std::numeric_limits<float>::infinity(),
                                 std::numeric_limits<float>::quiet_NaN()};
         for (std::size_t row = 0; row < rows; ++row) {
-          input[row * 4096] = values[row % 7];
-          input[row * 4096 + 4095] = values[(row + 3) % 7];
+          input[row * kFeatures] = values[row % 7];
+          input[row * kFeatures + kFeatures - 1] = values[(row + 3) % 7];
         }
         const std::vector<double> reference_input(input.begin(), input.end());
         const auto expected = oracle.Evaluate(reference_input, rows);
