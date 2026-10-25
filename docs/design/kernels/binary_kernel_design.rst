@@ -97,6 +97,122 @@ An input may alias the output only when its type and shape equal the output and
 the selected traversal cannot overwrite a value before its final read. A
 broadcast input is never expanded in place.
 
+Float32 Mul AVX2 investigation
+------------------------------
+
+Issue #983 measurements (2026-10-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The six historical gaps were investigated without changing the named models,
+input generation, shapes, operand order, or correctness requirements. No
+production optimization is retained: the historical advantages did not reproduce
+with four threads, and a scheduling experiment regressed performance.
+A smaller single-thread left-scalar disadvantage remains unresolved.
+
+Host: AMD EPYC 7763 64-Core Processor, Linux x86-64 VM exposing four logical
+CPUs (two cores, two threads per core), process affinity CPUs 0-3. GCC 13.3.0
+Release build (``-O3 -DNDEBUG``), ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``;
+``detect_simd_level()`` returned 3. Baseline and restored source:
+``4969342fea3b54f55cdd085bf2307bd33d4f6d4e`` (the initial-plan commit after
+``334eb0c9daf89b7c9c00dbfe3592b2e75cca7948`` changed no source).
+Dependencies: onnx-light 0.2.0 from its released CPython 3.13 Linux x86-64
+GitHub wheel, ONNX Runtime 1.31.0, NumPy 2.5.4, and ml-dtypes 0.6.0.
+Dependency wheel build commits were unavailable. The CPU integration used
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF`` to match the runtime wheel.
+These measurements do not establish the provenance or thread settings of the
+dashboard's retained results.
+
+Both runtimes requested exactly 1 or 4 threads, with no worker affinity.
+Spinning was disabled: ``spin_policy="park_immediately"`` for onnx-light and
+both ORT ``allow_spinning`` settings zero. ORT used sequential graph execution,
+one inter-op thread, and ``CPUExecutionProvider``. No tuning calibration was
+performed. Each case/thread pair used three campaigns of 200 warm-up calls and
+1,000 timed calls per backend, alternating backend order every iteration using
+``measure_alternating`` with a five-second cumulative per-backend limit (not
+reached). Native backend tensors fed CPU sessions; NumPy views fed ORT.
+All six cases and their built-in reference outputs were retained throughout
+each run. Outputs matched ORT and built-in sessions run before registering CPU
+kernels, with exact equality. Recording confirmed ``onnx_light_cpu::Mul`` and
+was disabled during timing.
+
+The table reports medians of the three campaign medians in milliseconds.
+``Initial`` and ``Restored`` are separate runs of the same implementation,
+before and after testing and reverting the candidate; they are **not**
+before/after optimization speedups. Every case name has prefix
+``test_cpu_mul_v14_`` and suffix
+``_float32xfloat32_to_float32_n<elements>_benchmark``. Scalar shapes are rank
+zero; row shapes are ``[elements / 256, 256]`` and ``[256]``.
+
+============ ======== ======= =========== =========== ============ ============
+Case         Elements Threads Initial CPU Initial ORT Restored CPU Restored ORT
+============ ======== ======= =========== =========== ============ ============
+right_scalar 1048576  1       0.125477    0.132871    0.158947     0.167790
+row          1048576  1       0.154321    0.240761    0.185804     0.243783
+contiguous   4194304  1       1.508225    1.506556    1.614223     1.615396
+left_scalar  4194304  1       1.051050    1.045931    1.108393     1.066289
+right_scalar 4194304  1       0.987115    1.080888    1.087574     1.116412
+row          4194304  1       1.156043    1.200668    1.198519     1.235417
+right_scalar 1048576  4       0.105691    0.115213    0.103113     0.111404
+row          1048576  4       0.116824    0.174778    0.124108     0.176700
+contiguous   4194304  4       1.301492    1.420991    1.498774     1.583283
+left_scalar  4194304  4       0.752073    0.847599    0.948854     1.021159
+right_scalar 4194304  4       0.735357    0.827098    0.912970     1.000615
+row          4194304  4       0.707335    0.836113    0.915704     1.005808
+============ ======== ======= =========== =========== ============ ============
+
+All six cases favored CPU in every four-thread baseline/restored campaign.
+Single-thread contiguous was effectively at parity, with the winner changing.
+The single-thread left-scalar ORT gain was 1.005x initially and 1.039x after
+restoration, rather than the historical 1.239x. The other four single-thread
+cases favored CPU. Absolute latencies drifted materially between runs; these
+observations are not confidence intervals or proof that the older gaps cannot
+occur elsewhere.
+
+Hardware-counter profiling was denied (``perf_event_paranoid=4``).
+Dispatch inspection confirmed the AVX float32 Mul callbacks, already resolved
+at descriptor construction. Assembly inspection showed four unrolled 256-bit
+``vmulps`` operations per main-loop iteration, with unaligned loads/stores and
+scalar tails. There was no missing vector path in these cases.
+
+The experiment removed only ``kMul`` from ``UsesDynamicFloatArithmetic`` in
+``binary_broadcast_plan.cc``, replacing the atomic 64 KiB tile queue with the
+runtime's existing disjoint ranges. Thresholds, participant limits, SIMD
+callbacks, and benchmark settings were unchanged. Candidate four-thread
+CPU/ORT medians were:
+
+============ ======== ============= =============
+Case         Elements Candidate CPU Candidate ORT
+============ ======== ============= =============
+right_scalar 1048576  0.117846      0.119249
+row          1048576  0.119150      0.174308
+contiguous   4194304  1.309864      1.299891
+left_scalar  4194304  0.820458      0.819382
+right_scalar 4194304  0.796493      0.797590
+row          4194304  0.776882      0.773069
+============ ======== ============= =============
+
+This did not demonstrate an improvement and was reverted. Even the candidate's
+single-thread large-row timing changed to 1.612447 ms versus ORT's 1.165447 ms,
+although the dynamic queue is inactive with one thread. The measurements do
+not isolate scheduling as the cause of every shift. Neither a new kernel nor
+a scheduling policy is justified by this experiment.
+
+Validation: all 24 existing arithmetic/broadcast-plan/cache C++ tests passed.
+All 84 generated Mul backend correctness cases matched warmed built-in kernels
+exactly at both thread counts; the six benchmark outputs also matched ORT.
+No correctness tests or benchmark conditions were relaxed.
+
+To reproduce, follow the issue #998 timing procedure below, with the explicit
+spin/affinity policies above, thread limits 1 and 4, and this exact selector::
+
+   ^test_cpu_mul_v14_((contiguous|left_scalar)_float32xfloat32_to_float32_n4194304|(right_scalar|row)_float32xfloat32_to_float32_n(1048576|4194304))_benchmark$
+
+Collect only these six cases using ``TestMode.BENCHMARK`` and
+``generate_benchmark_expected_outputs=False``. Prepare native/NumPy feeds with
+``_prepare_feeds`` and run each built-in reference session before
+``register_kernels()``. Repeat the complete process to assess run-to-run drift,
+not just repeated calls within one session.
+
 Float32 Greater on AVX2
 -----------------------
 
