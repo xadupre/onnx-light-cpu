@@ -59,6 +59,7 @@ const BinaryArithmeticBulkFunctions &BinaryAddFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinarySubFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryMulFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryDivFloat32BulkFunctions();
+BinaryArithmeticBulkFunctions::Fn BinaryAddFloat32StreamingFunction(std::size_t count);
 BinaryArithmeticBulkFunctions::Fn BinaryDivFloat32StreamingFunction(std::size_t count);
 const BinaryArithmeticBulkFunctions &BinaryAddFloat16BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinarySubFloat16BulkFunctions();

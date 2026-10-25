@@ -85,33 +85,49 @@ ML_CPU_COMPUTE_BIN_AVX_F64(BinaryDivFloat64, _mm256_div_pd, /)
 #undef ML_CPU_COMPUTE_BIN_AVX_F64
 #undef ML_CPU_COMPUTE_BIN_AVX
 
-void BinaryDivFloat32Streaming_AVX(const float *left, const float *right, float *out,
-                                   std::size_t count) {
+template <bool Add>
+static void BinaryFloat32Streaming_AVX(const float *left, const float *right, float *out,
+                                       std::size_t count) {
+  const auto apply = [](__m256 a, __m256 b) {
+    if constexpr (Add) {
+      return _mm256_add_ps(a, b);
+    } else {
+      return _mm256_div_ps(a, b);
+    }
+  };
   std::size_t i = 0;
   while (i < count && reinterpret_cast<std::uintptr_t>(out + i) % 64 != 0) {
-    out[i] = left[i] / right[i];
+    out[i] = Add ? left[i] + right[i] : left[i] / right[i];
     ++i;
   }
   const std::size_t end = i + (count - i) / 32 * 32;
   const bool streamed = i < end;
   for (; i < end; i += 32) {
-    const __m256 v0 = _mm256_div_ps(_mm256_loadu_ps(left + i), _mm256_loadu_ps(right + i));
-    const __m256 v1 = _mm256_div_ps(_mm256_loadu_ps(left + i + 8), _mm256_loadu_ps(right + i + 8));
-    const __m256 v2 =
-        _mm256_div_ps(_mm256_loadu_ps(left + i + 16), _mm256_loadu_ps(right + i + 16));
-    const __m256 v3 =
-        _mm256_div_ps(_mm256_loadu_ps(left + i + 24), _mm256_loadu_ps(right + i + 24));
+    const __m256 v0 = apply(_mm256_loadu_ps(left + i), _mm256_loadu_ps(right + i));
+    const __m256 v1 = apply(_mm256_loadu_ps(left + i + 8), _mm256_loadu_ps(right + i + 8));
+    const __m256 v2 = apply(_mm256_loadu_ps(left + i + 16), _mm256_loadu_ps(right + i + 16));
+    const __m256 v3 = apply(_mm256_loadu_ps(left + i + 24), _mm256_loadu_ps(right + i + 24));
     _mm256_stream_ps(out + i, v0);
     _mm256_stream_ps(out + i + 8, v1);
     _mm256_stream_ps(out + i + 16, v2);
     _mm256_stream_ps(out + i + 24, v3);
   }
   for (; i < count; ++i) {
-    out[i] = left[i] / right[i];
+    out[i] = Add ? left[i] + right[i] : left[i] / right[i];
   }
   if (streamed) {
     _mm_sfence();
   }
+}
+
+void BinaryAddFloat32Streaming_AVX(const float *left, const float *right, float *out,
+                                   std::size_t count) {
+  BinaryFloat32Streaming_AVX<true>(left, right, out, count);
+}
+
+void BinaryDivFloat32Streaming_AVX(const float *left, const float *right, float *out,
+                                   std::size_t count) {
+  BinaryFloat32Streaming_AVX<false>(left, right, out, count);
 }
 
 void BinaryPReluFloat32_AVX(const float *left, const float *right, float *out, std::size_t count) {

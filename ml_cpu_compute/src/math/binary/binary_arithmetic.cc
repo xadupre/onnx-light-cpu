@@ -626,7 +626,9 @@ ML_CPU_COMPUTE_DEFINE_BULK_RESOLVER(BinaryMulFloat32, BinaryMulFloat32, float)
 ML_CPU_COMPUTE_DEFINE_BULK_RESOLVER(BinaryDivFloat32, BinaryDivFloat32, float)
 ML_CPU_COMPUTE_DEFINE_X86_BULK_RESOLVER(BinaryPReluFloat32, BinaryPReluFloat32, float)
 
-BinaryArithmeticBulkFunctions::Fn BinaryDivFloat32StreamingFunction(std::size_t count) {
+namespace {
+
+bool UseBinaryFloat32Streaming(std::size_t count) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX
   static const SimdLevel level = DetectSimdLevel();
   static const std::size_t cache_bytes = CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 3, 0);
@@ -634,12 +636,36 @@ BinaryArithmeticBulkFunctions::Fn BinaryDivFloat32StreamingFunction(std::size_t 
   // Unknown topology and AVX-512 retain their existing cached-store paths.
   if (level >= SimdLevel::kAVX && level < SimdLevel::kAVX512 && cache_bytes != 0 &&
       count > std::max<std::size_t>(32 * 1024 * 1024, cache_bytes) / (3 * sizeof(float))) {
-    return &ErasedContiguous<float, &BinaryDivFloat32Streaming_AVX>;
+    return true;
   }
 #else
   (void)count;
 #endif
+  return false;
+}
+
+} // namespace
+
+BinaryArithmeticBulkFunctions::Fn BinaryAddFloat32StreamingFunction(std::size_t count) {
+  if (!UseBinaryFloat32Streaming(count)) {
+    return nullptr;
+  }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX
+  return &ErasedContiguous<float, &BinaryAddFloat32Streaming_AVX>;
+#else
   return nullptr;
+#endif
+}
+
+BinaryArithmeticBulkFunctions::Fn BinaryDivFloat32StreamingFunction(std::size_t count) {
+  if (!UseBinaryFloat32Streaming(count)) {
+    return nullptr;
+  }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX
+  return &ErasedContiguous<float, &BinaryDivFloat32Streaming_AVX>;
+#else
+  return nullptr;
+#endif
 }
 ML_CPU_COMPUTE_DEFINE_FLOAT16_BULK_RESOLVER(BinaryAddFloat16, BinaryAddFloat16)
 ML_CPU_COMPUTE_DEFINE_FLOAT16_BULK_RESOLVER(BinarySubFloat16, BinarySubFloat16)

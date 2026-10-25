@@ -713,6 +713,70 @@ TEST(BinaryBroadcastPlan, LargeFloat32DivParallelNestedAndInPlace) {
   }
 }
 
+TEST(BinaryBroadcastPlan, LargeFloat32AddParallelNestedAndInPlace) {
+  const BinaryOperationDescriptor descriptor("Add", 14, {});
+  InlineExecutor executor;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  for (std::size_t count : {65u, 4194304u + 17u}) {
+    const std::vector<std::int64_t> shape{static_cast<std::int64_t>(count)}, scalar{};
+    for (int mode = 0; mode < 3; ++mode) {
+      SCOPED_TRACE(::testing::Message() << "count=" << count << " mode=" << mode);
+      const BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                     BinaryDataType::FLOAT, mode == 1 ? scalar : shape,
+                                     mode == 2 ? scalar : shape);
+      std::vector<float> left(mode == 1 ? 1 : count), right(mode == 2 ? 1 : count);
+      std::vector<float> expected(count), output(count);
+      for (std::size_t i = 0; i < left.size(); ++i) {
+        left[i] = static_cast<float>(static_cast<int>(i % 23) - 11) / 7.0f;
+      }
+      for (std::size_t i = 0; i < right.size(); ++i) {
+        right[i] = static_cast<float>(static_cast<int>(i % 13) - 6) / 3.0f;
+      }
+      for (std::size_t i = 0; i < count; ++i) {
+        expected[i] = left[mode == 1 ? 0 : i] + right[mode == 2 ? 0 : i];
+      }
+      const auto check = [&] {
+        for (std::size_t i = 0; i < count; ++i) {
+          ASSERT_EQ(std::bit_cast<std::uint32_t>(output[i]),
+                    std::bit_cast<std::uint32_t>(expected[i]))
+              << "index=" << i;
+        }
+      };
+      const auto before = executor.dispatches;
+      {
+        ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+        plan.Execute(left.data(), right.data(), output.data());
+      }
+      check();
+      EXPECT_EQ(executor.dispatches, before);
+      plan.Execute(left.data(), right.data(), output.data());
+      check();
+      EXPECT_EQ(executor.dispatches, before + (count > 65 ? 1 : 0));
+      if (count > 65) {
+        EXPECT_GT(executor.blocks, 1);
+      }
+      const auto parallel_dispatches = executor.dispatches;
+      {
+        ml_cpu_compute::detail::ExecutionRegionScope region;
+        plan.Execute(left.data(), right.data(), output.data());
+      }
+      check();
+      EXPECT_EQ(executor.dispatches, parallel_dispatches);
+      for (bool alias_left : {false, true}) {
+        if ((alias_left && mode == 1) || (!alias_left && mode == 2)) {
+          continue;
+        }
+        output = alias_left ? left : right;
+        ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+        plan.Execute(alias_left ? output.data() : left.data(),
+                     alias_left ? right.data() : output.data(), output.data());
+        check();
+      }
+    }
+  }
+}
+
 TEST(BinaryBroadcastPlan, ScalarPowUsesFineGrainedBoundedScheduling) {
   const ml_cpu_compute::BinaryOperationDescriptor descriptor("Pow", 15, {});
   InlineExecutor executor;
