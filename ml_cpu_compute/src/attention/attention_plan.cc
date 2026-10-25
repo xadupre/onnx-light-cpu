@@ -1097,8 +1097,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
       plan.head_sink == nullptr && plan.q_length <= 16 && has_avx2_fma &&
-      (plan.mask_kind == AttentionMaskKind::kNone ||
-       (plan.mask_kind == AttentionMaskKind::kBoolean && plan.mask_strides.kv == 1));
+      (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
   // Runtime-owned outer schedule: one task per (batch, head, query-row)

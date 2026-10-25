@@ -262,6 +262,15 @@ AttentionSoftmaxBlockResultAVX2 AttentionSoftmaxBlockFloat32_AVX2_FMA(float *sco
 
   const float new_maximum = std::max(previous_maximum, block_maximum);
   if (new_maximum == negative_infinity) {
+    // SIMD max can hide a NaN; distinguish it from a fully masked block.
+    for (std::size_t i = 0; i < count; ++i) {
+      if (std::isnan(scores[i])) {
+        const float nan = scores[i];
+        std::fill_n(scores, count, nan);
+        denominator = nan;
+        return {nan, nan};
+      }
+    }
     std::fill_n(scores, count, 0.0f);
     return {new_maximum, 1.0f};
   }

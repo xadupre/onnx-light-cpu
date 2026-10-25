@@ -292,6 +292,12 @@ dimensions, tensor-cache inputs, sink attention, and materialized dispatch
 on the existing paths. Products retain FP32 accumulation and the existing
 softmax. No new packing buffer or executor is introduced.
 
+Contiguous additive masks retain AVX2 decode for finite rows. Only rows with
+reachable NaN mask entries fall back to scalar streaming. Tiled AVX2 softmax
+also preserves NaNs computed by QK: a check limited to its otherwise-zero
+branch distinguishes these from fully masked rows. Normal finite blocks
+do not incur an extra score scan.
+
 A ``gprof`` run of the new differential test, repeated 100 times, confirmed
 the six-row AVX2/FMA GEMM microkernel and AVX2 softmax execute. This includes
 materialized-oracle, data-generation, and assertion costs, so its self-time
@@ -370,7 +376,7 @@ with the existing runner, and apply the same settings to each row:
      --case '^test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16_benchmark$' \
      --output /tmp/attention-case.json
 
-Validation comprises all 85 ``test_attention_plan`` tests, the 37 runner
+Validation comprises all 90 ``test_attention_plan`` tests, the 37 runner
 correctness comparisons, and clang-format checks. New tests cover tile and
 eligibility boundaries, both layouts, grouped heads, empty/single-key inputs,
 nonpad and fully masked rows, runtime-owned scheduling without nesting, and
