@@ -492,3 +492,121 @@ Use the explicit no-spin policies above, thread limits 1 and 4, and
 ``measure_alternating(repeat=1000, warmup=200, max_repeat_time=5)`` three times.
 The existing benchmark CLI also selects these cases, but uses separate backend
 phases and default spin policies rather than the controlled alternating loop.
+
+Float32 Div beyond last-level cache on AVX/AVX2
+----------------------------------------------
+
+Out-of-place contiguous float32 ``Div`` can use non-temporal AVX stores when
+the executor exposes one thread and the two inputs plus output exceed both
+32 MiB and the detected last-level cache capacity. Unknown cache topology,
+AVX-512, smaller tensors, in-place outputs, scalar/row broadcasts, and parallel
+execution keep their existing paths. Selection uses the whole tensor extent,
+not a benchmark name or input values. Cached topology and SIMD detection keep
+CPUID out of the inner loop.
+
+The kernel still uses correctly rounded ``vdivps``, not a reciprocal
+approximation. A scalar prefix aligns output to a 64-byte cache line;
+four vectors fill two complete cache lines per iteration, followed by a scalar
+tail. Unaligned input loads are supported. ``sfence`` completes streaming
+stores before returning to the runtime or a dependent operator.
+
+Issue #985 measurements (2026-10-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Host: AMD EPYC 7763, Linux x86-64 VM exposing four logical CPUs (two cores,
+two threads per core), process affinity CPUs 0-3, 32 MiB L3. GCC 13.3.0 Release,
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``, detected SIMD level 3. The branch was
+fetched before collecting measurements. Baseline source:
+``b80aa075013c1aa2065ec0725d7cf1822f02b252``; optimized source:
+``7895932880c2553d82bcca31ea219d6c4411fe82``.
+
+Dependencies: released CPython 3.13 Linux wheels for onnx-light 0.2.0 and
+ONNX Runtime 1.31.0, NumPy 2.5.4. ORT reports Release commit ``402979a``.
+The onnx-light wheel does not report a build commit; neither wheel is asserted
+to match the dashboard's retained measurements. Python integration used
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF`` to match the onnx-light wheel.
+
+Both runtimes used explicit thread limits of 1 or 4 and no worker affinity.
+Spin-wait was disabled: ``spin_policy=park_immediately`` for onnx-light and
+both ORT ``allow_spinning`` entries zero. ORT used sequential graph execution
+and one inter-op thread. For each case/thread pair, three campaigns used 200
+warm-ups and 1,000 timed calls per backend, alternating backend order on every
+iteration, with a five-second cumulative per-backend limit (not reached).
+Native backend tensors fed onnx-light-cpu; NumPy views fed ORT. Models, input
+generation, operand order, and output allocation remained unchanged. Outputs
+matched ORT exactly; recording confirmed ``onnx_light_cpu::Div`` and
+``Binary.Div.bulk`` before timing and was disabled during measurement.
+
+Tables report the median of three campaign medians, in milliseconds.
+Case labels expand to
+``test_cpu_div_v14_{layout}_float32xfloat32_to_float32{_swapped}_n{N}_benchmark``.
+Contiguous inputs have shape ``[N]``; row inputs are ``[N/256,256]`` and
+``[256]``; right-scalar inputs are ``[N]`` and ``[]``. Left-scalar swapped
+also means ``[N] / []``, but retains its distinct generated inputs.
+
+.. csv-table:: One thread
+   :header: "Layout", "N", "CPU before", "ORT before", "CPU after", "ORT after"
+
+   contiguous swapped,4194304,1.489307,1.473317,1.046751,1.395852
+   contiguous,4194304,1.560712,1.538436,1.044957,1.412872
+   row swapped,4194304,1.191425,1.366336,1.031179,1.300120
+   row,4194304,1.224936,1.383052,1.090410,1.331149
+   right_scalar swapped,4194304,1.054750,1.232507,1.069879,1.223701
+   right_scalar,4194304,1.076005,1.241028,0.990386,1.223370
+   contiguous,1048576,0.275539,0.323964,0.235519,0.319055
+   left_scalar swapped,1048576,0.177225,0.309858,0.160980,0.304287
+   row,1048576,0.225805,0.322431,0.169316,0.301412
+
+.. csv-table:: Four threads
+   :header: "Layout", "N", "CPU before", "ORT before", "CPU after", "ORT after"
+
+   contiguous swapped,4194304,1.296237,1.426399,1.069210,1.193372
+   contiguous,4194304,1.327819,1.415493,1.062785,1.189095
+   row swapped,4194304,0.857278,0.941460,0.693672,0.789786
+   row,4194304,0.862002,0.937939,0.615577,0.745288
+   right_scalar swapped,4194304,0.850300,0.926893,0.671826,0.775560
+   right_scalar,4194304,0.859638,0.917611,0.620265,0.742157
+   contiguous,1048576,0.159408,0.202603,0.131821,0.186106
+   left_scalar swapped,1048576,0.121972,0.192239,0.114142,0.195053
+   row,1048576,0.130593,0.196751,0.242998,0.188917
+
+The original 1.63-1.75x contiguous ORT advantage did not reproduce in the
+initial campaigns. Only the two large contiguous single-thread cases
+consistently favored ORT, by approximately 1%. Streaming stores improved
+these cases by an observed 1.42-1.49x. Their optimized campaign medians ranged
+from 1.041785 to 1.052030 ms, versus 1.472384 to 1.603398 ms before.
+ORT timings also drifted, so these are observations, not confidence bounds.
+Changes on other rows are not attributed to this optimization: their paths
+are unchanged.
+
+In particular, the four-thread 1,048,576-element row case slowed from
+0.130593 to 0.242998 ms and favored ORT in the final campaign; this remains
+unresolved. The small historical gaps were not consistently reproduced, and
+there is no claim of a parallel speedup or that all nine gaps are closed.
+Parallel streaming experiments showed unstable regressions (approximately
+3.6-4.0 ms in some large contiguous trials), both with small dynamic tiles and
+with fixed worker ranges, so parallel streaming was rejected. A later
+reverse-order baseline attempt overlapped lingering CodeQL extraction after
+its tool timeout; that contaminated attempt was stopped and excluded.
+
+Hardware counters were unavailable (``perf_event_paranoid=4``). Assembly
+inspection confirmed unrolled ``vdivps`` in the baseline, and ``vdivps``,
+``vmovntps``, and ``sfence`` in the streaming kernel. The improvement is
+consistent with avoiding output write allocation beyond LLC, rather than
+reducing division precision or moving allocations outside the timed region.
+
+Validation passed all 52 targeted binary arithmetic, broadcast-plan, and
+descriptor C++ tests, plus 184 Div backend correctness cases. The new
+alignment/tail/special-value and large serial/parallel/nested/in-place tests
+also passed ASan/UBSan. Formatting and secret scanning passed. The requested
+CodeQL tool timed out without returning an analysis result.
+
+To reproduce, build the Python integration with the settings above and use
+the issue #998 timing procedure with this exact nine-case selector::
+
+   ^test_cpu_div_v14_((contiguous|row|right_scalar)_float32xfloat32_to_float32(_swapped)?_n4194304|(contiguous|row)_float32xfloat32_to_float32_n1048576|left_scalar_float32xfloat32_to_float32_swapped_n1048576)_benchmark$
+
+Keep the explicit no-spin policies, thread limits 1 and 4, native feeds,
+``taskset -c 0-3``, and
+``measure_alternating(repeat=1000, warmup=200, max_repeat_time=5)`` three times.
+Do not use the parity tool's case selector, which excludes swapped cases.
