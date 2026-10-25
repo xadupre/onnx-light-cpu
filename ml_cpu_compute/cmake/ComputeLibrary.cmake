@@ -407,6 +407,8 @@ if(ML_CPU_COMPUTE_HAVE_AVX512BW_FLAG)
 endif()
 
 if(ML_CPU_COMPUTE_ENABLE_COVERAGE)
-  target_compile_options(ml_cpu_compute PUBLIC --coverage -O0 -g)
+  # Inline trivial header helpers; at -O0 a baseline caller can resolve to a
+  # weak helper emitted with ISA-specific flags by another translation unit.
+  target_compile_options(ml_cpu_compute PUBLIC --coverage -O1 -g)
   target_link_options(ml_cpu_compute PUBLIC --coverage)
 endif()

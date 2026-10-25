@@ -19,6 +19,9 @@ _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml"
     encoding="utf-8"
 )
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
+_CPP_COVERAGE_WORKFLOW = (_ROOT / ".github" / "workflows" / "cpp_coverage_weekly.yml").read_text(
+    encoding="utf-8"
+)
 _DEPENDABOT_CONFIG = (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
 
 
@@ -234,6 +237,53 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
 
 def test_cpp_coverage_is_carried_forward_between_weekly_runs():
     assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
+
+
+def test_cpp_coverage_exercises_native_and_emulated_processors():
+    matrix = _CPP_COVERAGE_WORKFLOW.split("        include:\n", 1)[1].split("    steps:\n", 1)[0]
+    profiles = {}
+    for entry in matrix.split("          - processor: ")[1:]:
+        lines = entry.splitlines()
+        profiles[lines[0]] = {
+            key.strip(): value.strip().strip('"')
+            for key, value in (line.split(":", 1) for line in lines[1:])
+        }
+    assert profiles == {
+        "x86-native": {"os": "ubuntu-latest", "launcher": ""},
+        "arm64-native": {"os": "ubuntu-24.04-arm", "launcher": ""},
+        "sse2": {"os": "ubuntu-latest", "launcher": "qemu-x86_64;-cpu;Opteron_G1"},
+        "avx": {"os": "ubuntu-latest", "launcher": "qemu-x86_64;-cpu;SandyBridge"},
+        "avx2": {"os": "ubuntu-latest", "launcher": "qemu-x86_64;-cpu;Haswell"},
+        "avx512": {"os": "ubuntu-latest", "launcher": "sde64;-spr;--"},
+        "sve": {
+            "os": "ubuntu-24.04-arm",
+            "launcher": "qemu-aarch64;-cpu;max,sve=on,sve-max-vq=4",
+        },
+    }
+    assert "CMAKE_TEST_LAUNCHER: ${{ matrix.launcher }}" in _CPP_COVERAGE_WORKFLOW
+    assert "if: startsWith(matrix.launcher, 'qemu-')" in _CPP_COVERAGE_WORKFLOW
+    assert "sudo apt-get install -y qemu-user" in _CPP_COVERAGE_WORKFLOW
+    assert "if: matrix.processor == 'avx512'" in _CPP_COVERAGE_WORKFLOW
+    assert "sha256sum --check" in _CPP_COVERAGE_WORKFLOW
+    assert 'echo "${RUNNER_TEMP}/sde" >> "$GITHUB_PATH"' in _CPP_COVERAGE_WORKFLOW
+
+
+def test_cpp_coverage_reports_include_compute_sources_and_unique_artifacts():
+    for source in ("onnx_light_cpu/", "ml_cpu_compute/src/", "ml_cpu_compute/include/"):
+        assert f"--filter '{source}'" in _CPP_COVERAGE_WORKFLOW
+    assert "name: cpp-coverage-${{ matrix.processor }}" in _CPP_COVERAGE_WORKFLOW
+    assert "name: cpp-${{ matrix.processor }}" in _CPP_COVERAGE_WORKFLOW
+    assert "flags: cpp\n" in _CPP_COVERAGE_WORKFLOW
+    assert "Fail on empty coverage report" in _CPP_COVERAGE_WORKFLOW
+
+
+def test_compute_coverage_inlines_header_helpers_for_baseline_callers():
+    compute_library = (_ROOT / "ml_cpu_compute" / "cmake" / "ComputeLibrary.cmake").read_text(
+        encoding="utf-8"
+    )
+    coverage_options = compute_library.split("if(ML_CPU_COMPUTE_ENABLE_COVERAGE)\n", 1)[1]
+    assert "target_compile_options(ml_cpu_compute PUBLIC --coverage -O1 -g)" in coverage_options
+    assert "target_link_options(ml_cpu_compute PUBLIC --coverage)" in coverage_options
 
 
 def test_dependabot_updates_actions_and_python_dependencies():
