@@ -7,6 +7,10 @@
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+#include "ml_cpu_compute/attention/avx2/attention_avx2_fma.h"
+#endif
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1703,6 +1707,471 @@ std::vector<float> FromBFloat16(const std::vector<std::uint16_t> &values) {
 }
 
 } // namespace half_precision
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveMaskedNonfiniteValues) {
+  for (const std::int64_t rows : {8, 16}) {
+    if (rows == 16) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+      if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+          !ml_cpu_compute::CpuSupportsFma()) {
+        continue;
+      }
+#else
+      continue;
+#endif
+    }
+    const std::int64_t qs[] = {1, 1, rows, 64};
+    const std::int64_t kvs[] = {1, 1, 17, 64};
+    const std::int64_t ms[] = {17};
+    const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, ms,
+                             AttentionMaskKind::kBoolean);
+    const std::vector<float> q(rows * 64, 0.0f), k(17 * 64, 0.0f);
+    std::vector<float> v(17 * 64, 1.0f), actual(q.size());
+    v[64] = std::numeric_limits<float>::quiet_NaN();
+    v[128] = std::numeric_limits<float>::infinity();
+    v[192] = -std::numeric_limits<float>::infinity();
+    std::vector<std::uint8_t> mask(17, 0);
+    const auto q16 = half_precision::ToFloat16(q);
+    const auto k16 = half_precision::ToFloat16(k);
+    const auto v16 = half_precision::ToFloat16(v);
+    std::vector<std::uint16_t> actual16(actual.size());
+    for (const std::uint8_t allowed : {0, 1}) {
+      mask[0] = allowed;
+      if (rows == 8) {
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                         actual.data());
+        ExpectClose(actual, std::vector<float>(actual.size(), allowed));
+      }
+      ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                       actual16.data());
+      ExpectClose(half_precision::FromFloat16(actual16),
+                  std::vector<float>(actual.size(), allowed));
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, ZeroQueryHeadsDoNotReadValues) {
+  const std::int64_t qs[] = {2, 0, 8, 64};
+  const std::int64_t kvs[] = {2, 1, 17, 64};
+  const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+  EXPECT_NO_THROW(
+      ComputeAttentionFloat32Streaming(plan, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_NO_THROW(
+      ComputeAttentionFloat16Streaming(plan, nullptr, nullptr, nullptr, nullptr, nullptr));
+}
+
+TEST(ComputeAttentionFloat32Streaming, FiniteValueCheckHandlesEveryVectorTail) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is unavailable";
+  }
+  for (std::size_t count = 0; count <= 33; ++count) {
+    std::vector<float> values(count, -0.5f);
+    auto half = half_precision::ToFloat16(values);
+    EXPECT_TRUE(ml_cpu_compute::AttentionAllFiniteFloat32_AVX2_FMA(values.data(), count));
+    EXPECT_TRUE(ml_cpu_compute::AttentionAllFiniteFloat16_AVX2_FMA(half.data(), count));
+    for (std::size_t index = 0; index < count; ++index) {
+      for (const float special :
+           {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity()}) {
+        values[index] = special;
+        half[index] = ml_cpu_compute::detail::FloatToFloat16Bits(special);
+        EXPECT_FALSE(ml_cpu_compute::AttentionAllFiniteFloat32_AVX2_FMA(values.data(), count));
+        EXPECT_FALSE(ml_cpu_compute::AttentionAllFiniteFloat16_AVX2_FMA(half.data(), count));
+        values[index] = -0.5f;
+        half[index] = ml_cpu_compute::detail::FloatToFloat16Bits(-0.5f);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, Avx2SoftmaxPreservesNaNsAcrossVectorTails) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is unavailable";
+  }
+  const float negative_infinity = -std::numeric_limits<float>::infinity();
+  for (std::size_t count = 1; count <= 33; ++count) {
+    for (std::size_t index = 0; index < count; ++index) {
+      for (const float previous_maximum : {negative_infinity, 0.0f}) {
+        SCOPED_TRACE(::testing::Message() << "count=" << count << "index=" << index
+                                          << "previous_maximum=" << previous_maximum);
+        std::vector<float> scores(count, negative_infinity);
+        scores[0] = 0.0f;
+        scores[index] = std::numeric_limits<float>::quiet_NaN();
+        float denominator = previous_maximum == negative_infinity ? 0.0f : 1.0f;
+        ml_cpu_compute::AttentionSoftmaxBlockFloat32_AVX2_FMA(scores.data(), count,
+                                                              previous_maximum, denominator);
+        EXPECT_TRUE(std::isnan(denominator));
+        EXPECT_TRUE(std::isnan(scores[index]));
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesOnlyCheckReachableValueRows) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t batch = 2, heads = 4, kv_heads = 2, kv_len = 8192, dim = 64;
+  for (const auto layout : {AttentionLayout::kRank3, AttentionLayout::kRank4}) {
+    for (const std::int64_t rows : {8, 16}) {
+      for (const auto &[causal, nonpad, left, right] :
+           {std::tuple{true, false, -1, -1}, std::tuple{false, false, -1, 1},
+            std::tuple{false, true, -1, -1}, std::tuple{true, true, 2, 0}}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "layout=" << static_cast<int>(layout) << " rows=" << rows << " causal="
+                     << causal << " nonpad=" << nonpad << " left=" << left << " right=" << right);
+        AttentionDescriptor descriptor;
+        descriptor.opset = 25;
+        descriptor.q_num_heads = heads;
+        descriptor.kv_num_heads = kv_heads;
+        descriptor.is_causal = causal;
+        descriptor.has_nonpad_kv_seqlen = nonpad;
+        descriptor.left_window_size = left;
+        descriptor.right_window_size = right;
+        const std::vector<std::int64_t> qs =
+            layout == AttentionLayout::kRank3 ? std::vector<std::int64_t>{batch, rows, heads * dim}
+                                              : std::vector<std::int64_t>{batch, heads, rows, dim};
+        const std::vector<std::int64_t> kvs =
+            layout == AttentionLayout::kRank3
+                ? std::vector<std::int64_t>{batch, kv_len, kv_heads * dim}
+                : std::vector<std::int64_t>{batch, kv_heads, kv_len, dim};
+        const AttentionPlan plan(descriptor, layout, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+        const std::int64_t lengths[] = {0, 40};
+        const auto *nonpad_lengths = nonpad ? lengths : nullptr;
+        const std::vector<float> q(batch * heads * rows * dim, 0.0f);
+        const std::vector<float> k(batch * kv_heads * kv_len * dim, 0.0f);
+        std::vector<float> v(k.size(), std::numeric_limits<float>::quiet_NaN());
+        for (std::size_t b = 0; b < batch; ++b) {
+          const std::int64_t start =
+              nonpad && left >= 0 ? std::max<std::int64_t>(lengths[b] - rows - left, 0) : 0;
+          const std::int64_t limit = nonpad ? lengths[b] : rows + (right >= 0 ? right : 0);
+          for (std::size_t h = 0; h < kv_heads; ++h) {
+            for (std::int64_t row = start; row < limit; ++row) {
+              std::fill_n(v.data() + b * plan.v_strides.batch + h * plan.v_strides.head +
+                              row * plan.v_strides.sequence,
+                          dim, 1.0f);
+            }
+          }
+        }
+        std::vector<float> expected(q.size(), 1.0f), actual(q.size());
+        if (nonpad) {
+          std::fill_n(expected.begin(), heads * rows * dim, 0.0f);
+        }
+        ml_cpu_compute::AttentionExecutionInfo info;
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                         nullptr, nullptr, nonpad_lengths, &info);
+        ExpectClose(actual, expected);
+        EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        const auto q16 = half_precision::ToFloat16(q);
+        const auto k16 = half_precision::ToFloat16(k);
+        const auto v16 = half_precision::ToFloat16(v);
+        std::vector<std::uint16_t> actual16(q.size());
+        ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                         actual16.data(), nullptr, nullptr, nonpad_lengths, &info);
+        ExpectClose(half_precision::FromFloat16(actual16), expected);
+        EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveAdditiveMaskNaNs) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t q_len = 8, dim = 64;
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = 1;
+  descriptor.kv_num_heads = 1;
+  descriptor.is_causal = true;
+  const std::int64_t qs[] = {1, 1, q_len, dim};
+  const std::int64_t kvs[] = {1, 1, q_len, dim};
+  const std::int64_t mask_shape[] = {q_len, q_len};
+  const AttentionPlan plan(descriptor, AttentionLayout::kRank4, qs, kvs, kvs, mask_shape,
+                           AttentionMaskKind::kAdditive);
+  const std::vector<float> q(q_len * dim, 0.0f), k(q_len * dim, 0.0f);
+  const std::vector<float> v(q_len * dim, 1.0f);
+  std::vector<float> mask(q_len * q_len, -std::numeric_limits<float>::infinity());
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    mask[row * q_len] = 0.0f;
+    mask[row * q_len + 4] = std::numeric_limits<float>::quiet_NaN();
+  }
+  std::vector<float> actual(q.size());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(), actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    for (std::int64_t d = 0; d < dim; ++d) {
+      if (row < 4) {
+        EXPECT_FLOAT_EQ(actual[row * dim + d], 1.0f);
+      } else {
+        EXPECT_TRUE(std::isnan(actual[row * dim + d]));
+      }
+    }
+  }
+
+  const auto q16 = half_precision::ToFloat16(q);
+  const auto k16 = half_precision::ToFloat16(k);
+  const auto v16 = half_precision::ToFloat16(v);
+  std::vector<std::uint16_t> actual16(q.size());
+  ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                   actual16.data(), nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  const auto actual16_float = half_precision::FromFloat16(actual16);
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    for (std::int64_t d = 0; d < dim; ++d) {
+      if (row < 4) {
+        EXPECT_FLOAT_EQ(actual16_float[row * dim + d], 1.0f);
+      } else {
+        EXPECT_TRUE(std::isnan(actual16_float[row * dim + d]));
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveComputedScoreNaNs) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t dim = 64;
+  for (const std::int64_t rows : {8, 16}) {
+    AttentionDescriptor descriptor;
+    descriptor.q_num_heads = 1;
+    descriptor.kv_num_heads = 1;
+    descriptor.is_causal = true;
+    const std::int64_t shape[] = {1, 1, rows, dim};
+    const std::int64_t mask_shape[] = {rows, rows};
+    const AttentionPlan plan(descriptor, AttentionLayout::kRank4, shape, shape, shape, mask_shape,
+                             AttentionMaskKind::kBoolean);
+    const std::vector<float> q(rows * dim, 1.0f), v(rows * dim, 1.0f);
+    std::vector<float> k(q.size(), 0.0f);
+    k[4 * dim] = std::numeric_limits<float>::quiet_NaN();
+    std::vector<std::uint8_t> mask(rows * rows, 0);
+    for (std::int64_t row = 0; row < rows; ++row) {
+      mask[row * rows] = mask[row * rows + 4] = 1;
+    }
+    const auto q16 = half_precision::ToFloat16(q);
+    const auto k16 = half_precision::ToFloat16(k);
+    const auto v16 = half_precision::ToFloat16(v);
+    std::vector<float> actual(q.size()), expected(q.size());
+    std::vector<std::uint16_t> actual16(q.size());
+    ml_cpu_compute::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                        mask.data(), expected.data());
+    ml_cpu_compute::AttentionExecutionInfo info;
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(), actual.data(),
+                                     nullptr, nullptr, nullptr, &info);
+    EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+    ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                     actual16.data(), nullptr, nullptr, nullptr, &info);
+    EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+    const auto actual16_float = half_precision::FromFloat16(actual16);
+    for (std::int64_t row = 0; row < rows; ++row) {
+      for (std::int64_t d = 0; d < dim; ++d) {
+        if (row < 4) {
+          EXPECT_FLOAT_EQ(actual[row * dim + d], 1.0f);
+          EXPECT_FLOAT_EQ(actual16_float[row * dim + d], 1.0f);
+        } else {
+          EXPECT_TRUE(std::isnan(expected[row * dim + d]));
+          EXPECT_TRUE(std::isnan(actual[row * dim + d]));
+          EXPECT_TRUE(std::isnan(actual16_float[row * dim + d]));
+        }
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, Avx2DecodeAdditiveMaskPreservesFiniteNaNAndMaskedRows) {
+  constexpr std::int64_t heads = 2, keys = 1024, dim = 64;
+  const std::int64_t qs[] = {1, heads, 1, dim};
+  const std::int64_t kvs[] = {1, heads, keys, dim};
+  const std::int64_t mask_shape[] = {1, heads, 1, keys};
+  const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, mask_shape,
+                           AttentionMaskKind::kAdditive);
+  const std::vector<float> q(heads * dim, 0.0f), k(heads * keys * dim, 0.0f);
+  const std::vector<float> v(k.size(), 1.0f);
+  const auto q16 = half_precision::ToFloat16(q);
+  const auto k16 = half_precision::ToFloat16(k);
+  const auto v16 = half_precision::ToFloat16(v);
+  std::vector<float> mask(heads * keys, 0.0f), actual(q.size());
+  std::vector<std::uint16_t> actual16(q.size());
+  for (int mode = 0; mode < 3; ++mode) {
+    SCOPED_TRACE(mode);
+    if (mode == 1)
+      mask[keys + 4] = std::numeric_limits<float>::quiet_NaN();
+    else if (mode == 2)
+      std::fill(mask.begin() + keys, mask.end(), -std::numeric_limits<float>::infinity());
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                     actual.data());
+    ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                     actual16.data());
+    const auto actual16_float = half_precision::FromFloat16(actual16);
+    for (std::int64_t d = 0; d < dim; ++d) {
+      EXPECT_FLOAT_EQ(actual[d], 1.0f);
+      EXPECT_FLOAT_EQ(actual16_float[d], 1.0f);
+      if (mode == 1) {
+        EXPECT_TRUE(std::isnan(actual[dim + d]));
+        EXPECT_TRUE(std::isnan(actual16_float[dim + d]));
+      } else {
+        EXPECT_FLOAT_EQ(actual[dim + d], mode == 2 ? 0.0f : 1.0f);
+        EXPECT_FLOAT_EQ(actual16_float[dim + d], mode == 2 ? 0.0f : 1.0f);
+      }
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesFallBackForUnsafeFloat32Magnitudes) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t q_len = 8, kv_len = 1024, dim = 16;
+  const std::int64_t qs[] = {1, 1, q_len, dim};
+  const std::int64_t kvs[] = {1, 1, kv_len, dim};
+  const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+  const std::vector<float> q(q_len * dim, 0.0f), k(kv_len * dim, 0.0f);
+  std::vector<float> v(kv_len * dim);
+  for (std::int64_t row = 0; row < kv_len; ++row) {
+    std::fill_n(v.data() + row * dim, dim, row < kv_len / 2 ? 4.0e35f : -8.0e35f);
+  }
+  std::vector<float> actual(q.size());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  for (float value : actual) {
+    EXPECT_TRUE(std::isfinite(value));
+    EXPECT_NEAR(value / 1.0e35f, -2.0f, 2.0e-5f);
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
+  for (const auto &[q_len, kv_len, dim, vdim] :
+       {std::tuple{7, 17, 16, 16}, std::tuple{8, 17, 16, 16}, std::tuple{8, 0, 64, 64},
+        std::tuple{8, 1, 64, 64}, std::tuple{8, 513, 64, 63}, std::tuple{15, 512, 63, 65},
+        std::tuple{16, 511, 64, 64}, std::tuple{17, 33, 17, 17}, std::tuple{8, 17, 15, 16},
+        std::tuple{8, 17, 16, 15}, std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
+        std::tuple{129, 17, 64, 256}, std::tuple{128, 17, 64, 64}, std::tuple{128, 17, 64, 65}}) {
+    for (const bool rank3 : {false, true}) {
+      for (int mode = 0; mode < 4; ++mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << "q=" << q_len << " kv=" << kv_len << " d=" << dim << " vd=" << vdim
+                     << " rank3=" << rank3 << " mode=" << mode);
+        AttentionDescriptor descriptor;
+        descriptor.opset = 24;
+        descriptor.q_num_heads = 2;
+        descriptor.kv_num_heads = 1;
+        descriptor.is_causal = mode == 1;
+        descriptor.has_nonpad_kv_seqlen = mode == 1;
+        const std::vector<std::int64_t> qs = rank3 ? std::vector<std::int64_t>{2, q_len, 2 * dim}
+                                                   : std::vector<std::int64_t>{2, 2, q_len, dim};
+        const std::vector<std::int64_t> ks = rank3 ? std::vector<std::int64_t>{2, kv_len, dim}
+                                                   : std::vector<std::int64_t>{2, 1, kv_len, dim};
+        const std::vector<std::int64_t> vs = rank3 ? std::vector<std::int64_t>{2, kv_len, vdim}
+                                                   : std::vector<std::int64_t>{2, 1, kv_len, vdim};
+        const auto kind = mode == 2   ? AttentionMaskKind::kBoolean
+                          : mode == 3 ? AttentionMaskKind::kAdditive
+                                      : AttentionMaskKind::kNone;
+        const std::vector<std::int64_t> ms =
+            mode >= 2 ? std::vector<std::int64_t>{q_len, kv_len} : std::vector<std::int64_t>{};
+        const AttentionPlan plan(descriptor,
+                                 rank3 ? AttentionLayout::kRank3 : AttentionLayout::kRank4, qs, ks,
+                                 vs, ms, kind);
+        const auto q16 = half_precision::ToFloat16(RandomTensor(4 * q_len * dim, 1981));
+        const auto k16 = half_precision::ToFloat16(RandomTensor(2 * kv_len * dim, 1982));
+        const auto v16 = half_precision::ToFloat16(RandomTensor(2 * kv_len * vdim, 1983));
+        const auto q = half_precision::FromFloat16(q16);
+        const auto k = half_precision::FromFloat16(k16);
+        const auto v = half_precision::FromFloat16(v16);
+        std::vector<std::uint8_t> boolean(q_len * kv_len, 1);
+        std::vector<float> additive(q_len * kv_len, 0.2f);
+        for (std::size_t index = 0; index < boolean.size(); ++index) {
+          // Include a fully masked query and mixed noncanonical true bytes.
+          boolean[index] = index < static_cast<std::size_t>(kv_len) || index % 5 == 0 ? 0 : 128;
+          if (boolean[index] == 0) {
+            additive[index] = -std::numeric_limits<float>::infinity();
+          }
+        }
+        const void *mask = mode == 2   ? static_cast<const void *>(boolean.data())
+                           : mode == 3 ? static_cast<const void *>(additive.data())
+                                       : nullptr;
+        const std::int64_t lengths[] = {0, std::max(kv_len - 1, 0)};
+        const auto *nonpad = mode == 1 ? lengths : nullptr;
+        std::vector<float> expected(4 * q_len * vdim), actual(expected.size());
+        ml_cpu_compute::ComputeAttentionFloat32Materialized(
+            plan, q.data(), k.data(), v.data(), mask, expected.data(), nullptr, nullptr, nonpad);
+        ml_cpu_compute::AttentionExecutionInfo info;
+        InlineExecutor executor;
+        ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+        {
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask, actual.data(),
+                                           nullptr, nullptr, nonpad, &info);
+        }
+        EXPECT_FALSE(executor.nested);
+        if (q_len == 8 && kv_len == 513) {
+          EXPECT_GT(executor.maximum_blocks, 1);
+        }
+        if (!rank3 && q_len == 8 && kv_len == 17 && dim == 16 && vdim == 16) {
+          EXPECT_EQ(executor.dispatches, 0);
+        }
+        ExpectClose(actual, expected, 2e-5f);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+        if (ml_cpu_compute::DetectSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+            ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
+            dim <= 256 && vdim >= 16 && vdim <= 256) {
+          EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        }
+#endif
+        std::vector<std::uint16_t> actual16(expected.size());
+        executor = {};
+        {
+          ml_cpu_compute::ExecutionExecutorScope scope(&view);
+          ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask,
+                                           actual16.data(), nullptr, nullptr, nonpad, &info);
+        }
+        EXPECT_FALSE(executor.nested);
+        ExpectClose(half_precision::FromFloat16(actual16), expected, 1e-3f);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+        if (ml_cpu_compute::DetectSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+            ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
+            dim <= 256 && vdim >= 16 && vdim <= 256) {
+          EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        }
+#endif
+      }
+    }
+  }
+}
 
 // Roadmap PR14: the FP16 streaming path rounds Q/K/V once on the way in and
 // Y once on the way out, but performs the score/softmax/P@V recurrence in

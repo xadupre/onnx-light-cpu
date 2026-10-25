@@ -90,6 +90,69 @@ inline void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight
 
 } // namespace
 
+bool AttentionAllFiniteFloat32_AVX2_FMA(const float *values, std::size_t count) {
+  const __m256i exponent = _mm256_set1_epi32(0x7f800000);
+  __m256i nonfinite = _mm256_setzero_si256();
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256i bits = _mm256_castps_si256(_mm256_loadu_ps(values + index));
+    nonfinite =
+        _mm256_or_si256(nonfinite, _mm256_cmpeq_epi32(_mm256_and_si256(bits, exponent), exponent));
+  }
+  if (!_mm256_testz_si256(nonfinite, nonfinite)) {
+    return false;
+  }
+  for (; index < count; ++index) {
+    if (!std::isfinite(values[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(const float *values, std::size_t count,
+                                                  float absolute_bound) {
+  const __m256 absolute_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+  const __m256 bound = _mm256_set1_ps(absolute_bound);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(values + index);
+    const __m256 bounded = _mm256_cmp_ps(_mm256_and_ps(value, absolute_mask), bound, _CMP_LE_OQ);
+    if (_mm256_movemask_ps(bounded) != 0xff) {
+      return false;
+    }
+  }
+  if (index < count) {
+    const __m256i tail = TailMask(count - index);
+    const __m256 value = _mm256_maskload_ps(values + index, tail);
+    const __m256 bounded = _mm256_cmp_ps(_mm256_and_ps(value, absolute_mask), bound, _CMP_LE_OQ);
+    if (_mm256_movemask_ps(bounded) != 0xff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AttentionAllFiniteFloat16_AVX2_FMA(const std::uint16_t *values, std::size_t count) {
+  const __m256i exponent = _mm256_set1_epi16(0x7c00);
+  __m256i nonfinite = _mm256_setzero_si256();
+  std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    const __m256i bits = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(values + index));
+    nonfinite =
+        _mm256_or_si256(nonfinite, _mm256_cmpeq_epi16(_mm256_and_si256(bits, exponent), exponent));
+  }
+  if (!_mm256_testz_si256(nonfinite, nonfinite)) {
+    return false;
+  }
+  for (; index < count; ++index) {
+    if ((values[index] & 0x7c00u) == 0x7c00u) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void AttentionScaleFloat32_AVX2_FMA(float *values, float factor, std::size_t count) {
   const __m256 factor_vector = _mm256_set1_ps(factor);
   std::size_t d = 0;
@@ -199,6 +262,15 @@ AttentionSoftmaxBlockResultAVX2 AttentionSoftmaxBlockFloat32_AVX2_FMA(float *sco
 
   const float new_maximum = std::max(previous_maximum, block_maximum);
   if (new_maximum == negative_infinity) {
+    // SIMD max can hide a NaN; distinguish it from a fully masked block.
+    for (std::size_t i = 0; i < count; ++i) {
+      if (std::isnan(scores[i])) {
+        const float nan = scores[i];
+        std::fill_n(scores, count, nan);
+        denominator = nan;
+        return {nan, nan};
+      }
+    }
     std::fill_n(scores, count, 0.0f);
     return {new_maximum, 1.0f};
   }
