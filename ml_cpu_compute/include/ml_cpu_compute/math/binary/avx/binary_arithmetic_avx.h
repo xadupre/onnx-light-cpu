@@ -24,6 +24,9 @@ ML_CPU_COMPUTE_DECLARE_BINARY_AVX(BinaryMulFloat64, double)
 ML_CPU_COMPUTE_DECLARE_BINARY_AVX(BinaryDivFloat64, double)
 ML_CPU_COMPUTE_DECLARE_BINARY_AVX(BinaryPReluFloat32, float)
 
+void BinaryDivFloat32Streaming_AVX(const float *left, const float *right, float *out,
+                                   std::size_t count);
+
 #undef ML_CPU_COMPUTE_DECLARE_BINARY_AVX
 #endif
 
