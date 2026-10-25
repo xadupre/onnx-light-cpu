@@ -384,7 +384,8 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                                     const ml_cpu_compute::BinaryTypeSignature &signature) {
   std::vector<ShapePair> shape_pairs = BinaryBenchmarkShapePairs();
   if (entry.op == ml_cpu_compute::BinaryOperator::kOr ||
-      entry.op == ml_cpu_compute::BinaryOperator::kAnd) {
+      entry.op == ml_cpu_compute::BinaryOperator::kAnd ||
+      entry.op == ml_cpu_compute::BinaryOperator::kXor) {
     const std::vector<ShapePair> regression_shapes = {
         {"repeated_block_4d_large", {8, 32, 256, 64}, {32, 1, 1}},
         {"repeated_block_4d", {2, 8, 128, 64}, {8, 1, 1}},

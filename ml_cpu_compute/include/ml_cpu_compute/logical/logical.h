@@ -42,6 +42,9 @@ void BulkAndBoolRight_AVX2(const void *left, const void *right, void *output, st
 void BulkOrBool_AVX2(const void *left, const void *right, void *output, std::size_t count);
 void BulkOrBoolLeft_AVX2(const void *left, const void *right, void *output, std::size_t count);
 void BulkOrBoolRight_AVX2(const void *left, const void *right, void *output, std::size_t count);
+void BulkXorBool_AVX2(const void *left, const void *right, void *output, std::size_t count);
+void BulkXorBoolLeft_AVX2(const void *left, const void *right, void *output, std::size_t count);
+void BulkXorBoolRight_AVX2(const void *left, const void *right, void *output, std::size_t count);
 #endif
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512BW
