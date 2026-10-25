@@ -741,6 +741,10 @@ void CheckLogicalBulk(const char *op_type) {
       EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkOrBool_AVX2);
       EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkOrBoolLeft_AVX2);
       EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkOrBoolRight_AVX2);
+    } else if (descriptor.op() == ml_cpu_compute::BinaryOperator::kXor) {
+      EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkXorBool_AVX2);
+      EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkXorBoolLeft_AVX2);
+      EXPECT_EQ(adapter.bulk_right_scalar, &ml_cpu_compute::BulkXorBoolRight_AVX2);
     } else {
       EXPECT_EQ(adapter.bulk_contiguous, &ml_cpu_compute::BulkAndBool_AVX2);
       EXPECT_EQ(adapter.bulk_left_scalar, &ml_cpu_compute::BulkAndBoolLeft_AVX2);
@@ -794,6 +798,10 @@ TEST(BinaryBroadcastPlan, OrBulkHandlesNoncanonicalBytesTailsAndAliasing) {
 
 TEST(BinaryBroadcastPlan, AndBulkHandlesNoncanonicalBytesTailsAndAliasing) {
   CheckLogicalBulk("And");
+}
+
+TEST(BinaryBroadcastPlan, XorBulkHandlesNoncanonicalBytesTailsAndAliasing) {
+  CheckLogicalBulk("Xor");
 }
 
 void CheckLogicalBroadcasts(const char *op_type) {
@@ -852,6 +860,10 @@ TEST(BinaryBroadcastPlan, OrBroadcastsMatchScalarWithExecutorAndNestedFallback) 
 
 TEST(BinaryBroadcastPlan, AndBroadcastsMatchScalarWithExecutorAndNestedFallback) {
   CheckLogicalBroadcasts("And");
+}
+
+TEST(BinaryBroadcastPlan, XorBroadcastsMatchScalarWithExecutorAndNestedFallback) {
+  CheckLogicalBroadcasts("Xor");
 }
 
 TEST(BinaryBroadcastPlanCache, HitsEvictsAndKeepsInUsePlansAlive) {

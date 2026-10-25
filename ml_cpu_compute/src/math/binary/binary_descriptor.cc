@@ -2642,6 +2642,16 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     adapter.bulk_contiguous = &BulkLogicalContiguous<'^'>;
     adapter.bulk_left_scalar = &BulkLogicalLeftScalar<'^'>;
     adapter.bulk_right_scalar = &BulkLogicalRightScalar<'^'>;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2
+    {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        adapter.bulk_contiguous = &BulkXorBool_AVX2;
+        adapter.bulk_left_scalar = &BulkXorBoolLeft_AVX2;
+        adapter.bulk_right_scalar = &BulkXorBoolRight_AVX2;
+      }
+    }
+#endif
     break;
   case BinaryOperator::kBitwiseAnd:
     ML_CPU_COMPUTE_BIND_INTEGER_TYPES(ComputeBitwiseAnd)
