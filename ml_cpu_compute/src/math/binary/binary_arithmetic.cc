@@ -7,6 +7,7 @@
 #include "ml_cpu_compute/math/binary/binary_bitshift.h"
 
 #include "ml_cpu_compute/arm_simd_level.h"
+#include "ml_cpu_compute/cpu_cache_topology.h"
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 
@@ -624,6 +625,22 @@ ML_CPU_COMPUTE_DEFINE_BULK_RESOLVER(BinarySubFloat32, BinarySubFloat32, float)
 ML_CPU_COMPUTE_DEFINE_BULK_RESOLVER(BinaryMulFloat32, BinaryMulFloat32, float)
 ML_CPU_COMPUTE_DEFINE_BULK_RESOLVER(BinaryDivFloat32, BinaryDivFloat32, float)
 ML_CPU_COMPUTE_DEFINE_X86_BULK_RESOLVER(BinaryPReluFloat32, BinaryPReluFloat32, float)
+
+BinaryArithmeticBulkFunctions::Fn BinaryDivFloat32StreamingFunction(std::size_t count) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX
+  static const SimdLevel level = DetectSimdLevel();
+  static const std::size_t cache_bytes = CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 3, 0);
+  // Avoid write allocation only when the three-array footprint exceeds LLC.
+  // Unknown topology and AVX-512 retain their existing cached-store paths.
+  if (level >= SimdLevel::kAVX && level < SimdLevel::kAVX512 && cache_bytes != 0 &&
+      count > std::max<std::size_t>(32 * 1024 * 1024, cache_bytes) / (3 * sizeof(float))) {
+    return &ErasedContiguous<float, &BinaryDivFloat32Streaming_AVX>;
+  }
+#else
+  (void)count;
+#endif
+  return nullptr;
+}
 ML_CPU_COMPUTE_DEFINE_FLOAT16_BULK_RESOLVER(BinaryAddFloat16, BinaryAddFloat16)
 ML_CPU_COMPUTE_DEFINE_FLOAT16_BULK_RESOLVER(BinarySubFloat16, BinarySubFloat16)
 ML_CPU_COMPUTE_DEFINE_FLOAT16_BULK_RESOLVER(BinaryMulFloat16, BinaryMulFloat16)

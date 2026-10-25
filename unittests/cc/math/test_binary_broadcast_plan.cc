@@ -660,6 +660,59 @@ TEST(BinaryBroadcastPlan, FlatPathDispatchesToExecutorAboveThreshold) {
   }
 }
 
+TEST(BinaryBroadcastPlan, LargeFloat32DivParallelNestedAndInPlace) {
+  const ml_cpu_compute::BinaryOperationDescriptor descriptor("Div", 14, {});
+  InlineExecutor executor;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  for (std::size_t count : {65u, 4194304u + 17u}) {
+    const std::vector<std::int64_t> shape{static_cast<std::int64_t>(count)};
+    const BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                   BinaryDataType::FLOAT, shape, shape);
+    std::vector<float> left(count), right(count), expected(count), output(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      left[i] = static_cast<float>(static_cast<int>(i % 23) - 11) / 7.0f;
+      right[i] = static_cast<float>(1 + i % 13) / 3.0f;
+      expected[i] = left[i] / right[i];
+    }
+    const auto check = [&] {
+      for (std::size_t i = 0; i < count; ++i) {
+        ASSERT_EQ(std::bit_cast<std::uint32_t>(output[i]),
+                  std::bit_cast<std::uint32_t>(expected[i]))
+            << "index=" << i;
+      }
+    };
+    const auto before = executor.dispatches;
+    {
+      ml_cpu_compute::ExecutionExecutorScope serial_scope(nullptr);
+      plan.Execute(left.data(), right.data(), output.data());
+    }
+    check();
+    EXPECT_EQ(executor.dispatches, before);
+    plan.Execute(left.data(), right.data(), output.data());
+    check();
+    if (count == 65) {
+      EXPECT_EQ(executor.dispatches, before);
+    } else {
+      EXPECT_GT(executor.dispatches, before);
+      EXPECT_GT(executor.blocks, 1);
+    }
+    const auto parallel_dispatches = executor.dispatches;
+    {
+      ml_cpu_compute::detail::ExecutionRegionScope region;
+      plan.Execute(left.data(), right.data(), output.data());
+    }
+    check();
+    EXPECT_EQ(executor.dispatches, parallel_dispatches);
+    output = left;
+    plan.Execute(output.data(), right.data(), output.data());
+    check();
+    output = right;
+    plan.Execute(left.data(), output.data(), output.data());
+    check();
+  }
+}
+
 TEST(BinaryBroadcastPlan, ScalarPowUsesFineGrainedBoundedScheduling) {
   const ml_cpu_compute::BinaryOperationDescriptor descriptor("Pow", 15, {});
   InlineExecutor executor;

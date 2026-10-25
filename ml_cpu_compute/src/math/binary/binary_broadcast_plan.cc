@@ -5,6 +5,7 @@
 #include "ml_cpu_compute/math/binary/binary_broadcast_plan.h"
 
 #include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/binary/binary_arithmetic.h"
 #include "ml_cpu_compute/math/binary/binary_comparison.h"
 #include "ml_cpu_compute/math/binary/binary_execution_schedule.h"
 
@@ -311,6 +312,15 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
     bulk = adapter_.bulk_left_scalar;
   } else if (loop_family_ == LoopFamily::kRightScalar) {
     bulk = adapter_.bulk_right_scalar;
+  }
+  // Parallel calls retain the dynamically balanced cached-store path.
+  if (loop_family_ == LoopFamily::kContiguous && descriptor_.op() == BinaryOperator::kDiv &&
+      adapter_.signature.left == DataType::FLOAT && adapter_.signature.right == DataType::FLOAT &&
+      adapter_.signature.output == DataType::FLOAT && output != left && output != right &&
+      ExecutionThreadCount() == 1) {
+    if (const auto streaming = BinaryDivFloat32StreamingFunction(count)) {
+      bulk = streaming;
+    }
   }
 
   const std::size_t bytes_per_unit = (left_stride != 0 ? adapter_.left_size : 0) +
