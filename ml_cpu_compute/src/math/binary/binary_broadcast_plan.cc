@@ -314,11 +314,15 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
     bulk = adapter_.bulk_right_scalar;
   }
   // Parallel calls retain the dynamically balanced cached-store path.
-  if (loop_family_ == LoopFamily::kContiguous && descriptor_.op() == BinaryOperator::kDiv &&
+  if (loop_family_ == LoopFamily::kContiguous &&
+      (descriptor_.op() == BinaryOperator::kAdd || descriptor_.op() == BinaryOperator::kDiv) &&
       adapter_.signature.left == DataType::FLOAT && adapter_.signature.right == DataType::FLOAT &&
       adapter_.signature.output == DataType::FLOAT && output != left && output != right &&
       ExecutionThreadCount() == 1) {
-    if (const auto streaming = BinaryDivFloat32StreamingFunction(count)) {
+    const auto streaming = descriptor_.op() == BinaryOperator::kAdd
+                               ? BinaryAddFloat32StreamingFunction(count)
+                               : BinaryDivFloat32StreamingFunction(count);
+    if (streaming != nullptr) {
       bulk = streaming;
     }
   }

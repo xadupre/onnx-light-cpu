@@ -610,3 +610,112 @@ Keep the explicit no-spin policies, thread limits 1 and 4, native feeds,
 ``taskset -c 0-3``, and
 ``measure_alternating(repeat=1000, warmup=200, max_repeat_time=5)`` three times.
 Do not use the parity tool's case selector, which excludes swapped cases.
+
+Float32 Add beyond LLC on AVX2
+------------------------------
+
+Large, out-of-place, single-thread contiguous float32 ``Add`` now shares the
+streaming-store loop and eligibility check used by ``Div``. The three-array
+footprint must exceed both the detected L3 size and 32 MiB; unknown topology,
+AVX-512, parallel execution, in-place execution, scalar broadcasts, and row
+broadcasts retain their cached-store implementations. Inputs may be unaligned.
+The loop aligns the output to a cache line, streams complete 32-element blocks,
+handles the remaining elements without overreading, and fences before return.
+The arithmetic remains ordinary IEEE-754 addition.
+
+Issue #989 measurements (2026-10-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Host: AMD EPYC 9V45 96-Core Processor, Linux x86-64 VM exposing four logical
+CPUs (two cores with SMT), affinity CPUs 0-3, 32 MiB L3. This is **not** the
+issue's EPYC 7763. GCC 13.3.0 Release (``-O3 -DNDEBUG``), Python 3.13.16,
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``; ``detect_simd_level()`` returned 3.
+The branch was fetched before measurement. Baseline source:
+``e4670b2e5f8591c3b343c9fb06d436225efde7dc`` (the initial-plan commit on
+``29d88f461f6443f3db6bc202b3de26c90f9bcbef``). The after measurements use
+the streaming Add implementation described above.
+
+Dependencies: released Linux CPython 3.13 wheels for onnx-light 0.2.0
+(headers from tag ``0.2.0``, commit
+``6400f0f812b13bc32469e405bd2f762ba3cba7f0``), ONNX Runtime 1.31.0
+(Release commit ``402979a``), and NumPy 2.5.4. The onnx-light wheel does not
+report its build commit; the tag identifies the matching source headers,
+not independently verified wheel provenance. Python integration used
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF`` to match the wheel. These versions
+are not asserted to match every retained dashboard measurement.
+
+Both backends used explicit thread limits of 1 or 4, no worker affinity, and
+disabled spinning: ``spin_policy=park_immediately`` for onnx-light, both ORT
+``allow_spinning`` entries zero. ORT used sequential graph execution and one
+inter-op thread. Before and after each used three campaigns, 200 warm-up
+calls and 1,000 measured calls per backend and case, alternating backend
+order every iteration, with a five-second cumulative per-backend cap (not
+reached). Native backend tensors fed CPU; NumPy views fed ORT. Output
+allocation remained inside the timed call. Shapes, generated inputs, operand
+order, and correctness requirements were unchanged. Outputs matched ORT
+exactly. Recording confirmed ``onnx_light_cpu::Add`` and ``Binary.Add.bulk``
+before timing, and was disabled during measurement.
+
+Tables give the median of three campaign medians, in milliseconds. Labels
+expand to
+``test_cpu_add_v14_{layout}_float32xfloat32_to_float32_n{N}_benchmark``.
+Contiguous shapes are ``[N]`` and ``[N]``; scalar operands have shape ``[]``;
+row shapes are ``[16384,256]`` and ``[256]``.
+
+.. csv-table:: One thread
+   :header: "Layout", "N", "CPU before", "ORT before", "CPU after", "ORT after"
+
+   contiguous,4194304,1.065492,1.111296,0.846330,1.051901
+   right_scalar,4194304,0.656334,0.694471,0.648996,0.687931
+   left_scalar,4194304,0.653549,0.697851,0.650504,0.690064
+   contiguous,1048576,0.165035,0.189101,0.152400,0.163733
+   row,4194304,0.681436,0.735323,0.669622,0.731426
+   right_scalar,1048576,0.093501,0.099411,0.079925,0.086030
+
+.. csv-table:: Four threads
+   :header: "Layout", "N", "CPU before", "ORT before", "CPU after", "ORT after"
+
+   contiguous,4194304,0.963433,1.015202,0.945460,1.017098
+   right_scalar,4194304,0.592796,0.628116,0.585655,0.634619
+   left_scalar,4194304,0.595946,0.630049,0.593603,0.628465
+   contiguous,1048576,0.100793,0.102255,0.092124,0.089896
+   row,4194304,0.599727,0.646809,0.594008,0.650528
+   right_scalar,1048576,0.067142,0.067532,0.063777,0.065765
+
+The historical large ORT advantage did not reproduce: all four large cases
+favored CPU in every baseline campaign at both thread counts. The two smaller
+four-thread cases changed ordering between baseline campaigns. Streaming
+stores reduced large contiguous single-thread latency by about 21%
+(1.26x observed speedup); its three optimized medians were 0.841788-0.847772 ms,
+versus 1.064285-1.077586 ms before. ORT also improved by about 5% on that case.
+Other rows use unchanged implementations, so their movements are not credited
+to this optimization. In particular, the smaller contiguous four-thread case
+favored ORT by about 2.5% after the change and remains unresolved. These
+observations have no confidence intervals and do not establish performance
+on the issue's processor or close all six historical gaps.
+
+Hardware counters were unavailable (``perf_event_paranoid=4``). Assembly
+inspection confirmed unrolled ``vaddps``, ``vmovntps``, and ``sfence``.
+The selector's cache/ISA boundary tests and the single-thread, contiguous,
+out-of-place conditions select that kernel for the 4,194,304-element case.
+The result is consistent with reduced output write-allocation traffic beyond
+LLC, not reduced arithmetic precision or allocation moved outside timing.
+
+Validation passed 54 targeted arithmetic, broadcast-plan, and descriptor C++
+tests and all 84 Add backend correctness cases. New coverage checks every
+float-aligned output offset within a cache line, counts 0-97, signed zero,
+NaN, infinity, subnormal values, selector boundaries, large tails, serial and
+executor execution, nesting, and both eligible in-place directions.
+Baseline dispatch sources also passed syntax checks without AVX definitions.
+
+To reproduce, build the integration with the settings above and use the
+issue #998 timing procedure with this exact six-case selector::
+
+   ^test_cpu_add_v14_((contiguous|right_scalar)_float32xfloat32_to_float32_n(1048576|4194304)|(left_scalar|row)_float32xfloat32_to_float32_n4194304)_benchmark$
+
+Use ``onnx_light_cpu._benchmark._prepare_feeds`` for separate native/NumPy
+feeds and
+``tools.benchmark_binary_parity.measure_alternating((cpu_run, ort_run), 1000, 200, 5)``
+three times per thread limit. Keep the explicit no-spin policies and
+``taskset -c 0-3``; do not compare the original processor's timings directly
+to this host.

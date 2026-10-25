@@ -209,19 +209,20 @@ TEST(BinaryArithmeticKernel, Float32MatchesScalarReferenceAcrossTailSizes) {
   RunAllShapesAndSizes<float>();
 }
 
-TEST(BinaryArithmeticKernel, Float32StreamingDivAlignmentTailsAndSpecialValues) {
-  const auto streaming =
-      ml_cpu_compute::BinaryDivFloat32StreamingFunction(std::numeric_limits<std::size_t>::max());
+void CheckStreamingAlignmentTailsAndSpecialValues(
+    const BinaryArithSpec<float> &op,
+    ml_cpu_compute::BinaryArithmeticBulkFunctions::Fn (*select)(std::size_t)) {
+  const auto streaming = select(std::numeric_limits<std::size_t>::max());
   if (streaming == nullptr) {
-    GTEST_SKIP() << "Streaming float32 Div is unavailable on this target.";
+    GTEST_SKIP() << "Streaming float32 " << op.name << " is unavailable on this target.";
   }
-  EXPECT_EQ(ml_cpu_compute::BinaryDivFloat32StreamingFunction(0), nullptr);
+  EXPECT_EQ(select(0), nullptr);
   const std::size_t threshold =
       std::max<std::size_t>(32 * 1024 * 1024, ml_cpu_compute::CpuCacheSizeBytesOrFallback(
                                                   ml_cpu_compute::GetCpuCacheTopology(), 3, 0)) /
       (3 * sizeof(float));
-  EXPECT_EQ(ml_cpu_compute::BinaryDivFloat32StreamingFunction(threshold), nullptr);
-  EXPECT_EQ(ml_cpu_compute::BinaryDivFloat32StreamingFunction(threshold + 1), streaming);
+  EXPECT_EQ(select(threshold), nullptr);
+  EXPECT_EQ(select(threshold + 1), streaming);
   streaming(nullptr, nullptr, nullptr, 0);
   auto special = SpecialValues<float>();
   special.push_back(std::numeric_limits<float>::denorm_min());
@@ -237,7 +238,8 @@ TEST(BinaryArithmeticKernel, Float32StreamingDivAlignmentTailsAndSpecialValues) 
       }
       streaming(left.data() + offset, right.data() + offset + 1, output.data() + offset, count);
       for (std::size_t i = 0; i < count; ++i) {
-        ExpectBitwiseOrNaNEqual(output[i + offset], left[i + offset] / right[i + offset + 1], i);
+        ExpectBitwiseOrNaNEqual(output[i + offset],
+                                op.reference(left[i + offset], right[i + offset + 1]), i);
       }
       for (std::size_t i = 0; i < offset; ++i) {
         EXPECT_EQ(output[i], -123.0f);
@@ -245,6 +247,16 @@ TEST(BinaryArithmeticKernel, Float32StreamingDivAlignmentTailsAndSpecialValues) 
       EXPECT_EQ(output.back(), -123.0f);
     }
   }
+}
+
+TEST(BinaryArithmeticKernel, Float32StreamingAddAlignmentTailsAndSpecialValues) {
+  CheckStreamingAlignmentTailsAndSpecialValues(AllOps<float>().front(),
+                                               ml_cpu_compute::BinaryAddFloat32StreamingFunction);
+}
+
+TEST(BinaryArithmeticKernel, Float32StreamingDivAlignmentTailsAndSpecialValues) {
+  CheckStreamingAlignmentTailsAndSpecialValues(AllOps<float>().back(),
+                                               ml_cpu_compute::BinaryDivFloat32StreamingFunction);
 }
 
 TEST(BinaryArithmeticKernel, Float32PReluMatchesScalarReferenceAcrossTailSizes) {
