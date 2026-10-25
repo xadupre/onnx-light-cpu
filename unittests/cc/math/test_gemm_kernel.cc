@@ -624,6 +624,28 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
 #endif
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+TEST(GemmFloat32, Avx2SkinnyMShortDepthAndRangeTails) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  for (const std::size_t N : {63, 64, 65, 129, 1031}) {
+    for (const std::size_t K : {1, 3, 4, 5, 31, 32, 33}) {
+      const auto A = RandomVector(K, 171);
+      const auto B = RandomVector(K * N, 172);
+      const auto C = RandomVector(N, 173);
+      const auto expected = ReferenceGemm<float>(false, false, 1, N, K, 0.75f, A, B, -0.5f, &C);
+      std::vector<float> Y(N, 123.0f);
+      ml_cpu_compute::GemmSkinnyM1Range_AVX2_F32(N, K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
+                                                 Y.data(), 3, N - 1);
+      for (std::size_t n = 0; n < N; ++n) {
+        EXPECT_NEAR(Y[n], n < 3 || n == N - 1 ? 123.0f : expected[n], 1e-4f)
+            << "N=" << N << " K=" << K << " n=" << n;
+      }
+    }
+  }
+}
+
 TEST(GemmFloat32, Avx2FullTilesAllRowsAndAccumulationModes) {
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {
@@ -674,19 +696,20 @@ TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
       !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is required";
   }
-  constexpr std::size_t M = 5;
-  for (const std::size_t K : {31, 32, 33, 63, 64, 65}) {
-    const auto A = RandomVector(M * K, static_cast<std::uint32_t>(K));
-    const auto B = RandomVector(K, static_cast<std::uint32_t>(K + 100));
-    const auto C = RandomVector(M, static_cast<std::uint32_t>(K + 200));
-    const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
-    std::vector<float> Y(M, 123.0f);
-    ml_cpu_compute::GemmSkinnyN1Range_AVX2_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
-                                               Y.data(), 1, 4);
-    EXPECT_EQ(Y.front(), 123.0f);
-    EXPECT_EQ(Y.back(), 123.0f);
-    for (std::size_t i = 1; i < 4; ++i) {
-      EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "K=" << K << " i=" << i;
+  for (const std::size_t M : {5, 6, 9, 10}) {
+    for (const std::size_t K : {0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65}) {
+      const auto A = RandomVector(M * K, static_cast<std::uint32_t>(K));
+      const auto B = RandomVector(K, static_cast<std::uint32_t>(K + 100));
+      const auto C = RandomVector(M, static_cast<std::uint32_t>(K + 200));
+      const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
+      std::vector<float> Y(M, 123.0f);
+      ml_cpu_compute::GemmSkinnyN1Range_AVX2_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
+                                                 Y.data(), 1, M - 1);
+      EXPECT_EQ(Y.front(), 123.0f);
+      EXPECT_EQ(Y.back(), 123.0f);
+      for (std::size_t i = 1; i < M - 1; ++i) {
+        EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "K=" << K << " i=" << i;
+      }
     }
   }
 }
@@ -718,6 +741,36 @@ TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
         EXPECT_NEAR(Y[i], expected[i], 1e-4f);
       }
     }
+  }
+}
+
+TEST(GemmFloat32, Avx2SkinnyNFourRowsSpecialValuesAndIgnoredBias) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  constexpr std::size_t M = 5, K = 33;
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> A(M * K, 1.0f), B(K, 1.0f), C(M, nan), Y(M);
+  A[0] = inf;
+  A[K] = -inf;
+  A[2 * K] = nan;
+  A[3 * K] = inf;
+  A[3 * K + 1] = -inf;
+  for (const float alpha : {1.0f, 0.0f}) {
+    ml_cpu_compute::GemmSkinnyN1Range_AVX2_F32(K, alpha, A.data(), B.data(), 0.0f, C.data(),
+                                               Y.data(), 0, M);
+    if (alpha == 0.0f) {
+      EXPECT_TRUE(std::isnan(Y[0]));
+      EXPECT_TRUE(std::isnan(Y[1]));
+    } else {
+      EXPECT_EQ(Y[0], inf);
+      EXPECT_EQ(Y[1], -inf);
+    }
+    EXPECT_TRUE(std::isnan(Y[2]));
+    EXPECT_TRUE(std::isnan(Y[3]));
+    EXPECT_EQ(Y[4], alpha * K);
   }
 }
 

@@ -1170,10 +1170,13 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
     if (!trans_b && M == 1 && K != 0 && N >= 64 && kind == GemmImplementation::kAVX2FMA &&
         (!has_bias || C != Y)) {
-      constexpr std::size_t kColumns = 256;
-      const std::size_t panels = (N + kColumns - 1) / kColumns;
-      const std::size_t participants = std::min(
-          panels, static_cast<std::size_t>(std::max(ExecutionThreadCount(), std::int64_t{1})));
+      const std::size_t available_threads =
+          static_cast<std::size_t>(std::max(ExecutionThreadCount(), std::int64_t{1}));
+      // Stream up to 4 KiB of each B row without reducing available parallelism.
+      const std::size_t columns =
+          std::clamp(N / available_threads / 64 * 64, std::size_t{256}, std::size_t{1024});
+      const std::size_t panels = (N + columns - 1) / columns;
+      const std::size_t participants = std::min(panels, available_threads);
       std::atomic<std::size_t> next_panel{participants};
       const bool dynamic = ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
       if (!dynamic) {
@@ -1181,8 +1184,8 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
         return;
       }
       const auto execute_panel = [&](std::size_t panel) {
-        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, panel * kColumns,
-                                   std::min(N, (panel + 1) * kColumns));
+        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, panel * columns,
+                                   std::min(N, (panel + 1) * columns));
       };
       ExecuteRanges(
           static_cast<std::int64_t>(participants), ExecutionSchedule{2, 1, ExecutionThreadCount()},
