@@ -563,9 +563,25 @@ detail::AttentionExpRoutine detail::SelectAttentionExpRoutine(SimdLevel simd, bo
 
 namespace {
 
+bool UseAvx2GroupedQueryTiles(const AttentionPlan &plan) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  static const bool use_avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+  return use_avx2 && plan.layout == AttentionLayout::kRank3 && plan.group_size > 1 && plan.causal &&
+         plan.q_length <= 64 && plan.total_kv_length <= 64 && plan.head_dim == 64 &&
+         plan.v_head_dim == 64;
+#else
+  (void)plan;
+  return false;
+#endif
+}
+
 std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
   constexpr std::size_t kBoundedQueryBlock = 16;
   constexpr std::size_t kFullQueryBlock = 128;
+  if (UseAvx2GroupedQueryTiles(plan)) {
+    // Amortize packing and GEMM setup without the masked work of a full 64-row tile.
+    return std::min<std::size_t>(plan.q_length, 32);
+  }
   const bool has_query_dependent_bounds =
       plan.causal || plan.left_window_size >= 0 || plan.right_window_size >= 0;
   const std::size_t balanced_tail_block =
@@ -1453,15 +1469,13 @@ template <typename Codec>
 void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Storage *q,
                            const typename Codec::Storage *k, const typename Codec::Storage *v,
                            const void *mask, typename Codec::Storage *y,
-                           const std::int64_t *nonpad_kv_seqlen) {
+                           const std::int64_t *nonpad_kv_seqlen,
+                           AttentionExecutionInfo *execution_info) {
   if (plan.batch == 0 || plan.q_num_heads == 0 || plan.v_head_dim == 0) {
     return;
   }
   const std::size_t kv_block = AttentionKvBlock(plan);
-  const std::size_t query_block = AttentionQueryBlock(plan);
-  const std::size_t query_blocks = (plan.q_length + query_block - 1) / query_block;
-  const std::size_t tasks_per_batch = plan.q_num_heads * query_blocks;
-  const std::size_t total_tasks = plan.batch * tasks_per_batch;
+  std::size_t query_block = AttentionQueryBlock(plan);
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
@@ -1471,6 +1485,31 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const std::size_t shared_v_elements =
       CheckedProduct({kv_heads, plan.kv_length, plan.v_head_dim}, "Attention",
                      "shared converted value element count");
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (query_block > 16 && UseAvx2GroupedQueryTiles(plan)) {
+    // Wider dense tiles must not introduce zero-times-NaN/Inf into earlier causal rows.
+    bool safe_values = false;
+    if constexpr (std::is_same_v<Codec, Float32Codec>) {
+      const float bound =
+          std::nextafter(static_cast<float>(static_cast<double>(std::numeric_limits<float>::max()) /
+                                            static_cast<double>(plan.total_kv_length)),
+                         0.0f);
+      safe_values = AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(v, shared_v_elements, bound);
+    } else if constexpr (std::is_same_v<Codec, Float16Codec>) {
+      safe_values = AttentionAllFiniteFloat16_AVX2_FMA(v, shared_v_elements);
+    }
+    if (!safe_values) {
+      query_block = 16;
+    }
+  }
+#endif
+  if (execution_info != nullptr) {
+    execution_info->query_tile = query_block;
+    execution_info->output_tile_elements = query_block * plan.v_head_dim;
+  }
+  const std::size_t query_blocks = (plan.q_length + query_block - 1) / query_block;
+  const std::size_t tasks_per_batch = plan.q_num_heads * query_blocks;
+  const std::size_t total_tasks = plan.batch * tasks_per_batch;
   // GQA/MQA tasks sharing a KV head would otherwise repack and reconvert the same rows once per
   // query head. Keep one invocation-local copy under a fixed memory cap.
   const bool reuse_half_kv = !std::is_same_v<Codec, Float32Codec> && plan.group_size > 1 &&
@@ -1972,7 +2011,7 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, false, execution_info);
-    ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen, execution_info);
     return;
   }
   RecordExecution(plan, AttentionExecutionPath::kStreaming, false, execution_info);
@@ -2003,7 +2042,7 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
-    ComputeAttentionTiled<Float16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    ComputeAttentionTiled<Float16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen, execution_info);
     return;
   }
   RecordExecution(plan, AttentionExecutionPath::kStreaming, true, execution_info);
@@ -2032,7 +2071,7 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
-    ComputeAttentionTiled<BFloat16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    ComputeAttentionTiled<BFloat16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen, execution_info);
     return;
   }
   RecordExecution(plan, AttentionExecutionPath::kStreaming, true, execution_info);
