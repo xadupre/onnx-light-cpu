@@ -110,6 +110,29 @@ bool AttentionAllFiniteFloat32_AVX2_FMA(const float *values, std::size_t count) 
   return true;
 }
 
+bool AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(const float *values, std::size_t count,
+                                                  float absolute_bound) {
+  const __m256 absolute_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+  const __m256 bound = _mm256_set1_ps(absolute_bound);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(values + index);
+    const __m256 bounded = _mm256_cmp_ps(_mm256_and_ps(value, absolute_mask), bound, _CMP_LE_OQ);
+    if (_mm256_movemask_ps(bounded) != 0xff) {
+      return false;
+    }
+  }
+  if (index < count) {
+    const __m256i tail = TailMask(count - index);
+    const __m256 value = _mm256_maskload_ps(values + index, tail);
+    const __m256 bounded = _mm256_cmp_ps(_mm256_and_ps(value, absolute_mask), bound, _CMP_LE_OQ);
+    if (_mm256_movemask_ps(bounded) != 0xff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool AttentionAllFiniteFloat16_AVX2_FMA(const std::uint16_t *values, std::size_t count) {
   const __m256i exponent = _mm256_set1_epi16(0x7c00);
   __m256i nonfinite = _mm256_setzero_si256();

@@ -708,9 +708,10 @@ std::pair<std::size_t, std::size_t> AttentionTileKvRange(const AttentionPlan &pl
 
 template <typename Codec>
 bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec::Storage *v,
-                                const std::int64_t *nonpad_kv_seqlen) {
+                                const void *mask, const std::int64_t *nonpad_kv_seqlen) {
   if (!UseAvx2AttentionTiles(plan) || plan.q_length < 8 || plan.q_length > 16 ||
-      plan.past_length != 0 || plan.head_sink != nullptr || plan.q_num_heads == 0) {
+      plan.past_length != 0 || plan.head_sink != nullptr || plan.q_num_heads == 0 ||
+      plan.total_kv_length == 0) {
     return false;
   }
   if constexpr (std::is_same_v<Codec, Float32Codec>) {
@@ -719,20 +720,46 @@ bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec:
     }
   }
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+    const auto *mask_float = static_cast<const float *>(mask);
+    for (std::size_t b = 0; b < plan.batch; ++b) {
+      const std::int64_t causal_offset =
+          nonpad_kv_seqlen != nullptr
+              ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
+              : plan.causal_offset;
+      const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
+      for (std::size_t q = 0; q < plan.q_length; ++q) {
+        const auto [start, limit] = AttentionTileKvRange(plan, q, 1, causal_offset, nonpad_length);
+        for (std::size_t h = 0; h < plan.q_num_heads; ++h) {
+          for (std::size_t j = start; j < limit; ++j) {
+            const std::ptrdiff_t index = b * plan.mask_strides.batch + h * plan.mask_strides.head +
+                                         q * plan.mask_strides.q + j * plan.mask_strides.kv;
+            if (std::isnan(mask_float[index])) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+  }
   const std::size_t count = CheckedProduct(
       {plan.batch, plan.kv_num_heads, plan.kv_length, plan.v_head_dim}, "Attention", "value count");
-  // Streaming skips zero probabilities, including masked NaN/Inf values. A dense GEMM cannot
-  // preserve that behavior for nonfinite V, so keep those short queries on the existing path.
-  const auto all_finite = [](const typename Codec::Storage *values, std::size_t size) {
+  const float absolute_bound =
+      std::nextafter(static_cast<float>(static_cast<double>(std::numeric_limits<float>::max()) /
+                                        static_cast<double>(plan.total_kv_length)),
+                     0.0f);
+  // Streaming skips zero probabilities, including masked NaN/Inf values. Dense products also
+  // need a bound on the unnormalized partial sums to avoid overflowing before tile accumulation.
+  const auto safe_values = [&](const typename Codec::Storage *values, std::size_t size) {
     if constexpr (std::is_same_v<Codec, Float16Codec>) {
       return AttentionAllFiniteFloat16_AVX2_FMA(values, size);
     } else {
-      return AttentionAllFiniteFloat32_AVX2_FMA(values, size);
+      return AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(values, size, absolute_bound);
     }
   };
   if (!plan.causal && plan.left_window_size < 0 && plan.right_window_size < 0 &&
       nonpad_kv_seqlen == nullptr) {
-    return all_finite(v, count);
+    return safe_values(v, count);
   }
   for (std::size_t b = 0; b < plan.batch; ++b) {
     const std::int64_t causal_offset =
@@ -747,12 +774,12 @@ bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec:
     const auto *values = v + b * plan.v_strides.batch + start * plan.v_strides.sequence;
     const std::size_t elements = (limit - start) * plan.v_head_dim;
     if (plan.layout == AttentionLayout::kRank3) {
-      if (!all_finite(values, elements * plan.kv_num_heads)) {
+      if (!safe_values(values, elements * plan.kv_num_heads)) {
         return false;
       }
     } else {
       for (std::size_t h = 0; h < plan.kv_num_heads; ++h) {
-        if (!all_finite(values + h * plan.v_strides.head, elements)) {
+        if (!safe_values(values + h * plan.v_strides.head, elements)) {
           return false;
         }
       }
@@ -761,6 +788,7 @@ bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec:
   return true;
 #else
   (void)v;
+  (void)mask;
   (void)nonpad_kv_seqlen;
   return false;
 #endif
@@ -1069,7 +1097,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
       plan.head_sink == nullptr && plan.q_length <= 16 && has_avx2_fma &&
-      (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
+      (plan.mask_kind == AttentionMaskKind::kNone ||
+       (plan.mask_kind == AttentionMaskKind::kBoolean && plan.mask_strides.kv == 1));
 #endif
 
   // Runtime-owned outer schedule: one task per (batch, head, query-row)
@@ -1207,7 +1236,18 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           if constexpr (std::is_same_v<Codec, Float32Codec> ||
                         std::is_same_v<Codec, Float16Codec> ||
                         std::is_same_v<Codec, BFloat16Codec>) {
-            if (use_avx2_decode_row) {
+            bool use_avx2_decode = use_avx2_decode_row;
+            if (use_avx2_decode && plan.mask_kind == AttentionMaskKind::kAdditive) {
+              for (std::size_t j = kv_start; j < kv_limit; ++j) {
+                const std::ptrdiff_t index =
+                    mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                if (std::isnan(mask_float[index])) {
+                  use_avx2_decode = false;
+                  break;
+                }
+              }
+            }
+            if (use_avx2_decode) {
               ComputeAttentionDecodeRowAVX2FMA<Codec>(
                   plan, q_values, k_head, v_head, past_k_head, past_v_head, mask_bool, mask_float,
                   mask_row, has_softcap, kv_start, kv_limit, block, scores.data(),
@@ -1919,7 +1959,8 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
   static const SimdLevel simd = DetectSimdLevel();
 #endif
-  const bool short_tiles = UseAvx2ShortAttentionTiles<Float32Codec>(plan, v, nonpad_kv_seqlen);
+  const bool short_tiles =
+      UseAvx2ShortAttentionTiles<Float32Codec>(plan, v, mask, nonpad_kv_seqlen);
   bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 &&
                    plan.q_length >= (short_tiles ? 8 : 16) && plan.total_kv_length != 0;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
@@ -1951,7 +1992,8 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  const bool short_tiles = UseAvx2ShortAttentionTiles<Float16Codec>(plan, v, nonpad_kv_seqlen);
+  const bool short_tiles =
+      UseAvx2ShortAttentionTiles<Float16Codec>(plan, v, mask, nonpad_kv_seqlen);
   bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 &&
                    plan.q_length >= (short_tiles ? 8 : 16) && plan.total_kv_length != 0;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA

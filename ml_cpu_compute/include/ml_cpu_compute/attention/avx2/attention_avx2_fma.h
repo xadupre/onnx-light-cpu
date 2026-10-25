@@ -11,6 +11,8 @@ namespace ml_cpu_compute {
 
 /// Checks the value tensor before replacing zero-skipping streaming with a dense product.
 bool AttentionAllFiniteFloat32_AVX2_FMA(const float *values, std::size_t count);
+bool AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(const float *values, std::size_t count,
+                                                  float absolute_bound);
 bool AttentionAllFiniteFloat16_AVX2_FMA(const std::uint16_t *values, std::size_t count);
 
 /// AVX2+FMA counterpart of AttentionSoftmaxBlockResult (the AVX-512

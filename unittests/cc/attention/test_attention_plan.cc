@@ -1862,6 +1862,95 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesOnlyCheckReachableValueRows) {
 #endif
 }
 
+TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveAdditiveMaskNaNs) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t q_len = 8, dim = 64;
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = 1;
+  descriptor.kv_num_heads = 1;
+  descriptor.is_causal = true;
+  const std::int64_t qs[] = {1, 1, q_len, dim};
+  const std::int64_t kvs[] = {1, 1, q_len, dim};
+  const std::int64_t mask_shape[] = {q_len, q_len};
+  const AttentionPlan plan(descriptor, AttentionLayout::kRank4, qs, kvs, kvs, mask_shape,
+                           AttentionMaskKind::kAdditive);
+  const std::vector<float> q(q_len * dim, 0.0f), k(q_len * dim, 0.0f);
+  const std::vector<float> v(q_len * dim, 1.0f);
+  std::vector<float> mask(q_len * q_len, -std::numeric_limits<float>::infinity());
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    mask[row * q_len] = 0.0f;
+    mask[row * q_len + 4] = std::numeric_limits<float>::quiet_NaN();
+  }
+  std::vector<float> actual(q.size());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(), actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    for (std::int64_t d = 0; d < dim; ++d) {
+      if (row < 4) {
+        EXPECT_FLOAT_EQ(actual[row * dim + d], 1.0f);
+      } else {
+        EXPECT_TRUE(std::isnan(actual[row * dim + d]));
+      }
+    }
+  }
+
+  const auto q16 = half_precision::ToFloat16(q);
+  const auto k16 = half_precision::ToFloat16(k);
+  const auto v16 = half_precision::ToFloat16(v);
+  std::vector<std::uint16_t> actual16(q.size());
+  ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), mask.data(),
+                                   actual16.data(), nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  const auto actual16_float = half_precision::FromFloat16(actual16);
+  for (std::int64_t row = 0; row < q_len; ++row) {
+    for (std::int64_t d = 0; d < dim; ++d) {
+      if (row < 4) {
+        EXPECT_FLOAT_EQ(actual16_float[row * dim + d], 1.0f);
+      } else {
+        EXPECT_TRUE(std::isnan(actual16_float[row * dim + d]));
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesFallBackForUnsafeFloat32Magnitudes) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t q_len = 8, kv_len = 1024, dim = 16;
+  const std::int64_t qs[] = {1, 1, q_len, dim};
+  const std::int64_t kvs[] = {1, 1, kv_len, dim};
+  const AttentionPlan plan({}, AttentionLayout::kRank4, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+  const std::vector<float> q(q_len * dim, 0.0f), k(kv_len * dim, 0.0f);
+  std::vector<float> v(kv_len * dim);
+  for (std::int64_t row = 0; row < kv_len; ++row) {
+    std::fill_n(v.data() + row * dim, dim, row < kv_len / 2 ? 4.0e35f : -8.0e35f);
+  }
+  std::vector<float> actual(q.size());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  for (float value : actual) {
+    EXPECT_TRUE(std::isfinite(value));
+    EXPECT_NEAR(value / 1.0e35f, -2.0f, 2.0e-5f);
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
 TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
   for (const auto &[q_len, kv_len, dim, vdim] :
        {std::tuple{7, 17, 16, 16}, std::tuple{8, 17, 16, 16}, std::tuple{8, 0, 64, 64},
