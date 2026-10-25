@@ -407,38 +407,38 @@ void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, cons
                                 std::size_t end) {
   const bool has_bias = C != nullptr && beta != 0.0f;
   std::size_t m = begin;
-  // Reuse B across four independent streams of A instead of loading it once
-  // per output row. Eight accumulator chains hide the FMA latency.
-  for (; m + 4 <= end; m += 4) {
+  // Reuse B across pairs of A rows while preserving the four-chain reduction
+  // order used by the single-row path.
+  for (; m + 2 <= end; m += 2) {
     const float *a = A + m * K;
     __m256 acc00 = _mm256_setzero_ps(), acc01 = _mm256_setzero_ps();
+    __m256 acc02 = _mm256_setzero_ps(), acc03 = _mm256_setzero_ps();
     __m256 acc10 = _mm256_setzero_ps(), acc11 = _mm256_setzero_ps();
-    __m256 acc20 = _mm256_setzero_ps(), acc21 = _mm256_setzero_ps();
-    __m256 acc30 = _mm256_setzero_ps(), acc31 = _mm256_setzero_ps();
+    __m256 acc12 = _mm256_setzero_ps(), acc13 = _mm256_setzero_ps();
     std::size_t k = 0;
-    for (; k + 16 <= K; k += 16) {
+    for (; k + 32 <= K; k += 32) {
       const __m256 b0 = _mm256_loadu_ps(B + k);
       const __m256 b1 = _mm256_loadu_ps(B + k + 8);
+      const __m256 b2 = _mm256_loadu_ps(B + k + 16);
+      const __m256 b3 = _mm256_loadu_ps(B + k + 24);
       acc00 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k), b0, acc00);
       acc01 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 8), b1, acc01);
+      acc02 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 16), b2, acc02);
+      acc03 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 24), b3, acc03);
       acc10 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k), b0, acc10);
       acc11 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 8), b1, acc11);
-      acc20 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 2 * K + k), b0, acc20);
-      acc21 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 2 * K + k + 8), b1, acc21);
-      acc30 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 3 * K + k), b0, acc30);
-      acc31 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 3 * K + k + 8), b1, acc31);
+      acc12 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 16), b2, acc12);
+      acc13 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 24), b3, acc13);
     }
-    float sums[] = {
-        HorizontalSum(_mm256_add_ps(acc00, acc01)), HorizontalSum(_mm256_add_ps(acc10, acc11)),
-        HorizontalSum(_mm256_add_ps(acc20, acc21)), HorizontalSum(_mm256_add_ps(acc30, acc31))};
+    const __m256 sum00 = _mm256_add_ps(_mm256_add_ps(acc00, acc01), _mm256_add_ps(acc02, acc03));
+    const __m256 sum10 = _mm256_add_ps(_mm256_add_ps(acc10, acc11), _mm256_add_ps(acc12, acc13));
+    float sums[] = {HorizontalSum(sum00), HorizontalSum(sum10)};
     for (; k < K; ++k) {
-      for (std::size_t r = 0; r < 4; ++r) {
-        sums[r] += a[r * K + k] * B[k];
-      }
+      sums[0] += a[k] * B[k];
+      sums[1] += a[K + k] * B[k];
     }
-    for (std::size_t r = 0; r < 4; ++r) {
-      Y[m + r] = alpha * sums[r] + (has_bias ? beta * C[m + r] : 0.0f);
-    }
+    Y[m] = alpha * sums[0] + (has_bias ? beta * C[m] : 0.0f);
+    Y[m + 1] = alpha * sums[1] + (has_bias ? beta * C[m + 1] : 0.0f);
   }
   for (; m < end; ++m) {
     const float *a = A + m * K;

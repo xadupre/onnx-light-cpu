@@ -774,6 +774,29 @@ TEST(GemmFloat32, Avx2SkinnyNFourRowsSpecialValuesAndIgnoredBias) {
   }
 }
 
+TEST(GemmFloat32, Avx2SkinnyNCancellationPreservesFourChainReduction) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  constexpr std::size_t M = 5, K = 33;
+  const float large = std::ldexp(1.0f, 127);
+  std::vector<float> A(M * K, 0.0f), B(K, 1.0f), Y(M);
+  for (std::size_t m = 0; m < M; ++m) {
+    A[m * K] = large;
+    A[m * K + 8] = -large;
+    A[m * K + 16] = large;
+    A[m * K + 24] = -large;
+  }
+
+  ml_cpu_compute::GemmSkinnyN1Range_AVX2_F32(K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(),
+                                             0, M);
+
+  for (float y : Y) {
+    EXPECT_EQ(y, 0.0f);
+  }
+}
+
 TEST(GemmFloat64, Avx2MaskedTailsAllRowsAndAccumulationModes) {
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {
