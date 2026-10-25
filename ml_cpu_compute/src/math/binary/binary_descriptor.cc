@@ -2789,8 +2789,8 @@ BinaryOperationDescriptor::BinaryOperationDescriptor(std::string op_type,
     SelectAdditionalBulk(manifest_.op, signature.left, signature.right, attributes_, adapter);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2
     if ((manifest_.op == BinaryOperator::kGreater ||
-         manifest_.op == BinaryOperator::kGreaterOrEqual ||
-         manifest_.op == BinaryOperator::kLess) &&
+         manifest_.op == BinaryOperator::kGreaterOrEqual || manifest_.op == BinaryOperator::kLess ||
+         manifest_.op == BinaryOperator::kLessOrEqual) &&
         signature.left == DT::FLOAT) {
       static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
       if (use_avx2) {
@@ -2800,6 +2800,10 @@ BinaryOperationDescriptor::BinaryOperationDescriptor(std::string op_type,
           adapter.bulk_contiguous = &BulkFloatLess_AVX2;
           adapter.bulk_left_scalar = &BulkFloatLessLeft_AVX2;
           adapter.bulk_right_scalar = &BulkFloatLessRight_AVX2;
+        } else if (manifest_.op == BinaryOperator::kLessOrEqual) {
+          adapter.bulk_contiguous = &BulkFloatLessOrEqual_AVX2;
+          adapter.bulk_left_scalar = &BulkFloatLessOrEqualLeft_AVX2;
+          adapter.bulk_right_scalar = &BulkFloatLessOrEqualRight_AVX2;
         } else {
           adapter.bulk_contiguous = &BulkFloatGreaterOrEqual_AVX2;
           adapter.bulk_left_scalar = &BulkFloatGreaterOrEqualLeft_AVX2;
