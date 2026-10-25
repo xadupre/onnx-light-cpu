@@ -105,8 +105,15 @@ void BinaryPReluFloat32Left_AVX(float left, const float *right, float *out, std:
     return;
   }
   std::size_t i = 0;
-  const std::size_t aligned = count - count % 8;
   const __m256 x = _mm256_set1_ps(left);
+  const std::size_t unrolled = count - count % 32;
+  for (; i < unrolled; i += 32) {
+    _mm256_storeu_ps(out + i, _mm256_mul_ps(x, _mm256_loadu_ps(right + i)));
+    _mm256_storeu_ps(out + i + 8, _mm256_mul_ps(x, _mm256_loadu_ps(right + i + 8)));
+    _mm256_storeu_ps(out + i + 16, _mm256_mul_ps(x, _mm256_loadu_ps(right + i + 16)));
+    _mm256_storeu_ps(out + i + 24, _mm256_mul_ps(x, _mm256_loadu_ps(right + i + 24)));
+  }
+  const std::size_t aligned = count - count % 8;
   for (; i < aligned; i += 8) {
     _mm256_storeu_ps(out + i, _mm256_mul_ps(x, _mm256_loadu_ps(right + i)));
   }
