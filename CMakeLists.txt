@@ -883,6 +883,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         target_compile_definitions(${_name} PRIVATE ML_CPU_COMPUTE_HAVE_F16C=1)
       endif()
     endif()
+    if(_name STREQUAL "test_attention_plan" AND ML_CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
+      target_compile_definitions(${_name} PRIVATE ML_CPU_COMPUTE_HAVE_AVX2_FMA=1)
+    endif()
     if((_name STREQUAL "test_exp_log_kernel" OR
         _name STREQUAL "test_tanh_kernel" OR
         _name STREQUAL "test_onnx_light_sigmoid_softmax_kernel") AND

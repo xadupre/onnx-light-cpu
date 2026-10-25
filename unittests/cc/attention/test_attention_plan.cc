@@ -1784,6 +1784,81 @@ TEST(ComputeAttentionFloat32Streaming, FiniteValueCheckHandlesEveryVectorTail) {
       }
     }
   }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortTilesOnlyCheckReachableValueRows) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() != ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA short-query tiles are unavailable";
+  }
+  constexpr std::int64_t batch = 2, heads = 4, kv_heads = 2, kv_len = 8192, dim = 64;
+  for (const auto layout : {AttentionLayout::kRank3, AttentionLayout::kRank4}) {
+    for (const std::int64_t rows : {8, 16}) {
+      for (const auto &[causal, nonpad, left, right] :
+           {std::tuple{true, false, -1, -1}, std::tuple{false, false, -1, 1},
+            std::tuple{false, true, -1, -1}, std::tuple{true, true, 2, 0}}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "layout=" << static_cast<int>(layout) << " rows=" << rows << " causal="
+                     << causal << " nonpad=" << nonpad << " left=" << left << " right=" << right);
+        AttentionDescriptor descriptor;
+        descriptor.opset = 25;
+        descriptor.q_num_heads = heads;
+        descriptor.kv_num_heads = kv_heads;
+        descriptor.is_causal = causal;
+        descriptor.has_nonpad_kv_seqlen = nonpad;
+        descriptor.left_window_size = left;
+        descriptor.right_window_size = right;
+        const std::vector<std::int64_t> qs =
+            layout == AttentionLayout::kRank3 ? std::vector<std::int64_t>{batch, rows, heads * dim}
+                                              : std::vector<std::int64_t>{batch, heads, rows, dim};
+        const std::vector<std::int64_t> kvs =
+            layout == AttentionLayout::kRank3
+                ? std::vector<std::int64_t>{batch, kv_len, kv_heads * dim}
+                : std::vector<std::int64_t>{batch, kv_heads, kv_len, dim};
+        const AttentionPlan plan(descriptor, layout, qs, kvs, kvs, {}, AttentionMaskKind::kNone);
+        const std::int64_t lengths[] = {0, 40};
+        const auto *nonpad_lengths = nonpad ? lengths : nullptr;
+        const std::vector<float> q(batch * heads * rows * dim, 0.0f);
+        const std::vector<float> k(batch * kv_heads * kv_len * dim, 0.0f);
+        std::vector<float> v(k.size(), std::numeric_limits<float>::quiet_NaN());
+        for (std::size_t b = 0; b < batch; ++b) {
+          const std::int64_t start =
+              nonpad && left >= 0 ? std::max<std::int64_t>(lengths[b] - rows - left, 0) : 0;
+          const std::int64_t limit = nonpad ? lengths[b] : rows + (right >= 0 ? right : 0);
+          for (std::size_t h = 0; h < kv_heads; ++h) {
+            for (std::int64_t row = start; row < limit; ++row) {
+              std::fill_n(v.data() + b * plan.v_strides.batch + h * plan.v_strides.head +
+                              row * plan.v_strides.sequence,
+                          dim, 1.0f);
+            }
+          }
+        }
+        std::vector<float> expected(q.size(), 1.0f), actual(q.size());
+        if (nonpad) {
+          std::fill_n(expected.begin(), heads * rows * dim, 0.0f);
+        }
+        ml_cpu_compute::AttentionExecutionInfo info;
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                         nullptr, nullptr, nonpad_lengths, &info);
+        ExpectClose(actual, expected);
+        EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+        const auto q16 = half_precision::ToFloat16(q);
+        const auto k16 = half_precision::ToFloat16(k);
+        const auto v16 = half_precision::ToFloat16(v);
+        std::vector<std::uint16_t> actual16(q.size());
+        ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                         actual16.data(), nullptr, nullptr, nonpad_lengths, &info);
+        ExpectClose(half_precision::FromFloat16(actual16), expected);
+        EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
 #endif
 }
 

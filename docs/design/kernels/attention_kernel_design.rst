@@ -72,7 +72,7 @@ Compute paths
      - FLOAT/FLOAT16, no past state, at least 16 query rows and more than one
        key, when materialized dispatch is not required. AVX2/FMA also uses
        tiles for 8--15 rows with Q/K and V head dimensions in [16, 256]
-       and finite V.
+       and finite V in the KV rows consumed by the query tile.
      - Online softmax over bounded query/KV tiles with FP32 accumulation.
    * - Streaming
      - Short queries, tensor-cache inputs, and BFLOAT16, when materialized
@@ -283,6 +283,9 @@ Two bottlenecks were isolated by dispatch A/B measurements:
   finite-value check preserves the old streaming behavior for NaN/Inf in V:
   streaming skips zero probabilities, whereas dense GEMM evaluates zero times
   NaN/Inf. This scan is inside the measured invocation; it is not cached.
+  It shares the tiled product's causal, window and per-batch nonpad bounds,
+  so unavailable V prefixes and suffixes are not scanned. Rank-three scans
+  include the interleaved KV heads only within the selected rows.
 
 Both decisions cache CPU feature detection and leave unsupported CPUs,
 dimensions, tensor-cache inputs, sink attention, and materialized dispatch
@@ -367,10 +370,13 @@ with the existing runner, and apply the same settings to each row:
      --case '^test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16_benchmark$' \
      --output /tmp/attention-case.json
 
-Validation comprises all 84 ``test_attention_plan`` tests, the 37 runner
+Validation comprises all 85 ``test_attention_plan`` tests, the 37 runner
 correctness comparisons, and clang-format checks. New tests cover tile and
 eligibility boundaries, both layouts, grouped heads, empty/single-key inputs,
 nonpad and fully masked rows, runtime-owned scheduling without nesting, and
 every finite-check tail through 33 elements including NaN and both infinities.
+They also verify that unavailable V rows do not disable short-query tiles under
+causal, window and per-batch nonpad bounds. The test target mirrors the library's
+AVX2/FMA availability definition while retaining runtime CPU feature checks.
 This build system does not expose a scalar-only ceiling; no scalar or
 AVX-512 performance claim is made.
