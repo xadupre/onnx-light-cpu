@@ -624,6 +624,51 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
 #endif
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+TEST(GemmFloat32, Avx2FullTilesAllRowsAndAccumulationModes) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  using ml_cpu_compute::GemmAccumMode;
+  for (std::size_t M = 1; M <= 6; ++M) {
+    for (std::size_t N : {15, 16, 17, 31, 32, 47}) {
+      for (std::size_t K : {0, 1, 3, 4, 5, 17, 129}) {
+        SCOPED_TRACE(::testing::Message() << "M=" << M << " N=" << N << " K=" << K);
+        const std::size_t stride = N + 2;
+        const auto A = RandomVector(M * K, 176);
+        const auto B = RandomVector(K * stride, 177);
+        const auto C = RandomVector(M * stride, 178);
+        for (auto mode : {GemmAccumMode::kInitZero, GemmAccumMode::kInitBias,
+                          GemmAccumMode::kInitColumnBias, GemmAccumMode::kAccumulate}) {
+          std::vector<float> Y(M * stride, 123.0f);
+          ml_cpu_compute::GemmMicroTile_AVX2FMA_F32(M, N, K, 0.75f, -0.5f, B.data(), stride,
+                                                    C.data(), stride, Y.data(), stride, 1, mode,
+                                                    A.data());
+          for (std::size_t m = 0; m < M; ++m) {
+            EXPECT_EQ(Y[m * stride], 123.0f);
+            EXPECT_EQ(Y[m * stride + N + 1], 123.0f);
+            for (std::size_t n = 0; n < N; ++n) {
+              float expected = 0;
+              for (std::size_t k = 0; k < K; ++k) {
+                expected += A[m * K + k] * B[k * stride + n + 1];
+              }
+              expected *= 0.75f;
+              if (mode == GemmAccumMode::kInitBias) {
+                expected -= 0.5f * C[m * stride + n + 1];
+              } else if (mode == GemmAccumMode::kInitColumnBias) {
+                expected -= 0.5f * C[m * stride];
+              } else if (mode == GemmAccumMode::kAccumulate) {
+                expected += 123.0f;
+              }
+              EXPECT_NEAR(Y[m * stride + n + 1], expected, 5e-4f);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {

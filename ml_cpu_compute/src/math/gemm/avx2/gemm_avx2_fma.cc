@@ -468,12 +468,14 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
   const bool beta_is_one = beta == 1.0f;
   std::size_t n = 0;
   for (; n + 16 <= nb; n += 16) {
-    __m256 acc0[MR];
-    __m256 acc1[MR];
-    for (std::size_t r = 0; r < MR; ++r) {
-      acc0[r] = _mm256_setzero_ps();
-      acc1[r] = _mm256_setzero_ps();
-    }
+    // Named accumulators keep GCC from storing the arrays to the stack on
+    // every unrolled K iteration. Materialize the row arrays only for the epilogue.
+    __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
+    __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
+    __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
+    __m256 c30 = _mm256_setzero_ps(), c31 = _mm256_setzero_ps();
+    __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
+    __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
     const auto accumulate_k = [&](std::size_t k) {
       const float *Brow = Bmat + k * N + n0 + n;
       const __m256 vb0 = _mm256_loadu_ps(Brow);
@@ -481,10 +483,26 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
-      for (std::size_t r = 0; r < MR; ++r) {
+      const auto row = [&](std::size_t r, __m256 &lo, __m256 &hi) {
         const __m256 va = _mm256_set1_ps(Apack[r * K + k]);
-        acc0[r] = _mm256_fmadd_ps(va, vb0, acc0[r]);
-        acc1[r] = _mm256_fmadd_ps(va, vb1, acc1[r]);
+        lo = _mm256_fmadd_ps(va, vb0, lo);
+        hi = _mm256_fmadd_ps(va, vb1, hi);
+      };
+      row(0, c00, c01);
+      if constexpr (MR >= 2) {
+        row(1, c10, c11);
+      }
+      if constexpr (MR >= 3) {
+        row(2, c20, c21);
+      }
+      if constexpr (MR >= 4) {
+        row(3, c30, c31);
+      }
+      if constexpr (MR >= 5) {
+        row(4, c40, c41);
+      }
+      if constexpr (MR >= 6) {
+        row(5, c50, c51);
       }
     };
     std::size_t k = 0;
@@ -497,6 +515,8 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
     for (; k < K; ++k) {
       accumulate_k(k);
     }
+    const __m256 acc0[] = {c00, c10, c20, c30, c40, c50};
+    const __m256 acc1[] = {c01, c11, c21, c31, c41, c51};
     for (std::size_t r = 0; r < MR; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m256 res0 = alpha_is_one ? acc0[r] : _mm256_mul_ps(valpha, acc0[r]);
