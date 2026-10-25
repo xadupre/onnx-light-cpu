@@ -1245,7 +1245,8 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
   for (const auto &entry : ml_cpu_compute::GetBinaryManifest()) {
     std::set<int64_t> expected_output_sizes = {4096, 65536, 1048576, 4194304};
     if (entry.op == ml_cpu_compute::BinaryOperator::kOr ||
-        entry.op == ml_cpu_compute::BinaryOperator::kAnd) {
+        entry.op == ml_cpu_compute::BinaryOperator::kAnd ||
+        entry.op == ml_cpu_compute::BinaryOperator::kXor) {
       expected_output_sizes.insert({32768, 65535, 131072});
     }
     const std::vector<TestCase> cases =
