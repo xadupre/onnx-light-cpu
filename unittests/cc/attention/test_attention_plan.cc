@@ -2074,12 +2074,60 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesFallBackForUnsafeFloat32Magnitu
 #endif
 }
 
+TEST(ComputeAttentionFloat32Streaming, GroupedQueryTilesPreserveUnsafeValueFrontiers) {
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = 2;
+  descriptor.kv_num_heads = 1;
+  descriptor.is_causal = true;
+  const std::int64_t qs[] = {1, 32, 128};
+  const std::int64_t kvs[] = {1, 32, 64};
+  const AttentionPlan plan(descriptor, AttentionLayout::kRank3, qs, kvs, kvs, {},
+                           AttentionMaskKind::kNone);
+  const std::vector<float> q(32 * 128, 0.0f), k(32 * 64, 0.0f);
+  const auto q16 = half_precision::ToFloat16(q), k16 = half_precision::ToFloat16(k);
+  std::vector<float> v(32 * 64, 1.0f), actual(q.size());
+  std::vector<std::uint16_t> actual16(q.size());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  for (float unsafe :
+       {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::max()}) {
+    SCOPED_TRACE(unsafe);
+    v[20 * 64] = unsafe;
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                     nullptr, nullptr, nullptr, &info);
+    EXPECT_EQ(info.query_tile, 16u);
+    EXPECT_EQ(info.output_tile_elements, 16 * 64u);
+    for (std::size_t i = 0; i < 16 * 128; ++i) {
+      EXPECT_FLOAT_EQ(actual[i], 1.0f);
+    }
+    const auto v16 = half_precision::ToFloat16(v);
+    ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                     actual16.data(), nullptr, nullptr, nullptr, &info);
+    EXPECT_EQ(info.query_tile, 16u);
+    for (std::size_t i = 0; i < 16 * 128; ++i) {
+      EXPECT_FLOAT_EQ(ml_cpu_compute::detail::Float16BitsToFloat(actual16[i]), 1.0f);
+    }
+  }
+  v[20 * 64] = 1.0f;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  ExpectClose(actual, std::vector<float>(actual.size(), 1.0f));
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2 &&
+      ml_cpu_compute::CpuSupportsFma()) {
+    EXPECT_EQ(info.query_tile, 32u);
+  }
+#endif
+}
+
 TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
   for (const auto &[q_len, kv_len, dim, vdim] :
-       {std::tuple{7, 17, 16, 16}, std::tuple{8, 17, 16, 16}, std::tuple{8, 0, 64, 64},
-        std::tuple{8, 1, 64, 64}, std::tuple{8, 513, 64, 63}, std::tuple{15, 512, 63, 65},
-        std::tuple{16, 511, 64, 64}, std::tuple{17, 33, 17, 17}, std::tuple{8, 17, 15, 16},
-        std::tuple{8, 17, 16, 15}, std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
+       {std::tuple{7, 17, 16, 16},    std::tuple{8, 17, 16, 16},   std::tuple{8, 0, 64, 64},
+        std::tuple{8, 1, 64, 64},     std::tuple{8, 513, 64, 63},  std::tuple{15, 512, 63, 65},
+        std::tuple{16, 511, 64, 64},  std::tuple{17, 33, 17, 17},  std::tuple{8, 17, 15, 16},
+        std::tuple{31, 31, 64, 64},   std::tuple{32, 32, 64, 64},  std::tuple{33, 33, 64, 64},
+        std::tuple{63, 63, 64, 64},   std::tuple{64, 64, 64, 64},  std::tuple{65, 65, 64, 64},
+        std::tuple{8, 17, 16, 15},    std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
         std::tuple{129, 17, 64, 256}, std::tuple{128, 17, 64, 64}, std::tuple{128, 17, 64, 65}}) {
     for (const bool rank3 : {false, true}) {
       for (int mode = 0; mode < 4; ++mode) {
@@ -2150,6 +2198,9 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterializ
             ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
             dim <= 256 && vdim >= 16 && vdim <= 256) {
           EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+          if (rank3 && mode == 1 && dim == 64 && vdim == 64 && q_len >= 31 && q_len == kv_len) {
+            EXPECT_EQ(info.query_tile, q_len <= 64 ? std::min(q_len, 32) : 16);
+          }
         }
 #endif
         std::vector<std::uint16_t> actual16(expected.size());
@@ -2166,6 +2217,9 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterializ
             ml_cpu_compute::CpuSupportsFma() && q_len >= 8 && kv_len > 1 && dim >= 16 &&
             dim <= 256 && vdim >= 16 && vdim <= 256) {
           EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+          if (rank3 && mode == 1 && dim == 64 && vdim == 64 && q_len >= 31 && q_len == kv_len) {
+            EXPECT_EQ(info.query_tile, q_len <= 64 ? std::min(q_len, 32) : 16);
+          }
         }
 #endif
       }

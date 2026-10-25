@@ -386,3 +386,116 @@ causal, window and per-batch nonpad bounds. The test target mirrors the library'
 AVX2/FMA availability definition while retaining runtime CPU feature checks.
 This build system does not expose a scalar-only ceiling; no scalar or
 AVX-512 performance claim is made.
+
+Issue 986: short causal GroupQueryAttention on AVX2
+--------------------------------------------------
+
+The 2026-10-25 reproduction used an AMD EPYC 7763 VM with four visible logical
+CPUs, GCC 13.3.0 Release, Python 3.13.16, and an AVX2 ceiling (reported SIMD
+level 3). Baseline production code was ``c945d91``; the optimized code is
+``b50c0fb``. Dependencies were onnx-light-cpu 0.2.0, the onnx-light 0.2.0
+CPython 3.13 Linux release wheel (tag commit
+``6400f0f812b13bc32469e405bd2f762ba3cba7f0``), ONNX Runtime 1.31.0 (build
+commit ``402979a``), NumPy 2.4.4, and ml-dtypes 0.6.0. The CPU extension linked
+the wheel's libraries with matching ``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF``.
+
+All four reported gaps reproduced twice before optimization. Measurements
+used the exact registered ``com.microsoft::GroupQueryAttention`` benchmark
+models and inputs, not replacement workloads. Both backends used one thread,
+affinity CPU 0, 100 warmups, and 1,000 measured iterations per case, with a
+three-second cap that was never reached. The existing benchmark CLI measures
+the CPU phase before constructing ORT, then measures ORT; it does not
+alternate individual samples. CPU feeds were backend tensors, ORT feeds were
+NumPy arrays, and recording was disabled during timing. ORT used sequential
+execution and one inter-op thread. Spin defaults were unchanged: onnx-light
+resolved adaptive spinning with 10,000 iterations and ORT retained its default
+spinning. With one effective thread neither has idle workers to spin.
+Compilation and profiling did not overlap timed runs.
+
+Short grouped prefill was paying packing and GEMM setup costs for every
+16-row query tile. AVX2/FMA now uses up to 32 rows for causal rank-three grouped
+attention with query/KV lengths at most 64 and both head dimensions 64.
+The executor, input conversions, accumulation precision, and softmax are
+unchanged. A 64-row experiment was rejected: GQA FP32/FP16 measured
+0.439922/0.430304 ms versus 0.419815/0.398470 ms for the corresponding
+32-row experiment without the safety scan.
+
+Wider tiles evaluate additional masked products. An invocation-local
+vectorized V check retains the original 16-row tiles for NaN/Inf and unsafe
+FP32 magnitudes, preserving earlier causal rows that must not acquire
+zero-times-NaN/Inf. BF16 retains its old tile size. The check is inside the
+measured call, does not cache input contents, and adds no scratch allocation.
+Execution telemetry reports the actual tile size, including fallback.
+
+Callgrind 3.22.0 profiled
+``ComputeAttentionFloat32Streaming.SmallCausalGqaCapsWorkerCount`` repeated
+20 times. Original versus final QK GEMM and transpose-packing calls fell from
+1,280 to 640 each. Transpose-packing instructions fell from 2,901,760 to
+1,840,000; the final finite-value scan ran 20 times. AVX2/FMA microkernels
+and softmax were present in both profiles. Wider tiles do more masked
+arithmetic, so total instructions increased: this is an amortization/latency
+improvement, not a FLOP reduction. These native-test profiles include data
+generation and assertions and are not end-to-end phase percentages.
+Hardware ``perf`` events were blocked by ``perf_event_paranoid=4``.
+
+The following are median milliseconds. Restore each full benchmark name with
+the prefix ``test_cpu_group_query_attention_`` and suffix ``_benchmark``.
+``Before repeat`` restores the 16-row target after the initial experiments;
+``After`` and ``After repeat`` both include the safety scan. ``ORT`` is from
+the final repeated campaign.
+
+.. csv-table::
+   :header: "Case", "Before", "Before repeat", "After", "After repeat", "ORT"
+   :widths: 57 9 9 9 9 9
+
+   "mqa_b4_s32_qh8_kvh1_hd64_causal_float32", "0.336033", "0.337977", "0.315289", "0.316967", "0.198666"
+   "mqa_b4_s32_qh8_kvh1_hd64_causal_float16", "0.351492", "0.355936", "0.323084", "0.322213", "0.226002"
+   "gqa_b2_s64_qh8_kvh2_hd64_causal_float32", "0.478579", "0.480137", "0.432013", "0.431441", "0.291990"
+   "gqa_b2_s64_qh8_kvh2_hd64_causal_float16", "0.428896", "0.432323", "0.402422", "0.401309", "0.313496"
+
+Latency falls approximately 6--10% on all four single-thread cases.
+**ORT remains faster on all four**; parity is not claimed. Absolute timings
+are not interchangeable with the dashboard's unspecified thread/build
+provenance.
+
+A separate four-thread check used affinity CPUs 0--3 with the same warmup,
+repetition, phase order, and unchanged spin defaults. These are before/after
+CPU milliseconds, with ORT from the final run:
+
+.. csv-table::
+   :header: "Case", "Before", "After", "ORT"
+   :widths: 64 12 12 12
+
+   "MQA FP32", "0.163416", "0.154810", "0.134000"
+   "MQA FP16", "0.174170", "0.173730", "0.185992"
+   "GQA FP32", "0.228642", "0.215218", "0.185827"
+   "GQA FP16", "0.221760", "0.209146", "0.213048"
+
+The four-thread MQA FP16 difference is within noise; no improvement is
+claimed there. Its dashboard gap does not reproduce at four threads even
+before optimization. GQA FP16 finishes near parity, which requires caution
+rather than a general parity claim. No failed or missing measurement was
+counted as a win.
+
+Reproduce all four cases with the existing CLI:
+
+.. code-block:: bash
+
+   REPO=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+   CMAKE_ARGS='-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF' \
+     python "$REPO/setup.py" build_ext --inplace --onnx-light-source
+   taskset -c 0 python -m onnx_light_cpu benchmark \
+     --test '^test_cpu_group_query_attention_(mqa_b4_s32_qh8_kvh1|gqa_b2_s64_qh8_kvh2)_hd64_causal_float(16|32)_benchmark$' \
+     --dtype float32 float16 --threads 1 --warmup 100 --repeat 1000 \
+     --max-repeat-time 3 --onnxruntime --output /tmp/gqa.xlsx
+
+Validation passed all 91 shared Attention tests, 20 GQA adapter tests,
+10 naive-GQA tests, and 12 MHA adapter tests. The exact four registered
+benchmark inputs also matched ORT (FP32 rtol/atol 2e-4/2e-5; FP16
+2e-2/2e-3). Added differential cases cover lengths 31/32/33 and 63/64/65
+in both layouts and types, causal/nonpad, boolean/additive and fully masked
+rows, and runtime scheduling without nesting. The unsafe-value regression
+checks NaN, both infinities, and extreme FP32 values, then changes V back to
+finite values to verify invocation-local selection. No AVX-512 or scalar
+performance claim is made.
