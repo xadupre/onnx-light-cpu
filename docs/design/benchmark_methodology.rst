@@ -82,6 +82,109 @@ Use identical models, inputs, shapes, and attributes for every backend. If
 constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.
 
+AVX2 LessOrEqual (October 25, 2026)
+----------------------------------
+
+Issue #991 identified the float32 right-scalar case with 4,194,304 elements.
+The float32 adapter omitted LessOrEqual from its AVX2 dispatch. Disassembly
+of the baseline right-scalar bulk function showed SSE comparisons followed
+by multiple unpacking operations to produce boolean bytes. The change
+reuses the existing ordered AVX2 greater-or-equal comparison with swapped
+operands, including its scalar-broadcast variants and 32-element byte-packing
+loop. NaNs remain false; equality, signed zero, tails, scheduling, and
+allocation behavior are unchanged. Dispatch-pointer assertions verify that
+the AVX2 functions are selected, and the scalar adapter remains the
+correctness oracle.
+
+**Steady-state end-to-end:** AMD EPYC 7763 virtual runner, four logical CPUs,
+two physical cores, AVX2 (``simd_level=3``), GCC 13.3.0 Release, Python 3.13.16,
+NumPy 2.5.4. Baseline source was ``ff886f3`` and optimized source ``b62211d``,
+both ``onnx-light-cpu`` 0.2.0. ONNX Runtime was the 1.31.0 Release wheel,
+commit ``402979a``. The dependency was the published ``onnx-light`` 0.2.0
+cp313 manylinux x86-64 wheel, SHA-256
+``8e47ccce3f3a70bbe31cd99c66c144bd3feb1e85b2dae1d1f4c5e849344595ae``;
+its source commit was not exposed. The integration linked that wheel's
+libraries with matching non-stable Python ABI.
+
+The unchanged backend CLI used native CPU tensor feeds, the original model
+and inputs, one session thread, one ORT inter-op thread, ORT sequential
+execution, no process pinning (CPUs 0--3 available), and no spin overrides.
+These are runtime defaults, not a claim of identical spin policies. CPU was
+timed first, then ORT, with the CPU session still alive. Each build had three
+independent CLI invocations, each with 20 warmups and 400 measured iterations,
+separately capped at one second. All 400 samples were retained per phase.
+The higher iteration counts than the CLI's 8/40 defaults reduce sampling
+noise. Untimed kernel recording confirmed ``onnx_light_cpu::LessOrEqual``
+and ``Binary.LessOrEqual.bulk``.
+
+For the issue's exact
+``test_cpu_lessorequal_v16_right_scalar_float32xfloat32_to_bool_n4194304_benchmark``
+case, timings in milliseconds were:
+
+.. list-table:: Exact right-scalar case, independent runs
+   :header-rows: 1
+
+   * - Build / run
+     - CPU median
+     - CPU p10--p90
+     - ORT median
+   * - Before / 1
+     - 1.089853
+     - 1.010284--1.186939
+     - 1.104075
+   * - Before / 2
+     - 0.954795
+     - 0.858319--1.056098
+     - 0.922956
+   * - Before / 3
+     - 0.845310
+     - 0.719767--0.968528
+     - 0.938575
+   * - After / 1
+     - 0.320317
+     - 0.281366--0.384238
+     - 0.676565
+   * - After / 2
+     - 0.426725
+     - 0.391075--0.509189
+     - 0.780679
+   * - After / 3
+     - 0.458295
+     - 0.409620--0.546783
+     - 0.832301
+
+The published 1.47x ORT advantage **did not reproduce consistently**: ORT
+was faster in only one baseline run. The median of the three CPU medians
+improved from 0.954795 to 0.426725 ms (2.24x); corresponding ORT medians were
+0.938575 and 0.780679 ms. ORT also improved between phases, demonstrating
+shared-runner variability. CPU was 1.82--2.11x faster than ORT within each
+post-change run; these diagnostic results are not a parity guarantee.
+
+The same runs covered contiguous and left-scalar inputs at 4,096, 65,536,
+and 4,194,304 elements. Small cases were approximately unchanged. At 65,536
+elements, scalar broadcasts improved about 1.4x, but the contiguous CPU
+median increased from 0.017182 to 0.018464 ms (ORT also increased from
+0.020108 to 0.021485 ms). At 4,194,304 elements, contiguous and left-scalar
+CPU medians improved from 1.420518 to 0.917705 ms and from 0.992826 to
+0.471053 ms. Thus this experiment does not establish a win at every size.
+
+Reproduce each run before and after the change with the same Release AVX2
+build. ``--dtype bool`` selects the output token in comparison case names;
+the regex fixes the inputs to float32:
+
+.. code-block:: bash
+
+   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   PYTHONPATH="$ROOT" python -m onnx_light_cpu benchmark \
+       --test '^test_cpu_lessorequal_v16_(right_scalar|left_scalar|contiguous)_float32xfloat32_to_bool_n(4096|65536|4194304)_benchmark$' \
+       --dtype bool --threads 1 --onnxruntime \
+       --warmup 20 --repeat 400 --max-repeat-time 1 \
+       --output /tmp/lessorequal-results.xlsx
+
+The workbook retains raw samples and percentile summaries. Hardware-counter
+profiling was restricted (``perf_event_paranoid=4``). AVX-512 hardware was
+unavailable; no AVX-512-specific performance claim is made.
+
 AVX2 Sigmoid (October 23, 2026)
 -------------------------------
 
