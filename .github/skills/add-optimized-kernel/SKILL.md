@@ -109,7 +109,7 @@ correctness tests, and reproducible benchmarks in one change.
    ```bash
    cmake -S . -B build-avx2 -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
          -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF
-   cmake --build build-avx2 -j4
+   cmake --build build-avx2 --parallel 48
    ```
 
 4. Benchmark scalar/baseline, AVX2, and AVX-512 with identical inputs, affinity, executor, warmup,
