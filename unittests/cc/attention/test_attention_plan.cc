@@ -2122,13 +2122,21 @@ TEST(ComputeAttentionFloat32Streaming, GroupedQueryTilesPreserveUnsafeValueFront
 
 TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
   for (const auto &[q_len, kv_len, dim, vdim] :
-       {std::tuple{7, 17, 16, 16},    std::tuple{8, 17, 16, 16},   std::tuple{8, 0, 64, 64},
-        std::tuple{8, 1, 64, 64},     std::tuple{8, 513, 64, 63},  std::tuple{15, 512, 63, 65},
-        std::tuple{16, 511, 64, 64},  std::tuple{17, 33, 17, 17},  std::tuple{8, 17, 15, 16},
-        std::tuple{31, 31, 64, 64},   std::tuple{32, 32, 64, 64},  std::tuple{33, 33, 64, 64},
-        std::tuple{63, 63, 64, 64},   std::tuple{64, 64, 64, 64},  std::tuple{65, 65, 64, 64},
-        std::tuple{8, 17, 16, 15},    std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
-        std::tuple{129, 17, 64, 256}, std::tuple{128, 17, 64, 64}, std::tuple{128, 17, 64, 65}}) {
+       {std::tuple{7, 17, 16, 16},      std::tuple{8, 17, 16, 16},
+        std::tuple{8, 0, 64, 64},       std::tuple{8, 1, 64, 64},
+        std::tuple{8, 513, 64, 63},     std::tuple{15, 512, 63, 65},
+        std::tuple{16, 511, 64, 64},    std::tuple{17, 33, 17, 17},
+        std::tuple{8, 17, 15, 16},      std::tuple{31, 31, 64, 64},
+        std::tuple{32, 32, 64, 64},     std::tuple{33, 33, 64, 64},
+        std::tuple{63, 63, 64, 64},     std::tuple{64, 64, 64, 64},
+        std::tuple{65, 65, 64, 64},     std::tuple{8, 17, 16, 15},
+        std::tuple{8, 17, 257, 256},    std::tuple{8, 17, 256, 257},
+        std::tuple{129, 17, 64, 256},   std::tuple{128, 17, 64, 64},
+        std::tuple{128, 17, 64, 65},    std::tuple{128, 128, 63, 63},
+        std::tuple{128, 128, 64, 64},   std::tuple{128, 128, 128, 128},
+        std::tuple{128, 128, 256, 256}, std::tuple{129, 257, 63, 63},
+        std::tuple{129, 257, 64, 64},   std::tuple{129, 257, 128, 128},
+        std::tuple{129, 257, 256, 256}}) {
     for (const bool rank3 : {false, true}) {
       for (int mode = 0; mode < 4; ++mode) {
         SCOPED_TRACE(::testing::Message()
@@ -2222,6 +2230,61 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterializ
           }
         }
 #endif
+      }
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, InterleavedWideHeadsMatchMaterialized) {
+  for (const auto layout : {AttentionLayout::kRank3, AttentionLayout::kRank4}) {
+    for (const std::int64_t dim : {63, 64, 128, 256}) {
+      for (const std::int64_t q_len : {128, 129}) {
+        for (const std::int64_t q_heads : {2, 4}) {
+          constexpr std::int64_t kv_heads = 2, kv_len = 513;
+          SCOPED_TRACE(::testing::Message() << "layout=" << static_cast<int>(layout) << " dim="
+                                            << dim << " q=" << q_len << " q_heads=" << q_heads);
+          AttentionDescriptor descriptor;
+          descriptor.q_num_heads = q_heads;
+          descriptor.kv_num_heads = kv_heads;
+          const auto shape = [&](std::int64_t heads, std::int64_t rows) {
+            return layout == AttentionLayout::kRank3
+                       ? std::vector<std::int64_t>{1, rows, heads * dim}
+                       : std::vector<std::int64_t>{1, heads, rows, dim};
+          };
+          const AttentionPlan plan(descriptor, layout, shape(q_heads, q_len),
+                                   shape(kv_heads, kv_len), shape(kv_heads, kv_len), {},
+                                   AttentionMaskKind::kNone);
+          const auto q16 = half_precision::ToFloat16(RandomTensor(q_heads * q_len * dim, 1991));
+          const auto k16 = half_precision::ToFloat16(RandomTensor(kv_heads * kv_len * dim, 1992));
+          const auto v16 = half_precision::ToFloat16(RandomTensor(kv_heads * kv_len * dim, 1993));
+          const auto q = half_precision::FromFloat16(q16);
+          const auto k = half_precision::FromFloat16(k16);
+          const auto v = half_precision::FromFloat16(v16);
+          std::vector<float> expected(q.size()), actual(q.size());
+          std::vector<std::uint16_t> actual16(q.size());
+          ml_cpu_compute::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                              nullptr, expected.data());
+          InlineExecutor executor;
+          ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+          ml_cpu_compute::AttentionExecutionInfo info;
+          {
+            ml_cpu_compute::ExecutionExecutorScope scope(&view);
+            ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr,
+                                             actual.data(), nullptr, nullptr, nullptr, &info);
+            EXPECT_LE(info.query_tile, 128u);
+            EXPECT_EQ(info.kv_tile, 512u);
+            EXPECT_LE(info.output_tile_elements, 128u * dim);
+            ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                             actual16.data(), nullptr, nullptr, nullptr, &info);
+          }
+          EXPECT_FALSE(executor.nested);
+          EXPECT_LE(info.query_tile, 128u);
+          EXPECT_EQ(info.kv_tile, 512u);
+          EXPECT_LE(info.output_tile_elements, 128u * dim);
+          EXPECT_EQ(info.conversion_kv_tile, 512u);
+          ExpectClose(actual, expected, 2e-5f);
+          ExpectClose(half_precision::FromFloat16(actual16), expected, 1e-3f);
+        }
       }
     }
   }

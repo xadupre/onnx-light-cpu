@@ -76,6 +76,7 @@ def test_temporary_memory_matches_single_key_and_streaming_dispatch():
     assert estimate_temporary_memory(single_key, feeds, workers=4) == {
         "peak_temporary_bytes": 0,
         "peak_score_tile_bytes": 0,
+        "peak_shared_kv_bytes": 0,
         "score_block": {"Br": 0, "Bc": 0},
         "memory_gate_passed": True,
     }
@@ -121,7 +122,7 @@ def test_rank3_packing_memory_is_tile_bounded_for_all_query_lengths():
             "V": SimpleNamespace(shape=(2, 128, 2 * 64), size=2 * 128 * 2 * 64),
         }
         for workers in (1, 4):
-            query_block = min(q_length, 128)
+            query_block = min(q_length, 96 if q_length == 129 else 128)
             tile_bytes = workers * (
                 query_block * 128 * 4 + query_block * 64 * 8 + query_block * 9
             )
@@ -131,7 +132,7 @@ def test_rank3_packing_memory_is_tile_bounded_for_all_query_lengths():
             assert memory["memory_gate_passed"]
 
 
-def test_half_conversion_memory_is_independent_of_batch_and_head_counts():
+def test_half_worker_conversion_memory_is_independent_of_batch_and_head_counts():
     for layout in ("rank3", "rank4"):
         for q_length in (1, 8, 128, 129, 1024):
             case = parse_case_name(
@@ -157,26 +158,31 @@ def test_half_conversion_memory_is_independent_of_batch_and_head_counts():
                     for name, (b, heads, length, dimension) in shapes.items()
                 }
                 memories.append(estimate_temporary_memory(case, feeds, workers=2))
-            assert memories[0] == memories[1]
+            assert (
+                memories[0]["peak_temporary_bytes"] - memories[0]["peak_shared_kv_bytes"]
+                == memories[1]["peak_temporary_bytes"] - memories[1]["peak_shared_kv_bytes"]
+            )
             if q_length < 16:
-                conversion_block = 256 if q_length == 1 else 257
                 assert (
                     memories[0]["peak_temporary_bytes"]
-                    == 2 * (256 + 63 + 31 + conversion_block * (63 + 31)) * 4
+                    == 2 * (257 + 63 + 31 + 257 * (63 + 31)) * 4
                 )
+            else:
+                for memory, kv_rows in zip(memories, (2 * 257, 3 * 4 * 257), strict=True):
+                    assert memory["peak_shared_kv_bytes"] == kv_rows * (63 * 2 + 31 * 4)
             assert memories[0]["memory_gate_passed"]
 
 
 def test_streaming_conversion_reuse_stops_at_four_score_blocks():
-    for dimension, block in ((64, 256), (256, 128)):
+    for dimension, block in ((64, 512), (256, 512)):
         for kv_length in (block * 4, block * 4 + 1):
             case = parse_case_name(
-                f"test_cpu_attention_opset23_rank4_mha_q8_kv{kv_length}_hd{dimension}"
+                f"test_cpu_attention_opset23_rank4_mha_q2_kv{kv_length}_hd{dimension}"
                 "_none_stateless_float16_benchmark"
             )
             feeds = {
                 name: SimpleNamespace(shape=(1, 12, length, dimension))
-                for name, length in (("Q", 8), ("K", kv_length), ("V", kv_length))
+                for name, length in (("Q", 2), ("K", kv_length), ("V", kv_length))
             }
             conversion_block = kv_length if kv_length <= 4 * block else block
             memory = estimate_temporary_memory(case, feeds, workers=1)
@@ -184,6 +190,65 @@ def test_streaming_conversion_reuse_stops_at_four_score_blocks():
                 memory["peak_temporary_bytes"]
                 == (block + 2 * dimension + conversion_block * 2 * dimension) * 4
             )
+
+
+def test_wide_tail_score_tiles_use_current_query_and_kv_bounds():
+    for layout in ("rank3", "rank4"):
+        for dimension in (63, 64, 128, 256):
+            for q_length in (128, 129):
+                for kv_length in (128, 257, 513):
+                    case = parse_case_name(
+                        f"test_cpu_attention_opset23_{layout}_mha_q{q_length}"
+                        f"_kv{kv_length}_hd{dimension}_none_stateless_float16_benchmark"
+                    )
+                    feeds = {
+                        name: SimpleNamespace(
+                            shape=(
+                                (1, 2, length, dimension)
+                                if layout == "rank4"
+                                else (1, length, 2 * dimension)
+                            )
+                        )
+                        for name, length in (("Q", q_length), ("K", kv_length), ("V", kv_length))
+                    }
+                    query_block = 128 if q_length == 128 else 96
+                    kv_block = min(kv_length, 512)
+                    memory = estimate_temporary_memory(case, feeds, workers=2)
+                    assert memory["score_block"] == {"Br": query_block, "Bc": kv_block}
+                    assert memory["peak_score_tile_bytes"] == 2 * query_block * kv_block * 4
+                    assert memory["peak_shared_kv_bytes"] == 0
+                    assert memory["memory_gate_passed"]
+
+
+def test_shared_half_kv_scratch_is_invocation_local_and_capped():
+    for kv_length in (512, 513):
+        case = parse_case_name(
+            f"test_cpu_attention_opset23_rank4_gqa_q129_kv{kv_length}_hd256"
+            "_none_stateless_float16_benchmark"
+        )
+        feeds = {
+            "Q": SimpleNamespace(shape=(1, 4, 129, 256)),
+            "K": SimpleNamespace(shape=(1, 2, kv_length, 256)),
+            "V": SimpleNamespace(shape=(1, 2, kv_length, 256)),
+        }
+        for workers in (1, 4):
+            memory = estimate_temporary_memory(case, feeds, workers)
+            assert memory["peak_shared_kv_bytes"] == (256 * 1024 * 6 if kv_length == 512 else 0)
+
+
+def test_grouped_rank3_causal_score_bound_includes_widened_tiles():
+    case = parse_case_name(
+        "test_cpu_attention_opset23_rank3_gqa_q64_kv64_hd64_causal_stateless_float16_benchmark"
+    )
+    feeds = {
+        "Q": SimpleNamespace(shape=(1, 64, 4 * 64)),
+        "K": SimpleNamespace(shape=(1, 64, 2 * 64)),
+        "V": SimpleNamespace(shape=(1, 64, 2 * 64)),
+    }
+    memory = estimate_temporary_memory(case, feeds, workers=2)
+    assert memory["score_block"] == {"Br": 32, "Bc": 64}
+    assert memory["peak_score_tile_bytes"] == 2 * 32 * 64 * 4
+    assert memory["memory_gate_passed"]
 
 
 def test_summary_applies_per_type_parity_and_memory_gates():

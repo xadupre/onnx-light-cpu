@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-KV_BLOCK = 256
+KV_BLOCK = 512
 QUERY_BLOCK = 128
 DTYPES = ("float32", "float16", "bfloat16")
 _CASE_PATTERN = re.compile(
@@ -49,7 +49,7 @@ def parse_case_name(name: str) -> dict[str, Any]:
 def estimate_temporary_memory(
     case: Mapping[str, Any], feeds: Mapping[str, Any], workers: int
 ) -> dict[str, Any]:
-    """Bound active attention scratch, excluding allocator capacity and GEMM panels."""
+    """Bound worker and shared attention scratch, excluding capacity and GEMM panels."""
     q_shape = feeds["Q"].shape
     q_heads = (
         int(q_shape[1]) if case["layout"] == "rank4" else int(q_shape[2]) // case["head_dim"]
@@ -65,6 +65,7 @@ def estimate_temporary_memory(
         return {
             "peak_temporary_bytes": 0,
             "peak_score_tile_bytes": 0,
+            "peak_shared_kv_bytes": 0,
             "score_block": {"Br": 0, "Bc": 0},
             "memory_gate_passed": True,
         }
@@ -74,10 +75,21 @@ def estimate_temporary_memory(
         and case["cache"] != "internal_cache"
         and case["q_length"] >= 16
     )
-    kv_block_limit = 128 if case["head_dim"] + v_head_dim > 256 else KV_BLOCK
+    shared_kv_bytes = 0
     if tiled:
-        query_block = min(case["q_length"], 16 if case["mask"] == "causal" else QUERY_BLOCK)
-        kv_block = min(case["kv_length"], kv_block_limit)
+        query_limit = 96 if QUERY_BLOCK < case["q_length"] < 2 * QUERY_BLOCK else QUERY_BLOCK
+        query_block = min(case["q_length"], 16 if case["mask"] == "causal" else query_limit)
+        # AVX2 grouped causal tiles can widen to 32 rows after their finite-value check.
+        if (
+            case["layout"] == "rank3"
+            and q_heads > kv_heads
+            and case["mask"] == "causal"
+            and case["q_length"] <= 64
+            and case["kv_length"] <= 64
+            and case["head_dim"] == v_head_dim == 64
+        ):
+            query_block = min(case["q_length"], 32)
+        kv_block = min(case["kv_length"], KV_BLOCK)
         score_tile_bytes = workers * query_block * kv_block * 4
         worker_scratch_bytes = workers * (
             query_block * kv_block * 4 + query_block * v_head_dim * 8 + query_block * 9
@@ -93,9 +105,15 @@ def estimate_temporary_memory(
             worker_scratch_bytes += workers * kv_block * v_head_dim * 4
         if case["dtype"] == "float16" or (rank3 and q_heads > 1):
             worker_scratch_bytes += workers * query_block * v_head_dim * 4
+        if case["dtype"] == "float16" and q_heads > kv_heads:
+            kv_rows = int(q_shape[0]) * kv_heads * case["kv_length"]
+            k_elements = kv_rows * case["head_dim"]
+            v_elements = kv_rows * v_head_dim
+            if max(k_elements, v_elements) <= 256 * 1024:
+                shared_kv_bytes = k_elements * 2 + v_elements * 4
     else:
         query_block = 1
-        kv_block = min(case["kv_length"], kv_block_limit)
+        kv_block = min(case["kv_length"], KV_BLOCK)
         score_tile_bytes = workers * kv_block * 4
         worker_scratch_bytes = workers * (kv_block + v_head_dim) * 4
         if case["dtype"] != "float32":
@@ -111,8 +129,9 @@ def estimate_temporary_memory(
             )
 
     return {
-        "peak_temporary_bytes": worker_scratch_bytes,
+        "peak_temporary_bytes": worker_scratch_bytes + shared_kv_bytes,
         "peak_score_tile_bytes": score_tile_bytes,
+        "peak_shared_kv_bytes": shared_kv_bytes,
         "score_block": {"Br": query_block, "Bc": kv_block},
         "memory_gate_passed": score_tile_bytes <= workers * QUERY_BLOCK * KV_BLOCK * 4,
     }
@@ -412,7 +431,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_speedup": ort_p90 / cpu_p90,
                 **temporary_memory,
                 "temporary_memory_accounting": (
-                    "active worker-local attention scratch upper bound; "
+                    "active worker-local and invocation-shared attention scratch upper bound; "
                     "excludes allocator capacity and internal GEMM panels"
                 ),
                 "worker_count": workers,
