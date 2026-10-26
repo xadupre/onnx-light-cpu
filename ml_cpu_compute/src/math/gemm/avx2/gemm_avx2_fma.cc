@@ -166,7 +166,8 @@ void GemmSkinnyM1Range(std::size_t N, std::size_t K, float alpha, const Source *
                        float beta, const float *C, float *Y, std::size_t begin, std::size_t end) {
   // Walking all K rows for each narrow column tile repeatedly evicts B's
   // translations. Reuse a bounded row slab across the worker's column range.
-  constexpr std::size_t kDepthBlock = 32;
+  // Four FP32 rows limit concurrent strided streams; retain the FP16 slab.
+  constexpr std::size_t kDepthBlock = std::is_same_v<Source, float> ? 4 : 32;
   for (std::size_t k0 = 0; k0 < K; k0 += kDepthBlock) {
     const std::size_t kend = k0 + std::min(kDepthBlock, K - k0);
     std::size_t n = begin;
@@ -468,12 +469,14 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
   const bool beta_is_one = beta == 1.0f;
   std::size_t n = 0;
   for (; n + 16 <= nb; n += 16) {
-    __m256 acc0[MR];
-    __m256 acc1[MR];
-    for (std::size_t r = 0; r < MR; ++r) {
-      acc0[r] = _mm256_setzero_ps();
-      acc1[r] = _mm256_setzero_ps();
-    }
+    // Named accumulators keep GCC from storing the arrays to the stack on
+    // every unrolled K iteration.
+    __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
+    __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
+    __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
+    __m256 c30 = _mm256_setzero_ps(), c31 = _mm256_setzero_ps();
+    __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
+    __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
     const auto accumulate_k = [&](std::size_t k) {
       const float *Brow = Bmat + k * N + n0 + n;
       const __m256 vb0 = _mm256_loadu_ps(Brow);
@@ -481,10 +484,26 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
-      for (std::size_t r = 0; r < MR; ++r) {
+      const auto row = [&](std::size_t r, __m256 &lo, __m256 &hi) {
         const __m256 va = _mm256_set1_ps(Apack[r * K + k]);
-        acc0[r] = _mm256_fmadd_ps(va, vb0, acc0[r]);
-        acc1[r] = _mm256_fmadd_ps(va, vb1, acc1[r]);
+        lo = _mm256_fmadd_ps(va, vb0, lo);
+        hi = _mm256_fmadd_ps(va, vb1, hi);
+      };
+      row(0, c00, c01);
+      if constexpr (MR >= 2) {
+        row(1, c10, c11);
+      }
+      if constexpr (MR >= 3) {
+        row(2, c20, c21);
+      }
+      if constexpr (MR >= 4) {
+        row(3, c30, c31);
+      }
+      if constexpr (MR >= 5) {
+        row(4, c40, c41);
+      }
+      if constexpr (MR >= 6) {
+        row(5, c50, c51);
       }
     };
     std::size_t k = 0;
@@ -497,10 +516,10 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    for (std::size_t r = 0; r < MR; ++r) {
+    const auto store_row = [&](std::size_t r, __m256 lo, __m256 hi) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256 res0 = alpha_is_one ? acc0[r] : _mm256_mul_ps(valpha, acc0[r]);
-      __m256 res1 = alpha_is_one ? acc1[r] : _mm256_mul_ps(valpha, acc1[r]);
+      __m256 res0 = alpha_is_one ? lo : _mm256_mul_ps(valpha, lo);
+      __m256 res1 = alpha_is_one ? hi : _mm256_mul_ps(valpha, hi);
       if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
         const __m256 vc0 = mode == GemmAccumMode::kInitColumnBias
                                ? _mm256_set1_ps(Crow_base[r * Cstride])
@@ -516,6 +535,22 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
       }
       _mm256_storeu_ps(Yrow, res0);
       _mm256_storeu_ps(Yrow + 8, res1);
+    };
+    store_row(0, c00, c01);
+    if constexpr (MR >= 2) {
+      store_row(1, c10, c11);
+    }
+    if constexpr (MR >= 3) {
+      store_row(2, c20, c21);
+    }
+    if constexpr (MR >= 4) {
+      store_row(3, c30, c31);
+    }
+    if constexpr (MR >= 5) {
+      store_row(4, c40, c41);
+    }
+    if constexpr (MR >= 6) {
+      store_row(5, c50, c51);
     }
   }
   for (; n + 8 <= nb; n += 8) {

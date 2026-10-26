@@ -816,8 +816,8 @@ TEST(GemmPlan, VectorizedSkinnyMMatchesReference) {
 }
 
 TEST(GemmPlan, SingleRowColumnRangesRespectExecutorLimits) {
-  for (const std::size_t n : {64, 4097}) {
-    for (const std::int64_t threads : {1, 4}) {
+  for (const std::size_t n : {64, 1023, 1024, 1025, 4097}) {
+    for (const std::int64_t threads : {1, 2, 4, 16}) {
       InlineExecutor executor;
       ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
       ml_cpu_compute::ExecutionExecutorScope scope(&view);
