@@ -499,3 +499,231 @@ rows, and runtime scheduling without nesting. The unsafe-value regression
 checks NaN, both infinities, and extreme FP32 values, then changes V back to
 finite values to verify invocation-local selection. No AVX-512 or scalar
 performance claim is made.
+
+Issue 1029: rank-three and wide-head FP16 attribution
+---------------------------------------------------
+
+This is a **new 2026-10-26 investigation**, not a rerun on the 2026-10-24
+machine. No experimental kernel change is retained: the measurements below
+do not justify changing dispatch. The deliverable is attribution, corrected
+benchmark scratch accounting, and additional differential coverage. Dense
+rank-four FP32 optimization remains outside this investigation.
+
+Provenance and timing protocol
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Before measuring, ``git fetch origin`` and a fast-forward check against
+``origin/copilot/investigate-fp16-attention-costs`` confirmed the target was
+current at ``50898307090732c7fa15461f17d1056527e831e0``. Its code parent and
+remote main were ``233c60976a6e0de7a183abb48631106fdfd4a186`` (the newer GEMM
+register-spill changes). The final measured commit is
+``95c0059b483361fd40adac340bd7ca0dd3b6087a``. Its production computation sources
+are unchanged from that baseline.
+
+The host was AMD EPYC 9V74, four visible logical CPUs, Linux
+6.17.0-1022-azure, GCC 13.3.0, CMake 3.31.6, Release (``-O3 -DNDEBUG``),
+and an AVX2 ceiling despite host AVX-512 support. Python was 3.13.16,
+NumPy 2.4.3, ml-dtypes 0.5.4, and ORT 1.31.0. The dependency was the
+onnx-light 0.2.0 CPython 3.13 manylinux x86-64 release wheel, tag commit
+``6400f0f812b13bc32469e405bd2f762ba3cba7f0``. Its included headers and exact
+loaded core/proto/thread libraries were used, with
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF``. The extension was installed only into
+this source tree and imported through ``PYTHONPATH``; onnx-light-cpu was not
+installed as a distribution.
+
+Every timing campaign used CPU-0 affinity, one effective thread per backend,
+20 warmups, up to 100 alternating CPU/ORT samples, and a one-second cap per
+candidate. ORT was sequential with one inter-op thread and both spinning
+options disabled. Compilation, profiling and timed campaigns did not overlap.
+Models, feeds, masks and tolerances were unchanged. Each case passed the
+runner's ORT comparison and recorded ``Attention.tiled``; rank-three FP32
+recorded tile packing, and rank-four FP16 recorded tile conversion.
+
+Rebuild and reproduce the eight scoped cases with:
+
+.. code-block:: bash
+
+   REPO=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+   git -C "$REPO" fetch origin
+   git -C "$REPO" merge --ff-only origin/copilot/investigate-fp16-attention-costs
+   CMAKE_BUILD_PARALLEL_LEVEL=48 \
+     CMAKE_ARGS='-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF' \
+     python "$REPO/setup.py" build_ext --inplace --onnx-light-source
+   python "$REPO/tools/benchmark_attention_parity.py" \
+     --threads 1 --cpus 0 --warmup 20 --repeat 100 --max-repeat-time 1 \
+     --case '^test_cpu_attention_opset23_rank3_mha_q(128|129)_kv(128|257)_hd64_none_stateless_float32_benchmark$' \
+     --case '^test_cpu_attention_opset23_rank4_mha_q(16|128|129)_kv(128|257)_hd(63|64|128|256)_none_stateless_float16_benchmark$' \
+     --output /tmp/attention-1029.json
+
+End-to-end results
+~~~~~~~~~~~~~~~~~~
+
+Median milliseconds; restore case names with ``test_cpu_attention_`` and
+``_benchmark``. ``Repeat`` is baseline-equivalent dispatch after the initial
+experiments, with experimental row-copy gates disabled. ``After`` is the
+committed result with **all** experimental computation changes removed;
+``ORT`` is its alternating comparison. Neither diagnostic phase timings nor
+test-oracle work is included in this table.
+
+.. csv-table::
+   :header: "Case", "Before", "Repeat", "After", "ORT"
+   :widths: 64 9 9 9 9
+
+   "opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32", "0.6931", "0.6873", "0.6906", "0.5591"
+   "opset23_rank3_mha_q129_kv257_hd64_none_stateless_float32", "1.4434", "1.4506", "1.4520", "1.1315"
+   "opset23_rank4_mha_q128_kv128_hd64_none_stateless_float16", "0.6663", "0.6746", "0.6781", "0.6558"
+   "opset23_rank4_mha_q16_kv128_hd64_none_stateless_float16", "0.1252", "0.1272", "0.1268", "0.1283"
+   "opset23_rank4_mha_q16_kv257_hd63_none_stateless_float16", "0.2513", "0.2489", "0.2527", "0.2463"
+   "opset23_rank4_mha_q128_kv128_hd128_none_stateless_float16", "1.1765", "1.1763", "1.1878", "1.1485"
+   "opset23_rank4_mha_q128_kv128_hd256_none_stateless_float16", "2.1756", "2.1848", "2.1795", "2.1251"
+   "opset23_rank4_mha_q129_kv257_hd256_none_stateless_float16", "4.4656", "4.6860", "4.4582", "4.4521"
+
+The rank-three gaps reproduce (CPU/ORT about 1.24x and 1.28x). The previously
+recorded large FP16 gaps **do not reproduce at their old magnitude** on this
+newer code and different processor: full wide-head FP16 is about 1.03x ORT,
+and the tail is near parity. Hardware and code changes are confounded; these
+numbers cannot establish which caused the difference from the old campaign.
+No speedup is claimed for any scoped row. Dense FP16 hd64 and hd128 are
+respectively 1.8% and 1.0% slower in the final sample; the wide tail's repeated
+baseline varies by 4.9%. These differences are reported, not hidden as wins
+or attributed to an unchanged computation path.
+
+Focused kernel-only phase attribution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``perf stat -e task-clock true`` was denied (``perf_event_paranoid=4``).
+Instead, a temporary diagnostic build timed regions inside
+``ComputeAttentionTiled`` using ``std::chrono::steady_clock``. It ran the
+registered cases separately with the same one-thread settings, without
+running differential-test oracles. The following are arithmetic means of
+the last 100 invocation-local phase totals, in milliseconds, **not**
+uninstrumented medians or hardware samples.
+
+To reproduce the diagnostic boundaries, initialize a six-element duration
+array and a timestamp after the empty-input return. A checkpoint adds the
+elapsed time since the preceding checkpoint to one bucket:
+
+.. code-block:: cpp
+
+   std::array<double, 6> phases{};
+   auto tick = std::chrono::steady_clock::now();
+   const auto mark = [&](std::size_t phase) {
+     const auto now = std::chrono::steady_clock::now();
+     phases[phase] += std::chrono::duration<double>(now - tick).count();
+     tick = now;
+   };
+
+Place checkpoints around the existing operations, without substituting their
+results: bucket 1 wraps Q and K ``PackRows`` calls; bucket 2 ends after
+``AttentionQkGemm``; bucket 3 ends after V packing/conversion; bucket 4 ends
+after the softmax row loop; bucket 5 ends after each value product and, for
+single-KV-block tasks, normalization and output scatter/conversion, before
+every exit from that block. Bucket 0 collects setup before packing and the
+remaining work after execution. Print the six totals only after the final
+checkpoint, outside the measured regions. Use one anchored case per process,
+discard warmup calls, and remove this instrumentation before timing A/B
+variants. This diagnostic is intentionally serial, not thread-safe profiling
+infrastructure. Clock/checkpoint overhead remains in the totals.
+
+In the table, ``Pack`` combines Q/K packing (bucket 1) and **FP32** V packing
+(bucket 3); ``V convert`` is bucket 3 for FP16. ``Value/output`` includes the
+final normalization and scatter/narrowing, so it must not be interpreted as
+pure GEMM time. QK includes its own internal GEMM packing and half conversion;
+those internal components are not individually resolved.
+
+.. csv-table::
+   :header: "Layout/type, Q/KV/D", "Setup", "Pack", "QK", "V convert", "Softmax", "Value/output"
+
+   "rank3 FP32, 128/128/64", "0.0031", "0.0379", "0.2695", "0", "0.1089", "0.2590"
+   "rank4 FP32 control, 128/128/64", "0.0034", "0.0011", "0.2741", "0", "0.1160", "0.2490"
+   "rank3 FP32, 129/257/64", "0.0043", "0.1142", "0.6104", "0", "0.2213", "0.4772"
+   "rank4 FP16, 128/128/128", "0.0033", "0.0007", "0.5218", "0.0145", "0.1221", "0.5351"
+   "rank4 FP16, 128/128/256", "0.0038", "0.0008", "1.0178", "0.0299", "0.1160", "1.0420"
+   "rank4 FP16, 129/257/256", "0.0056", "0.0015", "2.2136", "0.1152", "0.2245", "1.9589"
+   "rank4 FP16, 16/257/63", "0.0029", "0.0009", "0.1151", "0.0139", "0.0275", "0.0797"
+
+Explicit packing is approximately 5.6%/8.0% of rank-three kernel time, not
+the entire end-to-end gap. Wide-head FP16 is dominated by QK and value/output;
+explicit V conversion is only about 1--3%. This is narrower attribution than
+the previous mixed oracle/kernel profile, but does not claim to separate
+arithmetic from internal GEMM panel costs.
+
+Controlled dispatch experiments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Each variant was rebuilt and installed into the same tree and measured
+without diagnostic instrumentation, changing only the described decision:
+
+* **Direct wide value:** remove ``rows < 128 || dimension <= 64`` from
+  ``AttentionValueGemm``. Full wide-head tiles then use the existing six-row
+  AVX2/FMA microkernel without general-GEMM repacking.
+* **QK preconvert:** only for FP16 in ``AttentionQkGemm``, convert contiguous
+  Q/K tiles into tile-sized FP32 buffers with ``ConvertFloat16ToFloat32``,
+  then call the same transposed ``GemmFloat32`` used for FP32. Allocation,
+  conversion and GEMM remain inside the invocation; storage stays FP16 and
+  accumulation stays FP32. This is an experiment, not cached preprocessing.
+* **Row copy:** replace strided FP32 row copies with unaligned eight-float
+  AVX2 loads/stores and a scalar tail. Test both packing plus single-block
+  output scatter, and packing alone. Contiguous rows still bypass packing.
+* **128+1 tail:** replace ``balanced_tail_block`` with 128 in
+  ``AttentionQueryBlock``, instead of the existing q129 split of 96+33.
+* **Smaller tiles:** use 64 for ordinary unmasked tiles and 72 for
+  ``128 < q_length < 256`` (q129 becomes 72+57), preserving causal tile rules.
+
+The table uses the same five target shapes as above, in milliseconds.
+Controls whose dispatch was not changed are still shown.
+
+.. csv-table::
+   :header: "Variant", "rank3 q128 D64", "rank3 q129 D64", "FP16 q128 D128", "FP16 q128 D256", "FP16 q129 D256"
+
+   "Direct wide value", "0.6999", "1.4585", "1.1795", "2.1675", "4.4625"
+   "QK preconvert", "0.6780", "1.4374", "1.2099", "2.2310", "4.8344"
+   "Row copy + scatter", "0.6799", "1.4100", "1.1832", "2.1917", "4.7080"
+   "Packing only", "0.6721", "1.4220", "1.1607", "2.2330", "4.6222"
+   "Packing only repeat", "0.6855", "1.4303", "1.1874", "2.2954", "4.4797"
+   "128+1 tail", "-", "1.5101", "-", "-", "5.7832"
+   "Smaller tiles", "0.7354", "1.4493", "1.2142", "2.3202", "4.5688"
+
+Direct wide products establish no benefit. Preconversion adds work rather
+than eliminating the product bottleneck. The 128+1 split clearly regresses
+both tails; smaller tiles regress q128 and do not establish a consistent
+tail improvement. Packing has a small possible benefit, but q128 overlaps
+baseline variation and even unchanged FP16 controls drift substantially.
+It is deferred rather than retaining another dispatch path for a marginal
+result. The existing 96+33 query split and general wide value GEMM remain.
+
+Scratch accounting and validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The refreshed kernel's KV tile limit is **512**, not the older 128/256
+assumed by the Python estimator. KV257 is now one attention tile, though
+its QK column/value-product reduction dimensions still exercise GEMM tails.
+The new KV513 differential cases exercise a real attention KV-tile tail.
+The estimator now accounts for the q129 query tile of 96, the 512-key bound,
+the possible 32-row grouped causal tile, and capped invocation-local shared
+FP16 K/V storage. Shared bytes are reported separately and included in the
+total, not multiplied by worker count. For example, one-worker rank-three
+FP32 q129/KV257/D64 reports 329440 temporary bytes, of which 98688 are scores;
+rank-four FP16 q129/KV257/D256 reports 657632 and 98688 respectively.
+These are conservative active-scratch bounds, excluding retained vector
+capacity and internal GEMM panels, not measured allocator high-water marks.
+No production scratch allocation or scheduling was changed.
+
+Validation passed all 92 ``test_attention_plan`` tests and 15 Python
+benchmark tests. Added differential cases cover both layouts and precisions,
+dimensions 63/64/128/256, q128/q129, KV257/KV513, MHA/GQA with interleaved
+multiple KV heads, all existing mask modes including fully masked rows,
+unchanged tolerances, and runtime-owned scheduling without nesting. The
+FP16 oracle uses the materialized FP32 kernel on the same rounded inputs,
+not a reimplementation of attention math.
+
+A final broader campaign completed all 50 currently registered FP32/FP16
+stateless/nonpad cases, including correctness checks; ORT was faster on 26.
+Reproduce it by replacing the two filters above with
+``--large --case '^test_cpu_attention_opset(23|24)_.*_(stateless|nonpad)_float(16|32)_benchmark$'``.
+An attempted still-broader filter including internal tensor caches stopped
+at ORT's unsupported past-key-without-present-output contract; that run
+produced no complete report and is not a win or parity result. The scoped
+gaps remain open performance opportunities, with no scalar or AVX-512
+performance claim and no speculative optimization shipped.
