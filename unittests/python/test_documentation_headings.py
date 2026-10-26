@@ -5,13 +5,14 @@
 """Guard against short section underlines that fail the strict Sphinx build."""
 
 import re
-import unittest
 from pathlib import Path
+
+from onnx_light.ext_test_case import ExtTestCase
 
 _DOCS = Path(__file__).resolve().parents[2] / "docs"
 
 
-class TestDocumentationHeadings(unittest.TestCase):
+class TestDocumentationHeadings(ExtTestCase):
     def test_heading_underlines_cover_titles(self):
         for path in sorted(_DOCS.rglob("*.rst")):
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -26,7 +27,3 @@ class TestDocumentationHeadings(unittest.TestCase):
                 ):
                     with self.subTest(path=str(path.relative_to(_DOCS)), line=index + 1):
                         self.assertGreaterEqual(len(underline), len(title))
-
-
-if __name__ == "__main__":
-    unittest.main()
