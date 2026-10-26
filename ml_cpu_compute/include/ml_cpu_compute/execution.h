@@ -138,7 +138,8 @@ template <typename T> inline constexpr int64_t ExecutionSimdLanes() noexcept {
   return lanes > 0 ? lanes : 1;
 }
 
-inline int64_t ExecutionBlockCount(int64_t total, double cost_per_element = 1.0) {
+// Keep out-of-line copies local to callers compiled with the same ISA flags.
+static inline int64_t ExecutionBlockCount(int64_t total, double cost_per_element = 1.0) {
   if (total <= 0) {
     return 0;
   }

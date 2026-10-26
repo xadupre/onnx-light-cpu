@@ -5,6 +5,7 @@
 #include "ml_cpu_compute/math/rms_normalization.h"
 
 #include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/simd_level.h"
 
 #include <gtest/gtest.h>
 
@@ -165,6 +166,10 @@ TEST(RmsNormalizationKernel, MultipleRowsAreIndependent) {
 using ml_cpu_compute::RmsNormalizationFloat16_F16C;
 
 TEST(RmsNormalizationKernel, Float16F16CDirectPathMatchesReferenceAcrossWidths) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsF16C() || !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+F16C+FMA is unavailable";
+  }
   // Widths crossing the 4-way-unrolled reduction's 8/32-wide boundaries.
   for (std::size_t width : {std::size_t{1}, std::size_t{7}, std::size_t{8}, std::size_t{31},
                             std::size_t{32}, std::size_t{33}, std::size_t{64}, std::size_t{896}}) {
@@ -192,6 +197,10 @@ TEST(RmsNormalizationKernel, Float16F16CDirectPathMatchesReferenceAcrossWidths) 
 }
 
 TEST(RmsNormalizationKernel, Float16F16CPreservesSpecialValues) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsF16C() || !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+F16C+FMA is unavailable";
+  }
   constexpr std::size_t width = 16;
   std::vector<std::uint16_t> input(width);
   std::vector<std::uint16_t> scale(width);

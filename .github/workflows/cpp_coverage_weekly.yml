@@ -42,22 +42,41 @@ jobs:
           fi
 
   cpp-coverage:
-    name: C++ coverage (${{ matrix.os }})
+    name: C++ coverage (${{ matrix.processor }})
     needs: check_recent_commit
     if: needs.check_recent_commit.outputs.should_run == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 90
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        # Measuring coverage on a single architecture only exercises the
-        # kernels compiled for that machine (e.g. AVX2/AVX512 on x86_64),
-        # leaving architecture-specific code such as the ARM NEON kernels
-        # unmeasured and dragging down the reported coverage. Run the job on
-        # both x86_64 and arm64 runners so both code paths are covered.
-        os: ["ubuntu-latest", "ubuntu-24.04-arm"]
+        # Native runners alone miss fallback dispatch and instruction sets not
+        # exposed by their hosts. Emulate those CPUs without forcing unsafe ISA
+        # flags on baseline code. All reports are merged under the cpp flag.
+        include:
+          - processor: x86-native
+            os: ubuntu-latest
+            launcher: ""
+          - processor: arm64-native
+            os: ubuntu-24.04-arm
+            launcher: ""
+          - processor: sse2
+            os: ubuntu-latest
+            launcher: "qemu-x86_64;-cpu;Opteron_G1"
+          - processor: avx
+            os: ubuntu-latest
+            launcher: "qemu-x86_64;-cpu;SandyBridge"
+          - processor: avx2
+            os: ubuntu-latest
+            launcher: "qemu-x86_64;-cpu;Haswell"
+          - processor: avx512
+            os: ubuntu-latest
+            launcher: "sde64;-spr;--"
+          - processor: sve
+            os: ubuntu-24.04-arm
+            launcher: "qemu-aarch64;-cpu;max,sve=on,sve-max-vq=4"
     steps:
       - uses: actions/checkout@v7
 
@@ -71,7 +90,30 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install gcovr
 
+      - name: Install QEMU
+        if: startsWith(matrix.launcher, 'qemu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+
+      - name: Install Intel SDE
+        if: matrix.processor == 'avx512'
+        run: |
+          # QEMU on Ubuntu 24.04 cannot emulate AVX-512. Sapphire Rapids in
+          # SDE also exposes the BF16, FP16, VNNI, and AMX extensions.
+          curl --fail --location --retry 3 \
+            https://downloadmirror.intel.com/915934/sde-external-10.8.0-2026-03-15-lin.tar.xz \
+            --output "${RUNNER_TEMP}/sde.tar.xz"
+          echo "50b320cd226acef7a491f5b321fc1be3c3c7984f9e27a456e64894b5b0979dd3  ${RUNNER_TEMP}/sde.tar.xz" | sha256sum --check
+          mkdir -p "${RUNNER_TEMP}/sde"
+          tar -xf "${RUNNER_TEMP}/sde.tar.xz" -C "${RUNNER_TEMP}/sde" --strip-components=1
+          echo "${RUNNER_TEMP}/sde" >> "$GITHUB_PATH"
+
       - name: Configure with coverage
+        env:
+          # Requires CMake >= 3.29 (provided by the Ubuntu runners). This also
+          # launches GoogleTest discovery under the selected processor.
+          CMAKE_TEST_LAUNCHER: ${{ matrix.launcher }}
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
@@ -81,10 +123,10 @@ jobs:
             -DONNX_LIGHT_CPU_ENABLE_COVERAGE=ON
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel $(nproc)
 
       - name: Run C++ unit tests
-        run: ctest --test-dir build --output-on-failure --timeout 240
+        run: ctest --test-dir build --output-on-failure --timeout 600 --parallel $(nproc)
 
       - name: Generate coverage report
         run: |
@@ -93,6 +135,8 @@ jobs:
           # data is always discovered regardless of the working directory.
           gcovr --root . build \
             --filter 'onnx_light_cpu/' \
+            --filter 'ml_cpu_compute/src/' \
+            --filter 'ml_cpu_compute/include/' \
             --gcov-ignore-parse-errors \
             --xml-pretty --output coverage.xml \
             --html-details coverage-html/index.html \
@@ -113,7 +157,7 @@ jobs:
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
         with:
-          name: cpp-coverage-${{ matrix.os }}
+          name: cpp-coverage-${{ matrix.processor }}
           path: |
             coverage.xml
             coverage-html
@@ -123,6 +167,6 @@ jobs:
         with:
           files: coverage.xml
           flags: cpp
-          name: cpp-${{ matrix.os }}
+          name: cpp-${{ matrix.processor }}
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
