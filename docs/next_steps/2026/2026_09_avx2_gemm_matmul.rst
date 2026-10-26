@@ -177,10 +177,13 @@ Environment and protocol
 * Shared Linux VM: four logical processors, two physical cores; process affinity
   restricted to logical CPUs ``0,2`` (one sibling per core) for both backends.
   This is still a shared runner, not dedicated hardware.
-* onnx-light-cpu 0.2.0: baseline production sources
+* Original parity campaign: onnx-light-cpu 0.2.0 baseline production sources
   ``86c8762be5bb0c01459c1998f5daf8dc70e268fa``; optimized sources
-  ``83952ac5da670ddeb7431565f3c5e87f5d967d90``. Both were compiled locally
-  with GCC 13.3.0, CMake Release, and
+  ``83952ac5da670ddeb7431565f3c5e87f5d967d90``. These Python/ORT timings
+  predate the final paired-row implementation
+  (``232b1ca5f1050b144d40129770d2b499d42b5c97``), so their skinny-N entries
+  are not evidence for the final kernel. Both builds used GCC 13.3.0, CMake
+  Release, and
   ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``. Runtime detection returned ``3``
   (AVX2); the throughput driver reported AMD Zen, FMA, and six register rows.
   The baseline was rebuilt in the same build tree after verifying its two
@@ -247,7 +250,7 @@ One-thread results (milliseconds)
 
    * - Case suffix (``test_cpu_matmul_…_benchmark``)
      - Before, runs 1 / 2
-     - After, runs 1 / 2
+     - After (83952ac5), runs 1 / 2
      - ORT median range
    * - ``square_128_float32``
      - 0.070552 / 0.064320
@@ -290,7 +293,7 @@ Two-thread results (milliseconds)
 
    * - Case suffix
      - Before, runs 1 / 2
-     - After, runs 1 / 2
+     - After (83952ac5), runs 1 / 2
      - ORT median range
    * - ``square_128_float32``
      - 0.038442 / 0.036689
@@ -325,6 +328,43 @@ Two-thread results (milliseconds)
      - 1.050207 / 1.046921
      - 1.027666–1.233049
 
+Final paired-row skinny-N follow-up
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The original Python parity runner could not be repeated in this environment:
+the onnx-light runtime is not installed or available from its configured
+package index. The standalone C++ ``gemm_throughput`` driver was therefore
+used to measure the final kernel in isolation, not as an end-to-end or ORT
+comparison. Baseline sources were ``86c8762be5bb0c01459c1998f5daf8dc70e268fa``;
+the final paired-row sources were ``232b1ca5f1050b144d40129770d2b499d42b5c97``.
+Both were built with GCC 13.3.0, CMake Release, and the AVX2 ceiling. This
+shared AMD EPYC 9V74 VM has four logical processors and two physical cores;
+the processes were restricted to CPUs ``0,2``. The driver reported AVX2,
+FMA, AMD Zen, and six register rows.
+
+For each revision and thread count, two fresh processes ran
+``gemm_throughput <threads> skinny_n fp32``. Each case uses three warm-ups and
+51 measured calls; the table shows the two per-process median latencies for
+``M=1024, N=1, K=1024``. The substring filter also runs the dashboard skinny-N
+cases before the named ``skinny_n`` result. Speedup is the mean baseline
+latency divided by the mean final latency.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Threads
+     - Baseline, runs 1 / 2 (µs)
+     - Final ``232b1ca5``, runs 1 / 2 (µs)
+     - Speedup
+   * - 1
+     - 47.441 / 47.341
+     - 51.187 / 51.107
+     - 0.93x
+   * - 2
+     - 51.367 / 50.426
+     - 54.772 / 54.281
+     - 0.93x
+
 Findings and validation
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -339,21 +379,26 @@ Skinny-M improved by limiting FP32's row slab to four rows and increasing
 contiguous column slices up to 1024 columns while retaining enough tasks for
 the executor. The FP16 slab remains unchanged. A wider-column-only experiment
 was not sufficient; it was not retained without the shallow-slab improvement.
-Skinny-N now shares each B vector across four A rows, with eight independent
-FMA chains and the original one-row loop handling remaining rows.
+The original optimized skinny-N kernel shared each B vector across four A rows
+with two reduction chains. The final paired-row implementation shares B across
+two A rows with four independent FMA chains; the original one-row loop handles
+remaining rows.
 
 Relative to the mean of the two baseline medians, square-case improvements
-range from 1.21x to 1.45x, skinny-M from 1.48x to 2.40x, and skinny-N from
-1.41x to 1.74x. Remaining ORT advantages include the larger squares,
-two-thread FP16 128-square, and two-thread skinny-M. Near-parity results,
-especially skinny-N and one-thread FP16 128-square, are not final parity
-decisions on this shared VM. The original historical latencies were not
-reproduced exactly, and their thread/build provenance remains unknown.
+range from 1.21x to 1.45x, and skinny-M from 1.48x to 2.40x in the original
+parity campaign. Its 1.41–1.74x skinny-N result applies only to revision
+``83952ac5`` and does not validate the final implementation. The follow-up
+isolated C++ measurements above show 0.93x at both thread counts on a different
+shared VM; they are not comparable to the original Python/ORT campaign and do
+not establish end-to-end parity. Remaining ORT advantages in the original
+campaign include the larger squares, two-thread FP16 128-square, and
+two-thread skinny-M. The original historical latencies were not reproduced
+exactly, and their thread/build provenance remains unknown.
 
 The AVX2 build passed 99 GEMM kernel tests, 49 plan tests, and seven MatMul
 integration tests; unsupported AVX-512/AMX cases were skipped. Added coverage
 includes all FP32 microtile row counts and accumulation modes, unaligned
-column ranges, vector/K tails, four-row skinny-N special values, ignored
+column ranges, vector/K tails, paired-row skinny-N special values, ignored
 NaN bias, and skinny-M executor limits at panel boundaries. All eight exact
 benchmark inputs also matched onnx-light's built-in kernels at one and two
 threads, with reference outputs computed before CPU-kernel registration
