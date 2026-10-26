@@ -43,7 +43,7 @@ The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
 Split middle-axis follow-up
---------------------------
+---------------------------
 
 Issue `#992 <https://github.com/xadupre/onnx-light-cpu/issues/992>`_ reports
 0.301951 ms for onnx-light-cpu versus 0.217037 ms for ONNX Runtime on

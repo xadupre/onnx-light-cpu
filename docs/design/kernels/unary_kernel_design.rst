@@ -236,7 +236,7 @@ this case. Direct range timings exclude session overhead and must not be
 reported as end-to-end ORT speedups.
 
 Measured AVX2 logits optimization (issue #980)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 On October 24, 2026, the three named FP32 logits cases reproduced a repeatable
 ORT advantage on an AMD EPYC 9V45 virtual runner (four logical CPUs, two

@@ -7,7 +7,7 @@ FLOAT16 and BFLOAT16, both layouts, optional bias and past state, dilation and
 SiLU/Swish activation.
 
 FLOAT16 three-tap path
----------------------
+----------------------
 
 For a three-tap kernel, unit dilation, no activation and sequence length at least
 two, the adapter uses a bounded, allocation-free tiled routine in
@@ -59,7 +59,7 @@ The original dashboard does not provide per-case build provenance or complete
 execution settings; local results are not a reconstruction of that campaign.
 
 EPYC 7763 measurements, 2026-10-24
----------------------------------
+----------------------------------
 
 Environment:
 
@@ -117,7 +117,7 @@ still exercise the runtime executor. The four-participant baseline L513-first
 pass medians varied from 0.457 to 0.490 ms, well outside near-parity with ORT.
 
 Profiling limitations and validation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``perf stat -e cycles`` was denied by the runner's
 ``perf_event_paranoid=4`` policy, so no native sampled-profile percentages are

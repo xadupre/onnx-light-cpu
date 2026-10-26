@@ -164,7 +164,7 @@ compiled out, so the reported ratios reflect an AVX2-vs-AVX2 comparison
 instead of AVX2-vs-AVX-512.
 
 October 2026 MatMul follow-up (#988)
-----------------------------------
+------------------------------------
 
 The investigation above describes the September pass, not the current
 implementation. On 2026-10-25, the eight cases in
@@ -246,7 +246,7 @@ following twice for each revision, changing the output prefix each time:
    done
 
 One-thread results (milliseconds)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -289,7 +289,7 @@ One-thread results (milliseconds)
      - 1.506652–1.817144
 
 Two-thread results (milliseconds)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -332,7 +332,7 @@ Two-thread results (milliseconds)
      - 1.027666–1.233049
 
 Rejected paired-row skinny-N follow-up
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The original Python parity runner could not be repeated in this environment:
 the onnx-light runtime is not installed or available from its configured

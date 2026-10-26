@@ -83,7 +83,7 @@ constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.
 
 AVX2 LessOrEqual (October 25, 2026)
-----------------------------------
+-----------------------------------
 
 Issue #991 identified the float32 right-scalar case with 4,194,304 elements.
 The float32 adapter omitted LessOrEqual from its AVX2 dispatch. Disassembly
