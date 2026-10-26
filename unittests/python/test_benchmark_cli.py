@@ -975,6 +975,7 @@ class TestBenchmarkCli(ExtTestCase):
             threads=1,
             with_onnxruntime=False,
             allow_empty=False,
+            include_big=False,
         )
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])

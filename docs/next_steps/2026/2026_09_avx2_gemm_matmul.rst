@@ -418,3 +418,88 @@ NaN bias, and skinny-M executor limits at panel boundaries. All eight exact
 benchmark inputs also matched onnx-light's built-in kernels at one and two
 threads, with reference outputs computed before CPU-kernel registration
 (FP32 ``rtol=atol=1e-4``, FP16 ``rtol=atol=1e-2``).
+
+October 2026 Gemm follow-up (#981)
+--------------------------------
+
+This follow-up measures the 36 exact dynamic-input cases in
+`issue #981 <https://github.com/xadupre/onnx-light-cpu/issues/981>`_ on
+2026-10-26. It does not reuse the issue's historical timings as a baseline.
+The baseline production sources are revision
+``64961c5`` (also unchanged in ``30cd15e`` and ``3ecf02b``), which already
+contains the MatMul follow-up above.
+
+Environment and protocol
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+* AMD EPYC 7763 shared Linux VM, four logical CPUs on two physical cores.
+  Both backends inherit process affinity ``0,2``. This processor has
+  AVX2/FMA/F16C and no AVX-512; CPU dispatch reports SIMD level 3.
+* GCC 13.3.0, CMake Release, ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``;
+  onnx-light-cpu 0.2.0, Python 3.13.16, NumPy 2.5.4.
+* ONNX Runtime 1.31.0, official CPython 3.13 Linux wheel, Release,
+  reported commit ``402979a``, CPUExecutionProvider only.
+* onnx-light 0.2.0, official release wheel named in the MatMul follow-up,
+  extracted outside the checkout and selected with ``PYTHONPATH``.
+  The loaded core library has SHA-256
+  ``181a18f807267481b5006060f6fbe6a05cafe3ce8dea75f90f5fb44c9d59741a``.
+  The wheel does not identify its compiled source commit.
+  This checkout links its exact core/proto/thread libraries, with
+  ``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF`` matching the wheel.
+* One explicitly configured intra-op thread for both backends; ORT uses
+  sequential execution and one inter-op thread. Spin policies are unmodified
+  defaults, but no worker spinning is involved with one thread.
+* Two fresh CLI processes per case and revision, five warm-ups and 31
+  measured calls. The 120-second cap is identical throughout.
+  CPU is measured before creating ORT, avoiding its idle worker interference.
+  Tables report individual process medians in milliseconds, not minima.
+* Inputs, transpose attributes, bias shapes, seeds and tolerances are
+  unchanged. CPU receives native backend tensors; ORT receives their NumPy
+  views. No constant-weight preparation replaces these dynamic inputs.
+
+Reproduction
+~~~~~~~~~~~~
+
+Build the source integration against the selected wheel as described above,
+including ``_cpuregister``, ``_cpukernels``, ``gemm_throughput``,
+``test_gemm_kernel``, ``test_gemm_plan`` and
+``test_onnx_light_gemm_kernel``. Run the following twice per revision,
+changing the output path:
+
+.. code-block:: bash
+
+   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   cd "$ROOT"
+   pattern='^test_cpu_gemm_(?:(?:square_(?:128|256|512|1024)|big_m(?:8192_n128_k128|16384_n128_k128|128_n8192_k128|128_n16384_k128|128_n128_k8192)|transformer_projection)_float(?:16|32)_transA_0_transB_0_bias_none|square_128_float(?:16|32)_transA_(?:1_transB_0|0_transB_1)_bias_none|square_256_float(?:16|32)_transA_0_transB_0_bias_(?:scalar|row|matrix)|square_256_float32_transA_0_transB_0_bias_column|square_(?:2048|4096)_float32_transA_0_transB_0_bias_none|(?:transformer_projection_decode|skinny_m|large_k_1024)_float32_transA_0_transB_0_bias_none)_benchmark$'
+   PYTHONPATH="$ROOT:/tmp/gemm-runtime" taskset -c 0,2 \
+     python -m onnx_light_cpu benchmark --test "$pattern" --include-big \
+       --dtype float32 float16 --threads 1 --repeat 31 --warmup 5 \
+       --max-repeat-time 120 --onnxruntime --output /tmp/gemm-results.xlsx
+
+``--include-big`` is an explicit opt-in: the underlying backend collector
+otherwise silently excludes names containing ``_big_`` even when the name
+filter matches. The first baseline campaign measured the 26 non-big cases;
+the ten big cases were measured separately with identical timing settings.
+The default CLI selection remains unchanged.
+
+Profiling and implementation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Hardware performance counters are unavailable on this VM
+(``perf_event_paranoid=4``). Generated-code inspection with ``objdump -Cd``
+instead identified accumulator spills inside GCC's four-way-unrolled
+``GemmMicroTile_AVX2FMA_F32Impl<6>`` depth loop. Its twelve accumulators
+already provide independent FMA chains; unrolling extends temporary
+lifetimes enough to spill an accumulator to the stack.
+
+Only the six-row, sixteen-column FP32 microtile now uses a single depth
+loop. The generated hot loop keeps all twelve accumulators in registers.
+Smaller row counts retain their original unrolling. The sequence of FMAs
+for each output, alpha/beta application, bias modes, tail handling,
+packing, dispatch, executor ownership and allocation behavior are unchanged.
+AVX2 FP16/BF16 widening paths reuse this FP32 tile; the compact native
+kernels, FP64, scalar, AVX and AVX-512 implementations are untouched.
+
+The direct microtile test now covers depth boundaries around 8, 16, 128
+and 512, for every row count, output tail and accumulation mode, including
+non-unit alpha/beta, column bias and unaligned output ranges.
