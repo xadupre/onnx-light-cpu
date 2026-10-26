@@ -1172,9 +1172,20 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
         (!has_bias || C != Y)) {
       const std::size_t available_threads =
           static_cast<std::size_t>(std::max(ExecutionThreadCount(), std::int64_t{1}));
+
       // Stream up to 4 KiB of each B row without reducing available parallelism.
-      const std::size_t columns =
-          std::clamp(N / available_threads / 64 * 64, std::size_t{256}, std::size_t{1024});
+      // We choose a per-panel column count that is:
+      //  - rounded down to a multiple of kColumnAlignment, and then
+      //  - clamped to [kMinColumns, kMaxColumns].
+      constexpr std::size_t kColumnAlignment = 64;
+      constexpr std::size_t kMinColumns = 256;
+      // 1024 float columns == 4 KiB of contiguous data.
+      constexpr std::size_t kMaxColumns = 1024;
+
+      const std::size_t base_columns = N / available_threads;
+      const std::size_t rounded_columns = (base_columns / kColumnAlignment) * kColumnAlignment;
+      const std::size_t columns = std::clamp(rounded_columns, kMinColumns, kMaxColumns);
+
       const std::size_t panels = (N + columns - 1) / columns;
       const std::size_t participants = std::min(panels, available_threads);
       std::atomic<std::size_t> next_panel{participants};
