@@ -406,41 +406,7 @@ void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, cons
                                 float beta, const float *C, float *Y, std::size_t begin,
                                 std::size_t end) {
   const bool has_bias = C != nullptr && beta != 0.0f;
-  std::size_t m = begin;
-  // Reuse B across pairs of A rows while preserving the four-chain reduction
-  // order used by the single-row path.
-  for (; m + 2 <= end; m += 2) {
-    const float *a = A + m * K;
-    __m256 acc00 = _mm256_setzero_ps(), acc01 = _mm256_setzero_ps();
-    __m256 acc02 = _mm256_setzero_ps(), acc03 = _mm256_setzero_ps();
-    __m256 acc10 = _mm256_setzero_ps(), acc11 = _mm256_setzero_ps();
-    __m256 acc12 = _mm256_setzero_ps(), acc13 = _mm256_setzero_ps();
-    std::size_t k = 0;
-    for (; k + 32 <= K; k += 32) {
-      const __m256 b0 = _mm256_loadu_ps(B + k);
-      const __m256 b1 = _mm256_loadu_ps(B + k + 8);
-      const __m256 b2 = _mm256_loadu_ps(B + k + 16);
-      const __m256 b3 = _mm256_loadu_ps(B + k + 24);
-      acc00 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k), b0, acc00);
-      acc01 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 8), b1, acc01);
-      acc02 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 16), b2, acc02);
-      acc03 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 24), b3, acc03);
-      acc10 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k), b0, acc10);
-      acc11 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 8), b1, acc11);
-      acc12 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 16), b2, acc12);
-      acc13 = _mm256_fmadd_ps(_mm256_loadu_ps(a + K + k + 24), b3, acc13);
-    }
-    const __m256 sum00 = _mm256_add_ps(_mm256_add_ps(acc00, acc01), _mm256_add_ps(acc02, acc03));
-    const __m256 sum10 = _mm256_add_ps(_mm256_add_ps(acc10, acc11), _mm256_add_ps(acc12, acc13));
-    float sums[] = {HorizontalSum(sum00), HorizontalSum(sum10)};
-    for (; k < K; ++k) {
-      sums[0] += a[k] * B[k];
-      sums[1] += a[K + k] * B[k];
-    }
-    Y[m] = alpha * sums[0] + (has_bias ? beta * C[m] : 0.0f);
-    Y[m + 1] = alpha * sums[1] + (has_bias ? beta * C[m + 1] : 0.0f);
-  }
-  for (; m < end; ++m) {
+  for (std::size_t m = begin; m < end; ++m) {
     const float *a = A + m * K;
     __m256 acc0 = _mm256_setzero_ps();
     __m256 acc1 = _mm256_setzero_ps();

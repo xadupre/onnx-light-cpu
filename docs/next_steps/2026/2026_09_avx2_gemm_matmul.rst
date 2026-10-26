@@ -180,10 +180,10 @@ Environment and protocol
 * Original parity campaign: onnx-light-cpu 0.2.0 baseline production sources
   ``86c8762be5bb0c01459c1998f5daf8dc70e268fa``; optimized sources
   ``83952ac5da670ddeb7431565f3c5e87f5d967d90``. These Python/ORT timings
-  predate the final paired-row implementation
+  predate the rejected paired-row implementation
   (``232b1ca5f1050b144d40129770d2b499d42b5c97``), so their skinny-N entries
-  are not evidence for the final kernel. Both builds used GCC 13.3.0, CMake
-  Release, and
+  are historical results, not gains retained by this PR. Both builds used GCC
+  13.3.0, CMake Release, and
   ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``. Runtime detection returned ``3``
   (AVX2); the throughput driver reported AMD Zen, FMA, and six register rows.
   The baseline was rebuilt in the same build tree after verifying its two
@@ -227,7 +227,7 @@ onnx-light runtime, with Release, tests enabled, the AVX2 ceiling, and matching
 Python ABI. Build ``_cpuregister``, ``_cpukernels``, ``gemm_throughput``,
 ``test_gemm_kernel``, ``test_gemm_plan``, and
 ``test_onnx_light_matmul_kernel`` using ``cmake --build`` with
-``--parallel $(nproc)``. With the source checkout on ``PYTHONPATH``, run the
+``--parallel 48``. With the source checkout on ``PYTHONPATH``, run the
 following twice for each revision, changing the output prefix each time:
 
 .. code-block:: bash
@@ -328,15 +328,15 @@ Two-thread results (milliseconds)
      - 1.050207 / 1.046921
      - 1.027666–1.233049
 
-Final paired-row skinny-N follow-up
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rejected paired-row skinny-N follow-up
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The original Python parity runner could not be repeated in this environment:
 the onnx-light runtime is not installed or available from its configured
 package index. The standalone C++ ``gemm_throughput`` driver was therefore
-used to measure the final kernel in isolation, not as an end-to-end or ORT
+used to measure the paired-row kernel in isolation, not as an end-to-end or ORT
 comparison. Baseline sources were ``86c8762be5bb0c01459c1998f5daf8dc70e268fa``;
-the final paired-row sources were ``232b1ca5f1050b144d40129770d2b499d42b5c97``.
+the paired-row sources were ``232b1ca5f1050b144d40129770d2b499d42b5c97``.
 Both were built with GCC 13.3.0, CMake Release, and the AVX2 ceiling. This
 shared AMD EPYC 9V74 VM has four logical processors and two physical cores;
 the processes were restricted to CPUs ``0,2``. The driver reported AVX2,
@@ -347,14 +347,14 @@ For each revision and thread count, two fresh processes ran
 51 measured calls; the table shows the two per-process median latencies for
 ``M=1024, N=1, K=1024``. The substring filter also runs the dashboard skinny-N
 cases before the named ``skinny_n`` result. Speedup is the mean baseline
-latency divided by the mean final latency.
+latency divided by the mean paired-row latency.
 
 .. list-table::
    :header-rows: 1
 
    * - Threads
      - Baseline, runs 1 / 2 (µs)
-     - Final ``232b1ca5``, runs 1 / 2 (µs)
+     - Paired-row ``232b1ca5``, runs 1 / 2 (µs)
      - Speedup
    * - 1
      - 47.441 / 47.341
@@ -364,6 +364,12 @@ latency divided by the mean final latency.
      - 51.367 / 50.426
      - 54.772 / 54.281
      - 0.93x
+
+The paired-row optimization was removed because it regressed this workload
+at both thread counts. The retained skinny-N implementation is the original
+single-row, four-chain reduction, unchanged from the baseline. No shape or
+CPU eligibility gate is introduced without measurements demonstrating a
+profitable regime, and this PR claims no skinny-N speedup.
 
 Findings and validation
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -380,25 +386,30 @@ contiguous column slices up to 1024 columns while retaining enough tasks for
 the executor. The FP16 slab remains unchanged. A wider-column-only experiment
 was not sufficient; it was not retained without the shallow-slab improvement.
 The original optimized skinny-N kernel shared each B vector across four A rows
-with two reduction chains. The final paired-row implementation shares B across
-two A rows with four independent FMA chains; the original one-row loop handles
-remaining rows.
+with two reduction chains, but changed finite-input cancellation behavior.
+The subsequent paired-row implementation preserved the original four-chain
+reduction while sharing B across two rows, but regressed the measured workload.
+Neither skinny-N optimization is retained.
 
 Relative to the mean of the two baseline medians, square-case improvements
 range from 1.21x to 1.45x, and skinny-M from 1.48x to 2.40x in the original
 parity campaign. Its 1.41–1.74x skinny-N result applies only to revision
-``83952ac5`` and does not validate the final implementation. The follow-up
+``83952ac5`` and does not apply to the retained implementation. The follow-up
 isolated C++ measurements above show 0.93x at both thread counts on a different
 shared VM; they are not comparable to the original Python/ORT campaign and do
-not establish end-to-end parity. Remaining ORT advantages in the original
-campaign include the larger squares, two-thread FP16 128-square, and
-two-thread skinny-M. The original historical latencies were not reproduced
-exactly, and their thread/build provenance remains unknown.
+not establish end-to-end parity. They motivated restoring the original skinny-N
+kernel rather than retaining a measured regression. Remaining ORT advantages
+in the original campaign include the larger squares, two-thread FP16
+128-square, and two-thread skinny-M. The original historical latencies were
+not reproduced exactly, and their thread/build provenance remains unknown.
 
-The AVX2 build passed 99 GEMM kernel tests, 49 plan tests, and seven MatMul
-integration tests; unsupported AVX-512/AMX cases were skipped. Added coverage
-includes all FP32 microtile row counts and accumulation modes, unaligned
-column ranges, vector/K tails, paired-row skinny-N special values, ignored
+After restoring the single-row kernel, the AVX2 build passed 100 GEMM kernel
+tests, 49 plan tests, and seven MatMul integration tests on an Intel Xeon
+Platinum 8480C with GCC 13.2.0. Unsupported AVX-512/AMX cases were skipped.
+The original parity campaign passed 99 GEMM kernel tests, 49 plan tests, and
+seven MatMul integration tests; unsupported AVX-512/AMX cases were skipped.
+Added coverage includes all FP32 microtile row counts and accumulation modes, unaligned
+column ranges, vector/K tails, skinny-N special values and cancellation, ignored
 NaN bias, and skinny-M executor limits at panel boundaries. All eight exact
 benchmark inputs also matched onnx-light's built-in kernels at one and two
 threads, with reference outputs computed before CPU-kernel registration

@@ -744,7 +744,7 @@ TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
   }
 }
 
-TEST(GemmFloat32, Avx2SkinnyNFourRowsSpecialValuesAndIgnoredBias) {
+TEST(GemmFloat32, Avx2SkinnyNColumnSpecialValuesAndIgnoredBias) {
   if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
       !ml_cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is required";
