@@ -503,3 +503,116 @@ kernels, FP64, scalar, AVX and AVX-512 implementations are untouched.
 The direct microtile test now covers depth boundaries around 8, 16, 128
 and 512, for every row count, output tail and accumulation mode, including
 non-unit alpha/beta, column bias and unaligned output ranges.
+
+Results
+~~~~~~~
+
+The optimized production change is revision ``51a38e7``. All four
+campaigns collected the full 31 CPU and 31 ORT samples for every case;
+the cap did not truncate any measurement. Five warm-ups and 31 repetitions
+were chosen to bound the expensive 4096-square campaign, rather than
+changing the protocol per shape. The tables are steady-state end-to-end
+latencies, including each invocation's dynamic packing and allocation.
+All numbers are milliseconds. Names omit the common
+``test_cpu_gemm_`` prefix, ``_benchmark`` suffix, and
+``_transA_0_transB_0_bias_none`` unless an attribute differs.
+The ORT column spans its medians across the four processes.
+
+.. csv-table::
+   :header: "Case", "Before 1 / 2", "After 1 / 2", "ORT min–max"
+   :widths: 44 19 19 18
+
+   "square_128_float32", "0.054502 / 0.055444", "0.055984 / 0.048361", "0.054713–0.056035"
+   "square_256_float32", "0.396500 / 0.393575", "0.366674 / 0.366344", "0.372095–0.375942"
+   "square_512_float32", "3.063330 / 3.055837", "2.851172 / 2.851623", "2.905507–2.913741"
+   "square_1024_float32", "24.583019 / 24.496341", "22.625857 / 22.969812", "23.215148–23.312601"
+   "square_2048_float32", "210.022947 / 213.746443", "188.368289 / 194.682903", "187.957226–189.278271"
+   "square_4096_float32", "1669.384535 / 1715.468610", "1607.535515 / 1530.400072", "1503.643201–1510.175084"
+   "square_256_float32_bias_scalar", "0.415837 / 0.413762", "0.385910 / 0.385851", "0.375691–0.378597"
+   "square_256_float32_bias_row", "0.414163 / 0.412461", "0.383206 / 0.380510", "0.376272–0.380620"
+   "square_256_float32_bias_column", "0.410867 / 0.432237", "0.380700 / 0.379629", "0.376543–0.382033"
+   "square_256_float32_bias_matrix", "0.404535 / 0.403845", "0.375171 / 0.375571", "0.379068–0.392332"
+   "skinny_m_float32", "0.087813 / 0.088075", "0.092153 / 0.090829", "0.085500–0.089948"
+   "large_k_1024_float32", "0.036097 / 0.036087", "0.035526 / 0.034194", "0.036258–0.036458"
+   "square_128_float32_transA_1", "0.060232 / 0.060303", "0.058850 / 0.056476", "0.057978–0.058970"
+   "square_128_float32_transB_1", "0.057167 / 0.056025", "0.052949 / 0.052959", "0.054312–0.055173"
+   "transformer_projection_float32", "7.423082 / 7.472683", "7.040836 / 7.035439", "6.855099–7.064874"
+   "transformer_projection_decode_float32", "0.179646 / 0.175097", "0.176850 / 0.187811", "0.174265–0.187440"
+   "square_128_float16", "0.061876 / 0.061384", "0.058149 / 0.058559", "0.060202–0.061314"
+   "square_256_float16", "0.412971 / 0.412910", "0.383716 / 0.384007", "0.390440–0.394446"
+   "square_512_float16", "3.229871 / 3.213651", "2.958895 / 2.966351", "2.975416–2.994302"
+   "square_1024_float16", "25.771332 / 25.552792", "23.450092 / 23.852718", "23.557377–23.934041"
+   "square_256_float16_bias_scalar", "0.423551 / 0.433570", "0.393253 / 0.395478", "0.398244–0.409305"
+   "square_256_float16_bias_row", "0.414635 / 0.416437", "0.388985 / 0.385470", "0.398194–0.398945"
+   "square_256_float16_bias_matrix", "0.421487 / 0.422178", "0.386320 / 0.388275", "0.409714–0.421837"
+   "square_128_float16_transA_1", "0.063258 / 0.062517", "0.059401 / 0.058850", "0.063909–0.065131"
+   "square_128_float16_transB_1", "0.060303 / 0.059541", "0.056715 / 0.056616", "0.060422–0.061294"
+   "transformer_projection_float16", "7.424607 / 7.330304", "6.809572 / 6.783539", "7.179379–7.238102"
+   "big_m8192_n128_k128_float32", "3.246640 / 3.175929", "3.178785 / 2.811961", "2.816739–2.824533"
+   "big_m128_n8192_k128_float32", "3.524951 / 3.632922", "3.122780 / 3.323687", "3.408243–4.162610"
+   "big_m128_n128_k8192_float32", "3.444800 / 3.440994", "3.200606 / 3.267953", "2.986046–3.058509"
+   "big_m16384_n128_k128_float32", "6.513208 / 6.344834", "6.294242 / 5.642257", "5.639077–5.654217"
+   "big_m128_n16384_k128_float32", "7.472430 / 7.507746", "6.761253 / 7.018788", "6.082475–6.263382"
+   "big_m8192_n128_k128_float16", "3.475238 / 3.485367", "3.204545 / 3.263956", "3.063141–3.106018"
+   "big_m128_n8192_k128_float16", "3.540620 / 3.583409", "3.221867 / 3.310292", "3.687464–3.944345"
+   "big_m128_n128_k8192_float16", "3.714945 / 3.706980", "3.461134 / 3.477605", "3.241183–3.262720"
+   "big_m16384_n128_k128_float16", "6.918655 / 6.992192", "6.489760 / 6.434587", "6.125450–6.272139"
+   "big_m128_n16384_k128_float16", "7.329262 / 7.416645", "6.807513 / 6.772940", "11.576530–12.601624"
+
+Interpretation and remaining gaps
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Comparing the means of the two per-process medians, the cases using the
+changed tile improve by 1.04–1.11x. Both FP32 and FP16 256/512-square cases
+without bias move ahead of ORT in both optimized runs. ORT is faster in
+28/36 cases in each baseline campaign, versus 15/36 and 13/36 after.
+These counts use unrounded data, not the displayed decimal values.
+The largest historical gains (including the 2.22x column-bias result) are
+not reproduced at this already-optimized baseline.
+
+Only 27 of the 36 historical gaps repeat in both baseline runs. The nine
+not consistently reproduced are FP32 128-square, skinny-M, large-K-1024,
+projection decode, both FP16 128-square transpose cases, FP32 and FP16
+``big_m128_n8192_k128``, and FP16 ``big_m128_n16384_k128``.
+The latter is already substantially faster than ORT before this change.
+
+The two M=1 FP32 cases use an untouched skinny-M path, not this microtile.
+Their before/after medians fluctuate by about 3–4% in the unfavorable
+direction; no improvement is claimed for them. Larger residual gaps include
+FP32 4096-square, large-K and wide/tall matrices, and FP16 tall and large-K
+matrices. FP32 projection and several bias cases remain near parity or
+slightly behind. No blanket parity claim is made.
+
+Campaigns were grouped by revision, not alternated between binaries.
+The per-process medians and ORT ranges expose drift, especially for small
+and wide cases. The two runs for some tall shapes also differ noticeably.
+This shared-runner evidence supports the localized spill removal, not a
+dedicated-machine performance gate or exact reproduction of the dashboard's
+unknown thread/build provenance. Multithreaded performance still requires
+measurement on the target deployment.
+
+Correctness and validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The optimized AVX2 build passes 100 GEMM kernel tests (four unsupported-ISA
+skips), 49 plan tests (two unsupported-ISA skips), 13 Gemm integration
+tests and all 35 benchmark CLI tests. The added CLI test runs a real big
+Gemm case and checks its workbook, as well as verifying default exclusion.
+C++ formatting, Ruff, Black and ``git diff --check`` pass.
+
+For an additional exact-workload check, all 36 optimized outputs were
+saved, the original production loop was rebuilt in the same build tree,
+and every output byte was compared. All 36 are bitwise identical before
+and after. The optimized implementation was then restored and rebuilt.
+
+An independent onnx-light built-in oracle was resolved and run for each
+case before CPU-kernel registration. With the earlier MatMul follow-up's
+additional comparison tolerances (FP32 ``rtol=atol=1e-4``, FP16
+``rtol=atol=1e-2``), 33 cases agree. Three FP32 long reductions exceed
+that additional threshold near zero: 2048-square, 4096-square and
+``big_m128_n128_k8192``. The unmodified baseline has exactly the same
+differences. For example, 17 of 4,194,304 outputs in 2048-square exceed
+the threshold, with maximum absolute difference among violations
+``1.4248e-4``. This additional oracle comparison therefore does not pass
+universally; it is not presented as a new regression, nor were tolerances
+relaxed. Existing correctness requirements and tests are unchanged.
