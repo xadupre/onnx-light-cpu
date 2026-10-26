@@ -425,6 +425,7 @@ def run_backend_benchmark(
     threads: int,
     with_onnxruntime: bool = False,
     allow_empty: bool = False,
+    include_big: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -452,6 +453,7 @@ def run_backend_benchmark(
         for case in collect_test_cases_by_name(
             "^test_cpu_.*_benchmark$",
             mode=TestMode.BENCHMARK,
+            include_big=include_big,
             generate_benchmark_expected_outputs=False,  # pyrefly: ignore[unexpected-keyword]
         )
         if (

@@ -134,6 +134,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     benchmark.add_argument(
+        "--include-big",
+        action="store_true",
+        help="include backend cases whose names contain '_big_' (excluded by default)",
+    )
+    benchmark.add_argument(
         "--onnxruntime",
         action="store_true",
         help="also benchmark ONNX Runtime and report the speedup",
@@ -168,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             threads=args.threads,
             with_onnxruntime=args.onnxruntime,
             allow_empty=selection_inferred,
+            include_big=args.include_big,
         )
         selected_dtypes = normalize_dtypes(dtypes)
         comparison_dtypes = tuple(args.compare_dtypes) if args.compare_dtypes else selected_dtypes
