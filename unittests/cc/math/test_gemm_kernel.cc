@@ -654,7 +654,7 @@ TEST(GemmFloat32, Avx2FullTilesAllRowsAndAccumulationModes) {
   using ml_cpu_compute::GemmAccumMode;
   for (std::size_t M = 1; M <= 6; ++M) {
     for (std::size_t N : {15, 16, 17, 31, 32, 47}) {
-      for (std::size_t K : {0, 1, 3, 4, 5, 17, 129}) {
+      for (std::size_t K : {0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 127, 128, 129, 511, 512, 513}) {
         SCOPED_TRACE(::testing::Message() << "M=" << M << " N=" << N << " K=" << K);
         const std::size_t stride = N + 2;
         const auto A = RandomVector(M * K, 176);

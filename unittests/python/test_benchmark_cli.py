@@ -84,6 +84,44 @@ class TestBenchmarkCli(ExtTestCase):
             parser.parse_args(["benchmark", "--help"])
         self.assertIn("kernel select defaults (default: 0)", help_output.getvalue())
 
+    def test_include_big_is_opt_in(self):
+        self.assertFalse(_build_parser().parse_args(["benchmark"]).include_big)
+        name = "test_cpu_gemm_big_m8192_n128_k128_float32_transA_0_transB_0_bias_none_benchmark"
+        raw, aggregated = _benchmark.run_backend_benchmark(
+            [f"^{name}$"], ["float32"], 1, 0, 10.0, 1, allow_empty=True
+        )
+        self.assertEqual(raw, [])
+        self.assertEqual(aggregated, [])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "big.xlsx"
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "benchmark",
+                            "--test",
+                            f"^{name}$",
+                            "--dtype",
+                            "float32",
+                            "--include-big",
+                            "--threads",
+                            "1",
+                            "--repeat",
+                            "1",
+                            "--warmup",
+                            "0",
+                            "--output",
+                            str(output),
+                        ]
+                    ),
+                    0,
+                )
+            workbook = load_workbook(output, read_only=True)
+            rows = list(workbook["aggregated"].values)
+            workbook.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1][0], name)
+
     def test_parser_compares_two_dtypes(self):
         args = _build_parser().parse_args(
             ["benchmark", "--compare-dtypes", "float16", "bfloat16"]
@@ -937,6 +975,7 @@ class TestBenchmarkCli(ExtTestCase):
             threads=1,
             with_onnxruntime=False,
             allow_empty=False,
+            include_big=False,
         )
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])

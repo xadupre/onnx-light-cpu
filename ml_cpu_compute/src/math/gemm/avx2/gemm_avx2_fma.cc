@@ -507,11 +507,15 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
       }
     };
     std::size_t k = 0;
-    for (; k + 4 <= K; k += 4) {
-      accumulate_k(k);
-      accumulate_k(k + 1);
-      accumulate_k(k + 2);
-      accumulate_k(k + 3);
+    // Twelve accumulators already hide FMA latency in the six-row tile.
+    // Unrolling its depth loop makes GCC spill accumulators between steps.
+    if constexpr (MR < kGemmAVX2MR) {
+      for (; k + 4 <= K; k += 4) {
+        accumulate_k(k);
+        accumulate_k(k + 1);
+        accumulate_k(k + 2);
+        accumulate_k(k + 3);
+      }
     }
     for (; k < K; ++k) {
       accumulate_k(k);
