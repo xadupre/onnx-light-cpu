@@ -2,9 +2,12 @@ AVX2 FP32/FP64 GEMM and MatMul Gap Closure
 ===========================================
 
 :Date: 2026-09
-:Updated: 2026-09-05
+:Updated: 2026-10-26
 
 **in progress**
+
+This September report also includes an `October 2026 MatMul follow-up (#988)`_
+with updated measurements and implementation decisions.
 
 Objective
 ---------
@@ -376,8 +379,9 @@ Findings and validation
 
 Hardware-counter profiling was unavailable (``perf_event_paranoid=4``).
 Disassembly of GCC's six-row FP32 microkernel showed twelve accumulator-array
-stores inside each four-step K iteration. Named accumulators, with arrays
-materialized only after the reduction, remove that repeated array writeback.
+stores inside each four-step K iteration. Named accumulators remove that
+repeated array writeback. The retained epilogue consumes those accumulators
+directly through compile-time-unrolled row stores, without intermediate arrays.
 The same microkernel serves converted FP16 square panels. No reduction-order,
 packing, or FP16 conversion change was needed for these squares.
 

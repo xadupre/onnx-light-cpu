@@ -470,7 +470,7 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
   std::size_t n = 0;
   for (; n + 16 <= nb; n += 16) {
     // Named accumulators keep GCC from storing the arrays to the stack on
-    // every unrolled K iteration. Materialize the row arrays only for the epilogue.
+    // every unrolled K iteration.
     __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
     __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
     __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
@@ -516,12 +516,10 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    const __m256 acc0[] = {c00, c10, c20, c30, c40, c50};
-    const __m256 acc1[] = {c01, c11, c21, c31, c41, c51};
-    for (std::size_t r = 0; r < MR; ++r) {
+    const auto store_row = [&](std::size_t r, __m256 lo, __m256 hi) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256 res0 = alpha_is_one ? acc0[r] : _mm256_mul_ps(valpha, acc0[r]);
-      __m256 res1 = alpha_is_one ? acc1[r] : _mm256_mul_ps(valpha, acc1[r]);
+      __m256 res0 = alpha_is_one ? lo : _mm256_mul_ps(valpha, lo);
+      __m256 res1 = alpha_is_one ? hi : _mm256_mul_ps(valpha, hi);
       if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
         const __m256 vc0 = mode == GemmAccumMode::kInitColumnBias
                                ? _mm256_set1_ps(Crow_base[r * Cstride])
@@ -537,6 +535,22 @@ void GemmMicroTile_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, f
       }
       _mm256_storeu_ps(Yrow, res0);
       _mm256_storeu_ps(Yrow + 8, res1);
+    };
+    store_row(0, c00, c01);
+    if constexpr (MR >= 2) {
+      store_row(1, c10, c11);
+    }
+    if constexpr (MR >= 3) {
+      store_row(2, c20, c21);
+    }
+    if constexpr (MR >= 4) {
+      store_row(3, c30, c31);
+    }
+    if constexpr (MR >= 5) {
+      store_row(4, c40, c41);
+    }
+    if constexpr (MR >= 6) {
+      store_row(5, c50, c51);
     }
   }
   for (; n + 8 <= nb; n += 8) {
