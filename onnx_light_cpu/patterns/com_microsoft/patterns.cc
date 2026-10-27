@@ -468,6 +468,9 @@ void RegisterCustomOperatorPatterns() {
                                 [] { return std::make_unique<LinearAttentionFusionPattern>(); });
     builder_ns::RegisterPattern("MicrosoftMatMulNBitsBias",
                                 [] { return std::make_unique<MatMulNBitsBiasFusionPattern>(); });
+    builder_ns::RegisterPattern("MicrosoftNormalizationCast", [] {
+      return std::make_unique<NormalizationCastEliminationPattern>();
+    });
   });
 }
 

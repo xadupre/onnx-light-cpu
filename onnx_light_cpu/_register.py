@@ -150,6 +150,21 @@ def operator_support() -> tuple[OperatorSupport, ...]:
     )
 
 
+def normalization_cast_pattern(kernel_name: str) -> Any:
+    """Creates an opt-in cast rewrite for an explicitly guaranteed execution kernel.
+
+    Both graphs must execute with this kernel, without session overrides. Only
+    ``onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization`` is currently eligible.
+    Unsupported names disable the rewrite. The builder must explicitly target CPU.
+    """
+    import_module("onnx_light.onnx_core.graph_builder")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        normalization_cast_pattern as _normalization_cast_pattern,
+    )
+
+    return _normalization_cast_pattern(kernel_name)
+
+
 def register_operator_support() -> None:
     """Registers custom/experimental shapes, peak memory, and custom fusion patterns."""
     import_module("onnx_light.onnx_op")

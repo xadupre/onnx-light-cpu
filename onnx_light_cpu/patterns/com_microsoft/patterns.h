@@ -198,6 +198,39 @@ public:
         const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
 };
 
+/**
+ * Removes FLOAT casts around Microsoft skip RMS normalization for a proven kernel.
+ *
+ * kernel_name is an explicit execution contract, not a registry lookup: the caller
+ * must use that kernel for both the original and rewritten graph, without session
+ * overrides. Currently only onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization
+ * has identical FP32 arithmetic for FLOAT and FLOAT16. An empty or unsupported
+ * name disables the rewrite. The builder must also explicitly target CPU.
+ *
+ * Weights must originate in FLOAT16 or be exactly representable FLOAT constants.
+ * A live residual output must exclusively feed a FLOAT16 Cast; live FLOAT
+ * statistics retain their names and types. No stash_type attribute is introduced.
+ */
+class NormalizationCastEliminationPattern final
+    : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
+public:
+  explicit NormalizationCastEliminationPattern(std::string kernel_name = {})
+      : PatternOptimization(0, "MicrosoftNormalizationCast",
+                            ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU),
+        kernel_name_(std::move(kernel_name)) {}
+
+  std::set<std::string> FastOpType() const override;
+  ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
+  Match(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const ONNX_LIGHT_NAMESPACE::NodeProto &candidate) const override;
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<ONNX_LIGHT_NAMESPACE::NodeProto>
+  Apply(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
+
+private:
+  std::string kernel_name_;
+};
+
 void RegisterCustomOperatorPatterns();
 
 } // namespace onnx_light_cpu

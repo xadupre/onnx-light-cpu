@@ -5,6 +5,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
@@ -182,6 +183,15 @@ NB_MODULE(_cpuregister, m) {
         onnx_light_cpu::RegisterCustomOperatorPatterns();
       },
       "Registers custom/experimental shapes, peak-memory functions, and custom fusion patterns.");
+
+  m.def(
+      "normalization_cast_pattern",
+      [](const std::string &kernel_name)
+          -> std::shared_ptr<ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization> {
+        return std::make_shared<onnx_light_cpu::NormalizationCastEliminationPattern>(kernel_name);
+      },
+      nb::arg("kernel_name"),
+      "Creates a Microsoft normalization cast pattern with an explicit execution-kernel contract.");
 
   m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
         nb::arg("registry"),
