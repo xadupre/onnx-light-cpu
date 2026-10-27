@@ -25,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -58,17 +59,18 @@ NodeProto CastSpec(TensorProto::DataType type) {
   return spec;
 }
 
+auto SchemaLookup(const std::string &op) {
+  auto schemas = ONNX_LIGHT_NAMESPACE::onnx_op::GetAllOnnxOpSchemasWithHistory(op, false);
+  const auto custom = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory(op, false);
+  schemas.insert(schemas.end(), custom.begin(), custom.end());
+  return schemas;
+}
+
 std::unique_ptr<builder::GraphBuilder> MakeGraph(const Options &options = {}) {
   ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterKernelFunctions();
   ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterShapeFunctions();
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
-  auto graph =
-      std::make_unique<builder::GraphBuilder>("normalization_cast", [](const std::string &op) {
-        auto schemas = ONNX_LIGHT_NAMESPACE::onnx_op::GetAllOnnxOpSchemasWithHistory(op, false);
-        const auto custom = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory(op, false);
-        schemas.insert(schemas.end(), custom.begin(), custom.end());
-        return schemas;
-      });
+  auto graph = std::make_unique<builder::GraphBuilder>("normalization_cast", SchemaLookup);
   graph->SetOpsetVersion("", 23);
   graph->SetOpsetVersion("com.microsoft", 1);
   graph->set_device(sym::Device::kCPU);
@@ -202,6 +204,53 @@ TEST(NormalizationCast, PreservesOtherInputCastConsumers) {
   EXPECT_EQ(graph->Nodes()[0].op_type(), "Cast");
   EXPECT_EQ(graph->Nodes()[0].output(0), "X32");
   EXPECT_EQ(Normalization(*graph).input(0), "X");
+}
+
+TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
+  onnx_light_cpu::RegisterCastKernel();
+  onnx_light_cpu::RegisterNaiveSkipSimplifiedLayerNormalizationKernel();
+  for (const std::string output : {"X32", "R32", "W32", "B32"}) {
+    SCOPED_TRACE(output);
+    auto model = MakeGraph({.bias = true})->ToModel();
+    auto &function = *model.add_functions();
+    function.set_name("Cast");
+    function.set_domain("");
+    function.set_overload("with_add");
+    function.add_input("arg");
+    function.add_output("result");
+    function.add_attribute("to");
+    function.add_opset("", 23);
+    auto cast = ONNX_LIGHT_NAMESPACE::MakeNode("Cast", {"arg"}, {"converted"});
+    AddAttribute(cast, "to", static_cast<int64_t>(TensorProto::DataType::FLOAT));
+    function.ref_node().push_back(std::move(cast));
+    function.ref_node().push_back(
+        ONNX_LIGHT_NAMESPACE::MakeNode("Add", {"converted", "converted"}, {"result"}));
+    for (auto &node : model.mutable_graph()->ref_node()) {
+      if (node.op_type() == "Cast" && node.output(0) == output) {
+        node.set_overload("with_add");
+      }
+    }
+    builder::GraphBuilder graph(model, SchemaLookup);
+    graph.set_device(sym::Device::kCPU);
+    const auto before = graph.ToModel();
+    const rt::Tensors inputs = {
+        rt::MakeFloat16Tensor("X", {2, 4}, {1, 2, -3, 4, 0.5F, -1, 2, -2}),
+        rt::MakeFloat16Tensor("R", {2, 4}, {0.5F, -1, 1, 2, 1, -2, 0.5F, 1}),
+        rt::MakeFloat16Tensor("W", {4}, {1, 0.5F, 2, -1}),
+        rt::MakeFloat16Tensor("B", {4}, {0.5F, -1, 0.5F, 1})};
+    const auto expected = rt::RunModel(before, inputs);
+    builder::GraphGraph optimizer(graph, Patterns());
+    EXPECT_EQ(Pattern(kKernel).Match(optimizer, Normalization(graph)).pattern, nullptr);
+    optimizer.Optimize();
+    EXPECT_EQ(graph.ToModel().SerializeAsString(), before.SerializeAsString());
+    const auto actual = rt::RunModel(graph.ToModel(), inputs);
+    ASSERT_EQ(actual.size(), expected.size());
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+      EXPECT_EQ(actual[i].data_type, expected[i].data_type);
+      EXPECT_EQ(actual[i].shape, expected[i].shape);
+      EXPECT_EQ(Bytes(actual[i]), Bytes(expected[i]));
+    }
+  }
 }
 
 TEST(NormalizationCast, UnsupportedContractsAndTargetsLeaveGraphUnchanged) {

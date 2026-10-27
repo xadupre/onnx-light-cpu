@@ -30,10 +30,13 @@ bool HasType(builder::GraphGraph &graph, const std::string &name, sym::TensorTyp
   return graph.HasType(name) && graph.GetType(name) == type;
 }
 
-bool IsCast(const NodeProto *node, TensorProto::DataType to) {
+bool IsCast(builder::GraphGraph &graph, const NodeProto *node, TensorProto::DataType to) {
   if (node == nullptr || (!node->domain().empty() && node->domain() != "ai.onnx") ||
-      node->op_type() != "Cast" || node->input_size() != 1 || node->output_size() != 1 ||
-      node->attribute().size() != 1) {
+      node->op_type() != "Cast" || !node->overload().empty() || node->input_size() != 1 ||
+      node->output_size() != 1 || node->attribute().size() != 1 ||
+      graph.Builder().Shapes().HasLocalFunction(
+          ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext::LocalFunctionKey(
+              node->domain(), node->op_type(), node->overload()))) {
     return false;
   }
   const auto *attribute = FindAttribute(*node, "to");
@@ -47,7 +50,7 @@ const NodeProto *NarrowingConsumer(builder::GraphGraph &graph, const std::string
     return nullptr;
   }
   const auto &consumers = graph.NextNodes(name);
-  if (consumers.size() != 1 || !IsCast(consumers[0], TensorProto::DataType::FLOAT16) ||
+  if (consumers.size() != 1 || !IsCast(graph, consumers[0], TensorProto::DataType::FLOAT16) ||
       !HasType(graph, consumers[0]->output(0), sym::TensorType::kFloat16)) {
     return nullptr;
   }
@@ -99,7 +102,7 @@ bool ExactHalfConstant(const TensorProto *tensor, TensorProto *converted = nullp
 
 bool HalfSource(builder::GraphGraph &graph, const std::string &name) {
   const auto *cast = graph.NodeBefore(name);
-  return IsCast(cast, TensorProto::DataType::FLOAT) &&
+  return IsCast(graph, cast, TensorProto::DataType::FLOAT) &&
          HasType(graph, cast->input(0), sym::TensorType::kFloat16);
 }
 

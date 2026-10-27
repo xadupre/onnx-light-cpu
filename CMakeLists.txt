@@ -954,8 +954,12 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;lib_onnx_light_cpu_backend_test")
           endif()
-        elseif(_test_name STREQUAL "test_onnx_light_binary_manifest" OR
-               _test_name STREQUAL "test_onnx_light_normalization_cast")
+        elseif(_test_name STREQUAL "test_onnx_light_normalization_cast")
+          if(TARGET onnx_light::lib_onnx_op AND TARGET onnx_light::lib_onnx_shape)
+            onnx_light_cpu_add_test("${_test_src}"
+                "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op;onnx_light::lib_onnx_shape")
+          endif()
+        elseif(_test_name STREQUAL "test_onnx_light_binary_manifest")
           if(TARGET onnx_light::lib_onnx_op)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op")
