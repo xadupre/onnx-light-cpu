@@ -266,7 +266,7 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
 }
 
 // Registers the onnx-light-cpu backend test cases and kernels, then runs every
-// executable ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
+// ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
 // runtime, collecting failures. Correctness (``TEST``) cases have their outputs
 // compared; benchmark (``BENCHMARK``) cases are only executed.
 std::vector<std::string>
@@ -288,13 +288,6 @@ RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode
       continue;
     }
     TestCaseUnloadGuard unload_guard(tc);
-    const auto &graph = tc.model().ref_graph();
-    // These exported cases support graph construction, but the CPU kernel is FLOAT-only.
-    if (op_type == "LinearAttention" && graph.node(0).domain() == "com.microsoft" &&
-        graph.input(0).type().tensor_type().elem_type() !=
-            static_cast<std::int32_t>(core::runtime::DataType::FLOAT)) {
-      continue;
-    }
     ++cpu_cases;
     try {
       RunCaseThroughRuntime(tc, compare, failures, used);
@@ -365,11 +358,12 @@ TEST(OnnxLightBackendKernels, LinearAttentionPoliciesRunIndependentMicrosoftKern
 TEST(OnnxLightBackendKernels, MicrosoftLinearAttentionLowPrecisionCasesPreserveGraphTypes) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   onnx_light_cpu::RegisterAllKernels();
-  auto cases = CollectCpuCases("LinearAttention", core::backend_test::TestMode::TEST);
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  auto cases = CollectTestCases("LinearAttention", false, core::backend_test::TestMode::TEST);
   for (const auto data_type :
        {core::runtime::DataType::FLOAT16, core::runtime::DataType::BFLOAT16}) {
     for (const std::string rule : {"linear", "gated", "delta", "gated_delta_past"}) {
-      const auto name = "test_cpu_microsoft_linear_attention_" + rule + "_" +
+      const auto name = "test_graph_microsoft_linear_attention_" + rule + "_" +
                         onnx_light_cpu::backend_test::DataTypeSuffix(data_type);
       SCOPED_TRACE(name);
       const auto found = std::find_if(cases.begin(), cases.end(),

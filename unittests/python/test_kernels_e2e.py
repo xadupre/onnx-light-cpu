@@ -600,6 +600,30 @@ class TestKernelUsage(ExtTestCase):
 
 
 class TestBackendCases(ExtTestCase):
+    def test_microsoft_linear_attention_graph_cases_are_not_cpu_execution_cases(self):
+        names = {
+            f"test_graph_microsoft_linear_attention_{rule}_{dtype}"
+            for rule in ("linear", "gated", "delta", "gated_delta_past")
+            for dtype in ("float16", "bfloat16")
+        }
+        cases = {
+            case.name: case
+            for case in collect_test_cases("LinearAttention", mode=TestMode.TEST)
+            if case.name.startswith("test_graph_microsoft_linear_attention_")
+        }
+        self.assertEqual(set(cases), names)
+        for name in names:
+            self.assertFalse(hasattr(TestCpuBackend, f"test_{name}"))
+            self.assertFalse(
+                hasattr(TestCpuBackend, f"test_{name.replace('test_graph_', 'test_cpu_', 1)}")
+            )
+        self.assertTrue(
+            hasattr(
+                TestCpuBackend,
+                "test_test_cpu_microsoft_linear_attention_linear_float32",
+            )
+        )
+
     def setUp(self):
         register_kernels()
 
