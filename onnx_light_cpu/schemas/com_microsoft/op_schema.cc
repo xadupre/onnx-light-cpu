@@ -297,7 +297,9 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
 LightOpSchema MakeLinearAttentionSchema() {
   LightOpSchema schema(
       "LinearAttention", kMicrosoftDomain, 1,
-      "Recurrent linear attention with optional decay, delta updates, and persistent state.",
+      "Recurrent linear attention with optional decay, delta updates, and persistent state. "
+      "Graph construction supports FLOAT, FLOAT16, and BFLOAT16; native CPU kernels currently "
+      "support FLOAT only.",
       {{"query", "Query tensor with shape (batch, sequence, q_num_heads * key_head_size).", "T"},
        {"key", "Key tensor with shape (batch, sequence, key_heads * key_head_size).", "T"},
        {"value", "Value tensor with shape (batch, sequence, kv_num_heads * value_head_size).", "T"},
@@ -315,7 +317,9 @@ LightOpSchema MakeLinearAttentionSchema() {
         "Updated state with shape "
         "(batch, kv_num_heads, key_head_size, value_head_size).",
         "T"}},
-      {{"T", {TensorType::kFloat}, "Constrain the CPU implementation to FLOAT tensors."}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching FLOAT, FLOAT16, or BFLOAT16 tensors."}},
       {AttributeParam{"q_num_heads", "Number of query heads.", AttributeType::INT, true},
        AttributeParam{"kv_num_heads", "Number of value/state heads.", AttributeType::INT, true},
        AttributeParam{"update_rule", "linear, gated, delta, or gated_delta.", AttributeType::STRING,

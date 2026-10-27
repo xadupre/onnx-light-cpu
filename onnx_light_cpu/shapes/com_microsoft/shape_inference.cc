@@ -1366,8 +1366,11 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
     throw std::invalid_argument(
         "ComputeShapeLinearAttention: query, key, and value types must match.");
   }
-  if (query.Dtype() != sym_ns::TensorType::kFloat) {
-    throw std::invalid_argument("ComputeShapeLinearAttention: only FLOAT tensors are supported.");
+  if (query.Dtype() != sym_ns::TensorType::kFloat &&
+      query.Dtype() != sym_ns::TensorType::kFloat16 &&
+      query.Dtype() != sym_ns::TensorType::kBfloat16) {
+    throw std::invalid_argument(
+        "ComputeShapeLinearAttention: expected FLOAT, FLOAT16, or BFLOAT16 tensors.");
   }
   if (query.Shape().Rank() != 3 || key.Shape().Rank() != 3 || value.Shape().Rank() != 3) {
     throw std::invalid_argument(
@@ -1426,9 +1429,9 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
 
   if (has_past) {
     const SymTensor &past = ctx.Get(node.input(3));
-    if (past.Dtype() != sym_ns::TensorType::kFloat || past.Shape().Rank() != 4) {
+    if (past.Dtype() != query.Dtype() || past.Shape().Rank() != 4) {
       throw std::invalid_argument(
-          "ComputeShapeLinearAttention: past_state must be a rank-4 FLOAT tensor.");
+          "ComputeShapeLinearAttention: past_state must have rank 4 and match the query type.");
     }
     batch = MergeGqaDim(ctx, batch, past.Shape()[0], "past_state batch");
     MergeGqaDim(ctx, past.Shape()[1], sym_ns::SymDim(kv_heads), "past_state heads");
@@ -1437,9 +1440,9 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
   }
   if (has_decay) {
     const SymTensor &decay = ctx.Get(node.input(4));
-    if (decay.Dtype() != sym_ns::TensorType::kFloat || decay.Shape().Rank() != 3) {
+    if (decay.Dtype() != query.Dtype() || decay.Shape().Rank() != 3) {
       throw std::invalid_argument(
-          "ComputeShapeLinearAttention: decay must be a rank-3 FLOAT tensor.");
+          "ComputeShapeLinearAttention: decay must have rank 3 and match the query type.");
     }
     MergeGqaDim(ctx, batch, decay.Shape()[0], "decay batch");
     MergeGqaDim(ctx, sequence, decay.Shape()[1], "decay sequence");
@@ -1456,9 +1459,9 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
   }
   if (has_beta) {
     const SymTensor &beta = ctx.Get(node.input(5));
-    if (beta.Dtype() != sym_ns::TensorType::kFloat || beta.Shape().Rank() != 3) {
+    if (beta.Dtype() != query.Dtype() || beta.Shape().Rank() != 3) {
       throw std::invalid_argument(
-          "ComputeShapeLinearAttention: beta must be a rank-3 FLOAT tensor.");
+          "ComputeShapeLinearAttention: beta must have rank 3 and match the query type.");
     }
     MergeGqaDim(ctx, batch, beta.Shape()[0], "beta batch");
     MergeGqaDim(ctx, sequence, beta.Shape()[1], "beta sequence");
