@@ -119,6 +119,20 @@ class TestRenderKernelPage(ExtTestCase):
         assert "LightOpSchema" in text
         assert "**A** (``T``): Left input." in text
 
+    def test_registered_pattern_hooks_are_not_linked_as_cpp_classes(self):
+        record = _record("SkipSimplifiedLayerNormalization", domain="com.microsoft")
+        support = SupportRecord(
+            record.domain,
+            record.op_type,
+            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization",
+            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization",
+            ("MicrosoftNormalizationCast",),
+            False,
+        )
+        text = render_kernel_page(record, support=support)
+        assert "``MicrosoftNormalizationCast``" in text
+        assert ":cpp:class:`MicrosoftNormalizationCast`" not in text
+
     def test_schema_renderer_includes_attributes_and_constraints(self):
         schema = SimpleNamespace(
             since_version=1,

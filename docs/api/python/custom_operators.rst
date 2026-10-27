@@ -17,6 +17,41 @@ Custom operators
    These adapters are separate from standardized ONNX schemas and from the
    Microsoft-only :func:`custom_op_schemas` provider.
 
+Microsoft normalization cast elimination
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. py:function:: normalization_cast_pattern(kernel_name)
+
+   Returns a native ``MicrosoftNormalizationCast`` pattern for an explicit
+   execution-kernel contract. Operator-support metadata exposes the same
+   ``MicrosoftNormalizationCast`` registry name. Pass it in the optimizer's pattern list and set
+   the builder's target device to CPU. The caller must guarantee that both the
+   original and rewritten graphs execute with the named kernel, including
+   session-local overrides.
+
+   Currently only ``onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization``
+   is eligible. It uses identical FLOAT arithmetic for FLOAT and FLOAT16
+   inputs, including residual addition without intermediate FLOAT16 rounding.
+   The optimized kernel has different reduction and affine rounding paths,
+   so its name (like unknown or empty names) leaves the graph unchanged.
+   The default registered pattern has no execution contract and is disabled;
+   merely registering CPU kernels is not proof of the eventual session kernel.
+
+   The rewrite bypasses FLOAT16-to-FLOAT input casts and absorbs the final
+   FLOAT16 cast. Scale and bias must come from FLOAT16 casts or exactly
+   representable, finite FLOAT constants; arbitrary FLOAT weights are never
+   rounded. Exact weight copies are emitted directly as FLOAT16 initializers,
+   without adding Constant nodes or requiring a constant-folding pass.
+   Shared input casts remain available to their other consumers.
+   FLOAT statistics keep their names and types. A live residual sum must
+   exclusively feed a FLOAT16 cast; a live FLOAT residual prevents rewriting.
+   Epsilon and optional slots are preserved, and ``stash_type`` is never added.
+
+   Other Microsoft variants, BFLOAT16, and the experimental
+   ``ai.onnx::SimplifiedLayerNormalization`` compatibility adapter are not
+   rewritten. In particular, this optimization never changes that adapter's
+   domain.
+
 Microsoft MultiHeadAttention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

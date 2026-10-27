@@ -220,7 +220,10 @@ def _operator_support_lines(support: SupportRecord | None) -> List[str]:
             "",
         ]
 
-    patterns = ", ".join(_cpp_role("class", pattern) for pattern in support.fusion_patterns)
+    patterns = ", ".join(
+        _cpp_role("class", pattern) if "::" in pattern else f"``{pattern}``"
+        for pattern in support.fusion_patterns
+    )
     gradient = (
         _cpp_role("func", "onnx_light_cpu::RegisterCustomOperatorGradients")
         if support.has_gradient

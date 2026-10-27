@@ -405,21 +405,22 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
     bool has_gradient;
   };
   const std::vector<Expected> expected = {
-      {"com.microsoft", "BiasGelu", "BiasGeluFusionPattern", true},
-      {"com.microsoft", "CDist", "CDistFusionPattern", true},
+      {"com.microsoft", "BiasGelu", "onnx_light_cpu::BiasGeluFusionPattern", true},
+      {"com.microsoft", "CDist", "onnx_light_cpu::CDistFusionPattern", true},
       {"com.microsoft", "CausalConvWithState", "", false},
       {"com.microsoft", "GatherBlockQuantized", "", false},
-      {"com.microsoft", "GroupQueryAttention", "GroupQueryAttentionFusionPattern", true},
+      {"com.microsoft", "GroupQueryAttention", "onnx_light_cpu::GroupQueryAttentionFusionPattern",
+       true},
       {"com.microsoft", "MultiHeadAttention", "", false},
-      {"com.microsoft", "LinearAttention", "LinearAttentionFusionPattern", false},
-      {"com.microsoft", "MatMulNBits", "MatMulNBitsBiasFusionPattern", true},
+      {"com.microsoft", "LinearAttention", "onnx_light_cpu::LinearAttentionFusionPattern", false},
+      {"com.microsoft", "MatMulNBits", "onnx_light_cpu::MatMulNBitsBiasFusionPattern", true},
       {"com.microsoft", "MoE", "", false},
       {"com.microsoft", "QMoE", "", false},
       {"com.microsoft", "RotaryEmbedding", "", false},
       {"ai.onnx", "RotaryEmbedding", "", false},
       {"ai.onnx", "SimplifiedLayerNormalization", "", false},
       {"com.microsoft", "SkipLayerNormalization", "", false},
-      {"com.microsoft", "SkipSimplifiedLayerNormalization", "", false}};
+      {"com.microsoft", "SkipSimplifiedLayerNormalization", "MicrosoftNormalizationCast", false}};
   ASSERT_EQ(support.size(), expected.size());
   for (const auto &entry : expected) {
     const auto actual = std::find_if(support.begin(), support.end(), [&](const auto &record) {
@@ -431,10 +432,15 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
     EXPECT_EQ(actual->peak_memory_function,
               std::string("onnx_light_cpu::ComputePeakMemory") + entry.op_type);
     const std::vector<std::string> fusions =
-        entry.fusion[0] ? std::vector<std::string>{std::string("onnx_light_cpu::") + entry.fusion}
-                        : std::vector<std::string>{};
+        entry.fusion[0] ? std::vector<std::string>{entry.fusion} : std::vector<std::string>{};
     EXPECT_EQ(actual->fusion_patterns, fusions);
     EXPECT_EQ(actual->has_gradient, entry.has_gradient);
+    if (actual->op_type == "SkipSimplifiedLayerNormalization") {
+      onnx_light_cpu::RegisterCustomOperatorPatterns();
+      const auto names = builder_ns::RegisteredPatternNames();
+      ASSERT_EQ(actual->fusion_patterns.size(), 1U);
+      EXPECT_NE(std::find(names.begin(), names.end(), actual->fusion_patterns[0]), names.end());
+    }
   }
 }
 
@@ -1096,6 +1102,8 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftLinearAttention"),
             patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftMatMulNBitsBias"),
+            patterns.end());
+  EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftNormalizationCast"),
             patterns.end());
 }
 
