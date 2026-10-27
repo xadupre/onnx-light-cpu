@@ -149,7 +149,10 @@ IoData MakeLinearAttentionData(const LinearAttentionCase &test_case,
     const Tensor *past_ptr = past ? &*past : nullptr;
     const Tensor *decay_ptr = decay ? &*decay : nullptr;
     const Tensor *beta_ptr = beta ? &*beta : nullptr;
-    outputs = contract == LinearAttentionCaseContract::kMicrosoft
+    // Low-precision Microsoft cases cover graph construction, not native CPU execution.
+    // Their ordinary head grouping has the same contract as the ONNX reference.
+    outputs = contract == LinearAttentionCaseContract::kMicrosoft &&
+                      test_case.data_type == DataType::FLOAT
                   ? MicrosoftReference(test_case, query, key, value, past_ptr, decay_ptr, beta_ptr)
                   : OnnxReference(test_case, query, key, value, past_ptr, decay_ptr, beta_ptr);
   }
@@ -205,8 +208,11 @@ void RegisterLinearAttentionCase(std::vector<bt_ns::TestCase> &registry,
 
   const bool microsoft = contract == LinearAttentionCaseContract::kMicrosoft;
   const OpsetId operator_opset = microsoft ? OpsetId(kMicrosoftDomain, 1) : DefaultOpset(27);
-  const std::string prefix =
-      microsoft ? "test_cpu_microsoft_linear_attention_" : "test_cpu_linear_attention_";
+  std::string prefix = "test_cpu_linear_attention_";
+  if (microsoft) {
+    prefix = test_case.data_type == DataType::FLOAT ? "test_cpu_microsoft_linear_attention_"
+                                                    : "test_graph_microsoft_linear_attention_";
+  }
   const std::string name = prefix + test_case.name + "_" + DataTypeSuffix(test_case.data_type) +
                            (benchmark ? "_benchmark" : "");
   std::vector<OpsetId> opsets{DefaultOpset(27)};

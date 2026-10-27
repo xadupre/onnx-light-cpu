@@ -1051,6 +1051,74 @@ TEST(CustomOperatorSupport, InfersLinearAttentionSharedKeyHeadsStateShape) {
             sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
 }
 
+TEST(CustomOperatorSupport, RegisteredLinearAttentionPreservesFloatingTypes) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  const auto &infer = shapes_ns::DispatchTable().at("com.microsoft:LinearAttention");
+  for (const auto dtype : {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16,
+                           TensorType::kDouble, TensorType::kInt64}) {
+    for (const auto query_heads : {1, 4}) {
+      for (const auto key_heads : {1, 2}) {
+        SCOPED_TRACE(::testing::Message() << "dtype=" << static_cast<int>(dtype) << " query_heads="
+                                          << query_heads << " key_heads=" << key_heads);
+        shapes_ns::ShapesContext ctx;
+        ctx.Set("Q",
+                SymTensor(nullptr, dtype, {SymDim("B"), SymDim("S"), SymDim(query_heads * 4)}));
+        ctx.Set("K", SymTensor(nullptr, dtype, {SymDim("B"), SymDim("S"), SymDim(key_heads * 4)}));
+        ctx.Set("V", SymTensor(nullptr, dtype, {SymDim("B"), SymDim("S"), SymDim(12)}));
+        ctx.Set("past", SymTensor(nullptr, dtype, {SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
+        ctx.Set("decay", SymTensor(nullptr, dtype, {SymDim("B"), SymDim("S"), SymDim(2)}));
+        ctx.Set("beta", SymTensor(nullptr, dtype, {SymDim("B"), SymDim("S"), SymDim(1)}));
+        NodeProto node;
+        node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+        node.set_op_type("LinearAttention");
+        for (const auto *name : {"Q", "K", "V", "past", "decay", "beta"}) {
+          node.add_input(name);
+        }
+        node.add_output("Y");
+        node.add_output("present_state");
+        ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{query_heads});
+        ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+        if (dtype == TensorType::kDouble || dtype == TensorType::kInt64) {
+          EXPECT_THROW(infer(ctx, node), std::invalid_argument);
+          continue;
+        }
+        infer(ctx, node);
+        EXPECT_EQ(ctx.Get("Y").Dtype(), dtype);
+        EXPECT_EQ(ctx.Get("present_state").Dtype(), dtype);
+        EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"),
+                                                          SymDim(std::max(query_heads, 2) * 6)}));
+        EXPECT_EQ(ctx.Get("present_state").Shape(), ctx.Get("past").Shape());
+
+        builder_ns::GraphBuilder builder("linear_attention", SchemaLookup());
+        builder.SetOpsetVersion("", 21);
+        builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+        for (const auto &name : node.input()) {
+          builder.MakeInput(name, dtype, ctx.Get(name).Shape());
+        }
+        builder.MakeNode("LinearAttention", {"Q", "K", "V", "past", "decay", "beta"},
+                         {"Y", "present_state"}, onnx_light_cpu::kMicrosoftDomain,
+                         "linear_attention", node.attribute());
+        EXPECT_EQ(builder.GetShape("Y").Dtype(), dtype);
+        EXPECT_EQ(builder.GetShape("Y").Shape(), ctx.Get("Y").Shape());
+        EXPECT_EQ(builder.GetShape("present_state").Dtype(), dtype);
+        EXPECT_EQ(builder.GetShape("present_state").Shape(), ctx.Get("past").Shape());
+
+        for (const auto *name : {"Q", "K", "V", "past", "decay", "beta"}) {
+          SCOPED_TRACE(name);
+          const SymTensor original = ctx.Get(name);
+          const auto wrong_dtype =
+              dtype == TensorType::kFloat ? TensorType::kFloat16 : TensorType::kFloat;
+          ctx.Set(name, SymTensor(nullptr, wrong_dtype, original.Shape()));
+          EXPECT_THROW(infer(ctx, node), std::invalid_argument);
+          ctx.Set(name, SymTensor(nullptr, dtype, original.Shape()));
+        }
+        ctx.Set("past", SymTensor(nullptr, dtype, {SymDim("B"), SymDim(2), SymDim(5), SymDim(6)}));
+        EXPECT_THROW(infer(ctx, node), std::invalid_argument);
+      }
+    }
+  }
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),

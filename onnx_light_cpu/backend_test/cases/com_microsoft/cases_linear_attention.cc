@@ -43,6 +43,20 @@ void RegisterCpuMicrosoftLinearAttentionCases(std::vector<TestCase> &registry, T
     RegisterLinearAttentionCase(registry, test_case, LinearAttentionCaseContract::kMicrosoft,
                                 false);
   }
+  for (const auto data_type : {rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const LinearAttentionCase &test_case :
+         {LinearAttentionCase{"linear", 1, 3, 2, 2, 2, 4, 3, "linear", false, false, false,
+                              data_type, 4171},
+          LinearAttentionCase{"gated", 1, 3, 2, 2, 2, 4, 3, "gated", false, true, false, data_type,
+                              4181},
+          LinearAttentionCase{"delta", 1, 3, 2, 2, 2, 4, 3, "delta", false, false, true, data_type,
+                              4191},
+          LinearAttentionCase{"gated_delta_past", 1, 3, 2, 2, 2, 4, 3, "gated_delta", true, false,
+                              false, data_type, 4201}}) {
+      RegisterLinearAttentionCase(registry, test_case, LinearAttentionCaseContract::kMicrosoft,
+                                  false);
+    }
+  }
 }
 
 } // namespace onnx_light_cpu::backend_test
