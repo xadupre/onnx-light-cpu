@@ -32,8 +32,11 @@
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_core/backend_test/test_case.h"
+#include "onnx_core/builder/graph_builder.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/kernels/tensor_compare.h"
@@ -263,7 +266,7 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
 }
 
 // Registers the onnx-light-cpu backend test cases and kernels, then runs every
-// ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
+// executable ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
 // runtime, collecting failures. Correctness (``TEST``) cases have their outputs
 // compared; benchmark (``BENCHMARK``) cases are only executed.
 std::vector<std::string>
@@ -285,6 +288,13 @@ RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode
       continue;
     }
     TestCaseUnloadGuard unload_guard(tc);
+    const auto &graph = tc.model().ref_graph();
+    // These exported cases support graph construction, but the CPU kernel is FLOAT-only.
+    if (op_type == "LinearAttention" && graph.node(0).domain() == "com.microsoft" &&
+        graph.input(0).type().tensor_type().elem_type() !=
+            static_cast<std::int32_t>(core::runtime::DataType::FLOAT)) {
+      continue;
+    }
     ++cpu_cases;
     try {
       RunCaseThroughRuntime(tc, compare, failures, used);
@@ -349,6 +359,65 @@ TEST(OnnxLightBackendKernels, LinearAttentionPoliciesRunIndependentMicrosoftKern
     const bool is_naive = policy == MicrosoftKernelImplementation::NAIVE;
     EXPECT_NE(std::find(used.begin(), used.end(), is_naive ? naive : optimized), used.end());
     EXPECT_EQ(std::find(used.begin(), used.end(), is_naive ? optimized : naive), used.end());
+  }
+}
+
+TEST(OnnxLightBackendKernels, MicrosoftLinearAttentionLowPrecisionCasesPreserveGraphTypes) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  onnx_light_cpu::RegisterAllKernels();
+  auto cases = CollectCpuCases("LinearAttention", core::backend_test::TestMode::TEST);
+  for (const auto data_type :
+       {core::runtime::DataType::FLOAT16, core::runtime::DataType::BFLOAT16}) {
+    for (const std::string rule : {"linear", "gated", "delta", "gated_delta_past"}) {
+      const auto name = "test_cpu_microsoft_linear_attention_" + rule + "_" +
+                        onnx_light_cpu::backend_test::DataTypeSuffix(data_type);
+      SCOPED_TRACE(name);
+      const auto found = std::find_if(cases.begin(), cases.end(),
+                                      [&name](const TestCase &tc) { return tc.name == name; });
+      ASSERT_NE(found, cases.end());
+      EXPECT_FALSE(found->materialized());
+      TestCaseUnloadGuard unload_guard(*found);
+      const auto &model = found->model();
+      const auto &node = model.ref_graph().node(0);
+      ASSERT_EQ(node.domain(), "com.microsoft");
+      ASSERT_EQ(found->data_sets().size(), 1U);
+      const auto &data = found->data_sets()[0];
+      ASSERT_TRUE(data.expected_outputs_generated);
+      ASSERT_EQ(data.outputs.size(), 2U);
+      core::builder::GraphBuilder builder(name, [](const std::string &op) {
+        return onnx_light_cpu::GetMicrosoftOpSchemasWithHistory(op, false);
+      });
+      for (const auto &opset : model.opset_import()) {
+        builder.SetOpsetVersion(opset.domain(), opset.version());
+      }
+      for (const auto &input : data.inputs) {
+        EXPECT_EQ(input.data_type, data_type);
+      }
+      for (const auto &input : model.ref_graph().input()) {
+        builder.MakeInput(input);
+      }
+      builder.MakeNode(node.op_type(),
+                       std::vector<std::string>(node.input().begin(), node.input().end()),
+                       std::vector<std::string>(node.output().begin(), node.output().end()),
+                       node.domain(), node.name(), node.attribute());
+      for (const auto &output : data.outputs) {
+        EXPECT_EQ(output.data_type, data_type);
+        const auto &inferred = builder.GetShape(output.name);
+        EXPECT_EQ(inferred.Dtype(), core::symbolic::DataTypeToTensorType(data_type));
+        ASSERT_EQ(inferred.Shape().Rank(), output.shape.size());
+        for (std::size_t i = 0; i < output.shape.size(); ++i) {
+          EXPECT_EQ(inferred.Shape()[i], core::symbolic::SymDim(output.shape[i]));
+        }
+        builder.MakeOutput(output.name);
+      }
+      const auto exported = builder.ToModel();
+      for (const auto &output : exported.ref_graph().output()) {
+        EXPECT_EQ(output.type().tensor_type().elem_type(), static_cast<std::int32_t>(data_type));
+      }
+      std::vector<std::string> failures;
+      EXPECT_THROW(RunCaseThroughRuntime(*found, true, failures), std::invalid_argument);
+      EXPECT_TRUE(failures.empty()) << Describe(failures);
+    }
   }
 }
 

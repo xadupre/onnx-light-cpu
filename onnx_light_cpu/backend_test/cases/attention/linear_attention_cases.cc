@@ -149,7 +149,10 @@ IoData MakeLinearAttentionData(const LinearAttentionCase &test_case,
     const Tensor *past_ptr = past ? &*past : nullptr;
     const Tensor *decay_ptr = decay ? &*decay : nullptr;
     const Tensor *beta_ptr = beta ? &*beta : nullptr;
-    outputs = contract == LinearAttentionCaseContract::kMicrosoft
+    // Low-precision Microsoft cases cover graph construction, not native CPU execution.
+    // Their ordinary head grouping has the same contract as the ONNX reference.
+    outputs = contract == LinearAttentionCaseContract::kMicrosoft &&
+                      test_case.data_type == DataType::FLOAT
                   ? MicrosoftReference(test_case, query, key, value, past_ptr, decay_ptr, beta_ptr)
                   : OnnxReference(test_case, query, key, value, past_ptr, decay_ptr, beta_ptr);
   }
