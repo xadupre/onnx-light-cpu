@@ -249,7 +249,7 @@ then profile tiled and streaming test filters separately using ``gprof``.
 Hardware ``perf`` counters were unavailable on this host.
 
 Issue 982: AVX2 tile products and short queries
----------------------------------------------
+-----------------------------------------------
 
 The 2026-10-24 investigation reproduced all 37 named gaps on an AMD EPYC
 7763 virtual machine (four visible logical CPUs). Baseline code was
@@ -388,7 +388,7 @@ This build system does not expose a scalar-only ceiling; no scalar or
 AVX-512 performance claim is made.
 
 Issue 986: short causal GroupQueryAttention on AVX2
---------------------------------------------------
+---------------------------------------------------
 
 The 2026-10-25 reproduction used an AMD EPYC 7763 VM with four visible logical
 CPUs, GCC 13.3.0 Release, Python 3.13.16, and an AVX2 ceiling (reported SIMD

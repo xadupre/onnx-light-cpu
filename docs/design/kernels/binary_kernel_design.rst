@@ -494,7 +494,7 @@ The existing benchmark CLI also selects these cases, but uses separate backend
 phases and default spin policies rather than the controlled alternating loop.
 
 Float32 Div beyond last-level cache on AVX/AVX2
-----------------------------------------------
+-----------------------------------------------
 
 Out-of-place contiguous float32 ``Div`` can use non-temporal AVX stores when
 the executor exposes one thread and the two inputs plus output exceed both
