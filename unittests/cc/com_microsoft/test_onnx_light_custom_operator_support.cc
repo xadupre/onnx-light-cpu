@@ -419,7 +419,8 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       {"ai.onnx", "RotaryEmbedding", "", false},
       {"ai.onnx", "SimplifiedLayerNormalization", "", false},
       {"com.microsoft", "SkipLayerNormalization", "", false},
-      {"com.microsoft", "SkipSimplifiedLayerNormalization", "", false}};
+      {"com.microsoft", "SkipSimplifiedLayerNormalization", "NormalizationCastEliminationPattern",
+       false}};
   ASSERT_EQ(support.size(), expected.size());
   for (const auto &entry : expected) {
     const auto actual = std::find_if(support.begin(), support.end(), [&](const auto &record) {
