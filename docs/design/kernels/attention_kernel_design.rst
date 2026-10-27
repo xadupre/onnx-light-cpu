@@ -499,3 +499,181 @@ rows, and runtime scheduling without nesting. The unsafe-value regression
 checks NaN, both infinities, and extreme FP32 values, then changes V back to
 finite values to verify invocation-local selection. No AVX-512 or scalar
 performance claim is made.
+
+Issue 1029: retained AVX2 dense-softmax and strided-output optimization
+--------------------------------------------------------------------
+
+The 2026-10-27 follow-up retains two computation changes, rather than only
+documenting attribution:
+
+* For a finite, unmasked, noncausal single-KV-block tile, reuse the existing
+  AVX2/FMA softmax polynomial and range selection, but fuse subtraction,
+  exponentiation and denominator reduction. Leave probabilities
+  **unnormalized**: the value product still accumulates in FP32 before final
+  output normalization. Masks, nonpad lengths, windows, softcap, multiple KV
+  blocks and nonfinite scores retain the existing online-softmax path.
+* Let the existing direct AVX2 value microkernel write through the output
+  sequence stride. Rank-three FP32 no longer needs a contiguous output
+  temporary followed by a scatter for eligible single-block products.
+  The value-kernel eligibility is unchanged and shared by dispatch and
+  destination selection; general GEMM still receives contiguous output.
+
+There are no new scratch buffers, worker allocations, packing caches,
+threads, ISA flags or wider value-GEMM dispatch gates. Scalar and AVX-512
+dispatch remain unchanged. The shared normalized Softmax entry point uses
+the same implementation with normalization enabled.
+
+Measurements
+~~~~~~~~~~~~
+
+The baseline is remote main ``233c60976a6e0de7a183abb48631106fdfd4a186``,
+refreshed with ``git fetch origin`` before building. This is a different
+machine from the previous campaigns: Intel Xeon Platinum 8480C, GCC 13.2.0,
+CMake 4.1.1, Release ``-O3 -DNDEBUG``, and an **AVX2 ceiling**. The dependency
+is the onnx-light source checkout at
+``6d6364cc44bf060eafe913bfa6e6b03b68dc5778``, linked against the libraries
+reported by ``get_cpp_build_info()``, with the Python stable ABI enabled.
+Python is 3.12.15, NumPy 2.5.3 and ml-dtypes 0.5.4. The imported ORT is a
+local 1.32.0 Release build at ``782dc0c5b5562b52319d735ae31a4d6e8349e656``,
+on branch ``moe-fp16-cpu-offload-and-adaptive-swap``. Installed distribution
+metadata reports 1.29.0, but does not describe the runtime imported through
+``PYTHONPATH``; the ORT version above comes from ``onnxruntime.__version__``
+and ``get_build_info()``.
+
+ORT is not capped at AVX2. A debugger trace of the rank-four FP16
+128/128/256 case confirms that its Attention FP32 GEMM fallback reaches
+``MlasGemmFloatKernelAvx512F``. These timings therefore compare our
+AVX2-ceiling build with unrestricted ORT, not ISA-matched implementations.
+
+Separate-process timings drifted substantially, including ORT controls.
+Consequently, the controlled A/B campaign used the **same ReferenceEvaluator,
+registered models and feeds in one process**, pinned to CPU 2, one runtime
+thread, 40 warmups and 400 measured samples per candidate. A temporary
+invocation-level boolean enabled/disabled both new decisions; it was set
+outside each session run. Disabling it restored online softmax and buffered
+rank-three output. The boolean and its checks are not retained in production.
+The repeat rotated old/new/ORT order every iteration, with ORT sequential,
+one intra/inter-op thread and both spinning options disabled. Compilation
+and other timed campaigns did not overlap. Correctness comparisons used the
+existing runner's unchanged tolerances.
+
+Median milliseconds below are from that repeated three-candidate campaign.
+``Speedup`` is before/after, not ORT/CPU. ``First speedup`` is the preceding
+400-sample alternating old/new campaign, included to expose repeatability.
+
+.. csv-table::
+   :header: "Layout/type, Q/KV/D", "Before", "After", "ORT", "Speedup", "First speedup"
+
+   "rank3 FP32, 128/128/64", "0.83794", "0.75006", "0.46113", "1.117x", "1.092x"
+   "rank3 FP32, 129/257/64", "1.76365", "1.63098", "0.99367", "1.081x", "1.072x"
+   "rank4 FP16, 128/128/64", "0.77298", "0.72870", "0.63915", "1.061x", "1.063x"
+   "rank4 FP16, 16/128/64", "0.14813", "0.14210", "0.13243", "1.042x", "1.038x"
+   "rank4 FP16, 16/257/63", "0.29808", "0.28766", "0.27288", "1.036x", "1.032x"
+   "rank4 FP16, 128/128/128", "1.74193", "1.69199", "1.27978", "1.030x", "1.029x"
+   "rank4 FP16, 128/128/256", "3.29573", "3.25455", "2.37042", "1.013x", "1.023x"
+   "rank4 FP16, 129/257/256", "7.50962", "7.42169", "4.96428", "1.012x", "1.015x"
+
+The rank-three reduction is repeatable (approximately 7--10% lower latency).
+FP16 benefits diminish as head dimension increases: the hd256 differences
+are small, and **the wide-head bottleneck is not resolved**. ORT remains
+faster on every row; issue 1029 must not be considered fully fixed.
+Direct multi-query dot products and alternative value microtiles were also
+tried, but their regressions or inconsistent benefits did not justify
+retaining them.
+
+Reproduce the production-path ORT comparison with the normal ``AUTO``
+configuration and binaries installed only into the source checkout.
+The historical measurements above used an explicit AVX2 ceiling instead.
+
+.. code-block:: bash
+
+   cmake -S . -B build/temp -UONNX_LIGHT_CPU_MAX_SIMD_LEVEL \
+     -DML_CPU_COMPUTE_MAX_SIMD_LEVEL=AUTO
+   cmake --build build/temp --parallel 48 \
+     --target test_attention_plan test_exp_log_kernel _cpuregister _cpukernels
+   cmake --install build/temp --prefix "$PWD"
+   python tools/benchmark_attention_parity.py \
+     --threads 1 --cpus 2 --warmup 40 --repeat 400 --max-repeat-time 4 \
+     --case '^test_cpu_attention_opset23_rank3_mha_q(128|129)_kv(128|257)_hd64_none_stateless_float32_benchmark$' \
+     --case '^test_cpu_attention_opset23_rank4_mha_q(16|128|129)_kv(128|257)_hd(63|64|128|256)_none_stateless_float16_benchmark$' \
+     --output /tmp/attention-1029-auto.json
+
+Validation includes all 93 Attention tests, 36 shared math tests and 18
+Sigmoid/Softmax adapter tests under the AVX2 ceiling. An AVX-512-ceiling
+build passes 89 Attention tests (four AVX2-only tests skip) and all 39 shared
+math tests. New coverage compares the
+fused unnormalized primitive with online softmax across vector tails and
+normal/subnormal/extreme ranges, verifies nonfinite-score fallback followed
+by finite reuse, and extends materialized-oracle comparisons to wide heads,
+q128/q129, KV257/KV513, both layouts and precisions, masks and runtime-owned
+scheduling. All 48 default-corpus stateless/nonpad FP32/FP16 cases also
+pass the existing ORT correctness comparison in the final production build;
+that short correctness run is not performance evidence and does not pass
+the runner's ORT performance-parity thresholds. No AVX-512 or scalar
+performance improvement is claimed.
+
+Corrected AUTO/AVX-512 comparison
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The follow-up removes the installed editable distribution and its import
+hook. Normal Python imports now load both native CPU modules from the source
+checkout. ``ML_CPU_COMPUTE_MAX_SIMD_LEVEL=AUTO`` reports ``AVX512`` on this
+machine; no AVX2 ceiling is retained. The dependency checkout has meanwhile
+advanced to ``34c79978604659f7910ed234b687e4402c68451e`` (onnx-light 0.2.1).
+Its stale ``_onnxpyprotoop`` module required an incremental rebuild before
+the benchmark could import successfully.
+
+The runner now feeds backend tensors directly to onnx-light-cpu, as the
+shared backend benchmark does; only ORT receives NumPy feeds. It records
+imported module versions, native module paths, the detected CPU SIMD level
+and ORT's build information instead of trusting stale installed-distribution
+versions. ORT remains the local 1.32.0 build identified above.
+
+Two independent campaigns use CPU 2, one thread per runtime, alternating
+CPU/ORT order, 40 warmups and exactly 400 samples per runtime and case.
+The table gives second-campaign medians in milliseconds and both campaigns'
+``ORT/CPU`` ratios; a ratio above one favors onnx-light-cpu.
+
+.. csv-table::
+   :header: "Layout/type, Q/KV/D", "CPU", "ORT", "First ORT/CPU", "Second ORT/CPU"
+
+   "rank3 FP32, 128/128/64", "0.65581", "0.55289", "0.887x", "0.843x"
+   "rank3 FP32, 129/257/64", "1.93380", "1.17566", "0.611x", "0.608x"
+   "rank4 FP16, 128/128/64", "0.69998", "0.74784", "1.082x", "1.068x"
+   "rank4 FP16, 16/128/64", "0.36938", "0.18143", "0.501x", "0.491x"
+   "rank4 FP16, 16/257/63", "0.57118", "0.35217", "0.625x", "0.617x"
+   "rank4 FP16, 128/128/128", "1.27021", "1.29494", "1.051x", "1.019x"
+   "rank4 FP16, 128/128/256", "2.34545", "2.35102", "1.057x", "1.002x"
+   "rank4 FP16, 129/257/256", "5.87519", "4.54726", "0.777x", "0.774x"
+
+A separate 100-sample, 20-warmup campaign checks all 48 original
+FP32/FP16 stateless/nonpad cases. Numerical comparisons all pass with
+unchanged tolerances. Median ORT/CPU ratios are 0.910 for FP32 and 1.071
+for FP16, but individual minima are 0.426 and 0.516 respectively.
+Performance parity is therefore **not achieved**. BF16 is not measured
+in these campaigns. Absolute timings drift: second-campaign interquartile
+ranges are approximately 3--11% of CPU medians and 4--13% of ORT medians,
+so near-parity cases do not establish a reliable small advantage.
+
+This changes the diagnosis:
+
+* Square FP16 hd256 is approximately at parity, rather than a uniformly
+  unresolved wide-head failure. The 129/257 tail case still trails ORT
+  by approximately 29% in latency.
+* Aligned FP16 Q16/KV128/D64 selects ``Attention.streaming`` and takes
+  approximately twice ORT's latency. The existing aligned-short gate
+  excludes tiling on an AVX-512 host because its AVX2-only short-tile
+  exception requires an exact AVX2 SIMD level.
+* Rank-three FP32 129/257 remains approximately 65% slower than ORT.
+  The existing AVX-512 dense-softmax shortcut only covers FP32 KV128
+  with Q8/Q128, not this case. Its recorded path still packs tiles and
+  writes tile output; recording alone does not quantify those costs.
+* The retained optimization gates explicitly require an AVX2 ceiling.
+  These new measurements therefore do **not** demonstrate a benefit
+  from that optimization on the normal AVX-512 configuration.
+
+Changes in dependency revision, input adaptation and runtime binaries mean
+the old and new tables are not a controlled AVX2-versus-AVX-512 experiment.
+No ISA-only speedup or new hot-symbol attribution is claimed. Issue 1029
+remains open; default-configuration dispatch and tail handling still need
+optimization.

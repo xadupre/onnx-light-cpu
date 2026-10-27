@@ -319,6 +319,41 @@ void ExpectClose(const std::vector<float> &actual, const std::vector<float> &exp
   }
 }
 
+TEST(AttentionExp, DenseUnnormalizedRowsMatchOnlineSoftmax) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA kernels are unavailable";
+  }
+  for (const std::size_t columns :
+       {1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 257, 511, 512, 513}) {
+    for (const float range : {1.0f, 43.5f, 100.0f, std::numeric_limits<float>::max()}) {
+      SCOPED_TRACE(::testing::Message() << "columns=" << columns << " range=" << range);
+      auto scores = RandomTensor(3 * columns, 1984);
+      for (float &value : scores) {
+        value *= range;
+      }
+      auto expected = scores;
+      std::array<float, 3> denominators{}, expected_denominators{};
+      for (std::size_t row = 0; row < 3; ++row) {
+        ml_cpu_compute::AttentionSoftmaxBlockFloat32_AVX2_FMA(
+            expected.data() + row * columns, columns, -std::numeric_limits<float>::infinity(),
+            expected_denominators[row]);
+      }
+      ml_cpu_compute::AttentionSoftmaxRowsFloat32_AVX2_FMA(scores.data(), denominators.data(), 3,
+                                                           columns);
+      ExpectClose(scores, expected, 2e-6f);
+      for (std::size_t row = 0; row < 3; ++row) {
+        EXPECT_NEAR(denominators[row], expected_denominators[row],
+                    2e-6f * expected_denominators[row]);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
 TEST(AttentionDescriptor, ValidatesOpsetRange) {
   ml_cpu_compute::AttentionDescriptor descriptor;
   descriptor.opset = 22;
@@ -2006,6 +2041,35 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveComputedScoreNaNs) {
 #endif
 }
 
+TEST(ComputeAttentionFloat32Streaming, DenseSoftmaxPreservesNonfiniteScoreFallback) {
+  AttentionDescriptor descriptor;
+  const std::int64_t qs[] = {1, 1, 129, 64}, kvs[] = {1, 1, 257, 64};
+  const std::int64_t mask_shape[] = {257};
+  const AttentionPlan dense(descriptor, AttentionLayout::kRank4, qs, kvs, kvs, {},
+                            AttentionMaskKind::kNone);
+  const AttentionPlan masked(descriptor, AttentionLayout::kRank4, qs, kvs, kvs, mask_shape,
+                             AttentionMaskKind::kBoolean);
+  const std::vector<std::uint8_t> mask(257, 1);
+  const std::vector<float> q(129 * 64, 1.0f), v(257 * 64, 1.0f);
+  std::vector<float> k(v.size(), 0.0f), actual(q.size()), expected(q.size());
+  for (const float value :
+       {0.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(), 0.0f}) {
+    SCOPED_TRACE(value);
+    k[256 * 64] = value;
+    ComputeAttentionFloat32Streaming(masked, q.data(), k.data(), v.data(), mask.data(),
+                                     expected.data());
+    ComputeAttentionFloat32Streaming(dense, q.data(), k.data(), v.data(), nullptr, actual.data());
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+      if (std::isnan(expected[i])) {
+        EXPECT_TRUE(std::isnan(actual[i])) << "index=" << i;
+      } else {
+        EXPECT_FLOAT_EQ(actual[i], expected[i]) << "index=" << i;
+      }
+    }
+  }
+}
+
 TEST(ComputeAttentionFloat32Streaming, Avx2DecodeAdditiveMaskPreservesFiniteNaNAndMaskedRows) {
   constexpr std::int64_t heads = 2, keys = 1024, dim = 64;
   const std::int64_t qs[] = {1, heads, 1, dim};
@@ -2122,13 +2186,20 @@ TEST(ComputeAttentionFloat32Streaming, GroupedQueryTilesPreserveUnsafeValueFront
 
 TEST(ComputeAttentionFloat32Streaming, ShortTilesAndValueProductsMatchMaterialized) {
   for (const auto &[q_len, kv_len, dim, vdim] :
-       {std::tuple{7, 17, 16, 16},    std::tuple{8, 17, 16, 16},   std::tuple{8, 0, 64, 64},
-        std::tuple{8, 1, 64, 64},     std::tuple{8, 513, 64, 63},  std::tuple{15, 512, 63, 65},
-        std::tuple{16, 511, 64, 64},  std::tuple{17, 33, 17, 17},  std::tuple{8, 17, 15, 16},
-        std::tuple{31, 31, 64, 64},   std::tuple{32, 32, 64, 64},  std::tuple{33, 33, 64, 64},
-        std::tuple{63, 63, 64, 64},   std::tuple{64, 64, 64, 64},  std::tuple{65, 65, 64, 64},
-        std::tuple{8, 17, 16, 15},    std::tuple{8, 17, 257, 256}, std::tuple{8, 17, 256, 257},
-        std::tuple{129, 17, 64, 256}, std::tuple{128, 17, 64, 64}, std::tuple{128, 17, 64, 65}}) {
+       {std::tuple{7, 17, 16, 16},      std::tuple{8, 17, 16, 16},
+        std::tuple{8, 0, 64, 64},       std::tuple{8, 1, 64, 64},
+        std::tuple{8, 513, 64, 63},     std::tuple{15, 512, 63, 65},
+        std::tuple{16, 511, 64, 64},    std::tuple{17, 33, 17, 17},
+        std::tuple{8, 17, 15, 16},      std::tuple{31, 31, 64, 64},
+        std::tuple{32, 32, 64, 64},     std::tuple{33, 33, 64, 64},
+        std::tuple{63, 63, 64, 64},     std::tuple{64, 64, 64, 64},
+        std::tuple{65, 65, 64, 64},     std::tuple{8, 17, 16, 15},
+        std::tuple{8, 17, 257, 256},    std::tuple{8, 17, 256, 257},
+        std::tuple{129, 17, 64, 256},   std::tuple{128, 17, 64, 64},
+        std::tuple{128, 17, 64, 65},    std::tuple{128, 128, 128, 128},
+        std::tuple{128, 128, 256, 256}, std::tuple{129, 257, 63, 64},
+        std::tuple{129, 257, 64, 63},   std::tuple{129, 257, 256, 256},
+        std::tuple{129, 513, 256, 256}}) {
     for (const bool rank3 : {false, true}) {
       for (int mode = 0; mode < 4; ++mode) {
         SCOPED_TRACE(::testing::Message()

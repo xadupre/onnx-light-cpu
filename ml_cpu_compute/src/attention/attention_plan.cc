@@ -1441,20 +1441,31 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       });
 }
 
-void AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t columns,
-                        const float *scores, const float *values, const float *previous,
-                        float *output) {
+bool UseAvx2AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t columns) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   static const bool use_avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+  return use_avx2 && dimension >= 16 && dimension <= 256 && columns <= 512 &&
+         (rows < 128 || dimension <= 64);
+#else
+  (void)rows;
+  (void)dimension;
+  (void)columns;
+  return false;
+#endif
+}
+
+void AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t columns,
+                        const float *scores, const float *values, const float *previous,
+                        float *output, [[maybe_unused]] std::size_t output_stride) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   // Attention already owns scheduling and contiguous tiles. Reuse those tiles directly rather
   // than repacking both operands through the general GEMM driver.
-  if (use_avx2 && dimension >= 16 && dimension <= 256 && columns <= 512 &&
-      (rows < 128 || dimension <= 64)) {
+  if (UseAvx2AttentionValueGemm(rows, dimension, columns)) {
     for (std::size_t row = 0; row < rows; row += kGemmAVX2MR) {
       GemmMicroTile_AVX2FMA_F32(
           std::min(kGemmAVX2MR, rows - row), dimension, columns, 1.0f, 1.0f, values, dimension,
           previous != nullptr ? previous + row * dimension : nullptr, dimension,
-          output + row * dimension, dimension, 0,
+          output + row * output_stride, output_stride, 0,
           previous != nullptr ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero,
           scores + row * columns);
     }
@@ -1544,6 +1555,9 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       simd == SimdLevel::kAVX2 && CpuSupportsFma() && plan.softcap == 0.0f &&
       plan.left_window_size < 0 && plan.right_window_size < 0 &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
+  const bool use_dense_softmax_avx2 = use_avx2_softmax &&
+                                      plan.mask_kind == AttentionMaskKind::kNone && !plan.causal &&
+                                      nonpad_kv_seqlen == nullptr;
 #endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
   const bool use_bounded_avx512 =
@@ -1692,18 +1706,27 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               }
             }
 
+            bool dense_softmax = false;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+            if (use_dense_softmax_avx2 && single_kv_block &&
+                AttentionAllFiniteFloat32_AVX2_FMA(scores.data(), rows * columns)) {
+              AttentionSoftmaxRowsFloat32_AVX2_FMA(scores.data(), denominators.data(), rows,
+                                                   columns);
+              std::fill_n(valid.begin(), rows, std::uint8_t{1});
+              dense_softmax = true;
+            }
+#endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
             if (use_dense_softmax_avx512) {
               AttentionSoftmaxRowsFloat32_AVX512(scores.data(), denominators.data(), rows, columns);
               std::fill_n(valid.begin(), rows, std::uint8_t{1});
+              dense_softmax = true;
             }
 #endif
             for (std::size_t i = 0; i < rows; ++i) {
-#ifdef ML_CPU_COMPUTE_HAVE_AVX512
-              if (use_dense_softmax_avx512) {
+              if (dense_softmax) {
                 continue;
               }
-#endif
               float *score_row = scores.data() + i * columns;
               const std::size_t query = q0 + i;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
@@ -1876,12 +1899,15 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               std::ptrdiff_t destination_stride = static_cast<std::ptrdiff_t>(plan.v_head_dim);
               if constexpr (std::is_same_v<Codec, Float32Codec>) {
                 destination = y_block;
+                bool direct_output = UseAvx2AttentionValueGemm(rows, plan.v_head_dim, columns);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
-                if (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64) {
-                  destination_stride = plan.y_strides.sequence;
-                } else
+                direct_output = direct_output ||
+                                (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64);
 #endif
-                    if (plan.y_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
+                if (direct_output) {
+                  destination_stride = plan.y_strides.sequence;
+                } else if (plan.y_strides.sequence !=
+                           static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
                   output.resize(rows * plan.v_head_dim);
                   destination = output.data();
                 }
@@ -1902,7 +1928,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               } else
 #endif
                 AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block, nullptr,
-                                   destination);
+                                   destination, static_cast<std::size_t>(destination_stride));
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_dense_softmax_avx512) {
                 AttentionNormalizeRowsFloat32_AVX512(destination, denominators.data(), rows,
@@ -1951,7 +1977,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
             // Fuse the running sum into GEMM while keeping its bias and output disjoint.
             AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block,
-                               accumulator.data(), product.data());
+                               accumulator.data(), product.data(), plan.v_head_dim);
             accumulator.swap(product);
           }
 

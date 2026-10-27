@@ -4,12 +4,22 @@ from unittest import TestCase
 
 from tools.benchmark_attention_parity import (
     _expand_cpu_part,
+    _package_versions,
     estimate_temporary_memory,
     measure_alternating,
     parse_args,
     parse_case_name,
     summarize,
 )
+
+
+def test_versions_describe_imported_runtimes_including_source_checkouts():
+    import onnx_light_cpu
+    import onnxruntime
+
+    versions = _package_versions()
+    assert versions["onnx-light-cpu"] == onnx_light_cpu.__version__
+    assert versions["onnxruntime"] == onnxruntime.__version__
 
 
 def test_backend_case_name_is_traceable_and_complete():
