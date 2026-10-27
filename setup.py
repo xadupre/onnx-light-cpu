@@ -498,7 +498,7 @@ class BuildExt(Command):
 
 setup(
     name="onnx-light-cpu",
-    version="0.2.0",
+    version="0.2.2",
     packages=["onnx_light_cpu"],
     distclass=NoConfigDistribution,
     cmdclass={"build_ext": BuildExt},
