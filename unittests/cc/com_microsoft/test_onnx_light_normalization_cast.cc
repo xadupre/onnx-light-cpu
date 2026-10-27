@@ -20,7 +20,6 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
 #include <bit>
 #include <cstdint>
 #include <limits>
@@ -41,6 +40,7 @@ constexpr auto kKernel = onnx_light_cpu::NaiveSkipSimplifiedLayerNormalizationKe
 struct Options {
   sym::TensorType type = sym::TensorType::kFloat16;
   int width = 4;
+  int skip_layout = 0;
   bool constant_weight = false;
   float weight = 1.0F;
   bool raw_weight = false;
@@ -96,10 +96,15 @@ std::unique_ptr<builder::GraphBuilder> MakeGraph(const Options &options = {}) {
     if (std::string(name) == "B" && !options.bias) {
       continue;
     }
-    graph->MakeInput(name, options.type,
-                     std::string(name) == "X" || std::string(name) == "R"
-                         ? sym::SymShape({2, options.width})
-                         : sym::SymShape({options.width}));
+    auto shape = sym::SymShape({options.width});
+    if (std::string(name) == "X") {
+      shape = options.skip_layout == 0 ? sym::SymShape({2, options.width})
+                                       : sym::SymShape({2, 2, options.width});
+    } else if (std::string(name) == "R") {
+      shape = options.skip_layout == 2 ? sym::SymShape({1, 2, options.width})
+                                       : sym::SymShape({2, options.width});
+    }
+    graph->MakeInput(name, options.type, shape);
     graph->MakeNode("Cast", {name}, {std::string(name) + "32"}, "", "", float_cast.attribute());
   }
   NodeProto spec;
@@ -210,11 +215,13 @@ TEST(NormalizationCast, UnsupportedContractsAndTargetsLeaveGraphUnchanged) {
       EXPECT_EQ(graph->ToGraph().SerializeAsString(), before);
     }
   }
-  auto graph = MakeGraph();
-  graph->set_device(sym::Device::kUndefined);
-  builder::GraphGraph optimizer(*graph);
-  Pattern pattern(kKernel);
-  EXPECT_EQ(pattern.Match(optimizer, Normalization(*graph)).pattern, nullptr);
+  for (auto device : {sym::Device::kUndefined, sym::Device::kGPU0}) {
+    auto graph = MakeGraph();
+    graph->set_device(device);
+    builder::GraphGraph optimizer(*graph);
+    Pattern pattern(kKernel);
+    EXPECT_EQ(pattern.Match(optimizer, Normalization(*graph)).pattern, nullptr);
+  }
 }
 
 TEST(NormalizationCast, RejectsRoundingTypeAndConsumerChanges) {
@@ -302,6 +309,37 @@ TEST(NormalizationCast, OriginalAndRewrittenGraphsHaveIdenticalBytes) {
               << "width=" << width << " magnitude=" << magnitude << " output=" << i;
         }
       }
+    }
+  }
+}
+
+TEST(NormalizationCast, BroadcastResidualRetainsFloatAdditionAndHalfRounding) {
+  onnx_light_cpu::RegisterCastKernel();
+  onnx_light_cpu::RegisterNaiveSkipSimplifiedLayerNormalizationKernel();
+  for (int layout : {1, 2}) {
+    auto graph = MakeGraph({.skip_layout = layout,
+                            .constant_weight = true,
+                            .weight = -0.0F,
+                            .raw_weight = true,
+                            .bias = true,
+                            .statistics = true,
+                            .residual = true});
+    const rt::Tensors inputs = {
+        rt::MakeFloat16Tensor("X", {2, 2, 4},
+                              {10000, 10000, 10000, 10000, 0, 0.0001F, -0.0001F, 0, 1, 1, 1, 1,
+                               65504, 65504, -65504, -65504}),
+        rt::MakeFloat16Tensor("R", layout == 1 ? rt::Shape{2, 4} : rt::Shape{1, 2, 4},
+                              {0.0003F, -0.0003F, 0.0001F, -0.0001F, 65504, 65504, 65504, 65504}),
+        rt::MakeFloat16Tensor("B", {4}, {0.0001F, -0.0001F, 0.0001F, -0.0001F})};
+    const auto original = rt::RunModel(graph->ToModel(), inputs);
+    builder::GraphGraph(*graph, Patterns()).Optimize();
+    ASSERT_EQ(graph->Nodes().size(), 1U);
+    const auto rewritten = rt::RunModel(graph->ToModel(), inputs);
+    ASSERT_EQ(original.size(), rewritten.size());
+    for (std::size_t i = 0; i < original.size(); ++i) {
+      EXPECT_EQ(original[i].data_type, rewritten[i].data_type);
+      EXPECT_EQ(original[i].shape, rewritten[i].shape);
+      EXPECT_EQ(Bytes(original[i]), Bytes(rewritten[i]));
     }
   }
 }

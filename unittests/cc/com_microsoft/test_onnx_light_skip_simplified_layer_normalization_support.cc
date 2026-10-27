@@ -94,7 +94,8 @@ TEST(SkipSimplifiedLayerNormalizationSupport, SchemaAndReadOnlyInventory) {
   EXPECT_EQ(record->peak_memory_function,
             "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
   EXPECT_FALSE(record->has_gradient);
-  EXPECT_TRUE(record->fusion_patterns.empty());
+  EXPECT_EQ(record->fusion_patterns,
+            std::vector<std::string>{"NormalizationCastEliminationPattern"});
 }
 
 TEST(SkipSimplifiedLayerNormalizationSupport, RegistersGlobalShapeAndZeroScratch) {

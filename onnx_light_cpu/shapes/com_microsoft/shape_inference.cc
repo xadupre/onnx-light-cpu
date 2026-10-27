@@ -413,7 +413,7 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "SkipSimplifiedLayerNormalization",
        "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization",
        "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization",
-       {},
+       {"NormalizationCastEliminationPattern"},
        false},
   };
 }

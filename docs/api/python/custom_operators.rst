@@ -18,7 +18,7 @@ Custom operators
    Microsoft-only :func:`custom_op_schemas` provider.
 
 Microsoft normalization cast elimination
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. py:function:: normalization_cast_pattern(kernel_name)
 
@@ -39,7 +39,9 @@ Microsoft normalization cast elimination
    The rewrite bypasses FLOAT16-to-FLOAT input casts and absorbs the final
    FLOAT16 cast. Scale and bias must come from FLOAT16 casts or exactly
    representable, finite FLOAT constants; arbitrary FLOAT weights are never
-   rounded. Shared input casts remain available to their other consumers.
+   rounded. Exact weight copies are emitted as FLOAT16 Constant nodes; the
+   usual constant-folding pass can materialize them as initializers.
+   Shared input casts remain available to their other consumers.
    FLOAT statistics keep their names and types. A live residual sum must
    exclusively feed a FLOAT16 cast; a live FLOAT residual prevents rewriting.
    Epsilon and optional slots are preserved, and ``stash_type`` is never added.

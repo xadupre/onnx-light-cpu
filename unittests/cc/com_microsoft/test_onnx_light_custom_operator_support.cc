@@ -1097,6 +1097,8 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
             patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftMatMulNBitsBias"),
             patterns.end());
+  EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftNormalizationCast"),
+            patterns.end());
 }
 
 TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {

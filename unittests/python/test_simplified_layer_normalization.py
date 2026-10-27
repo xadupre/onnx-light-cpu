@@ -21,9 +21,12 @@ from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light.onnx_core.graph_builder import GraphBuilder
+from onnx_light.onnx_core.optimization import GraphGraph
+from onnx_light.onnx_core.shape_inference import Device
 from onnx_light_cpu import (
     custom_op_schemas,
     experimental_op_schemas,
+    normalization_cast_pattern,
     operator_schema_lookup,
     operator_support,
     register_kernel_for_session,
@@ -116,6 +119,54 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
     @classmethod
     def setUpClass(cls):
         register_operator_support()
+
+    def test_explicit_microsoft_cast_pattern_and_experimental_domain_isolation(self):
+        kernel = "onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization"
+        for domain in ("com.microsoft", "ai.onnx", ""):
+            skip = domain == "com.microsoft"
+            names = ["X", "R", "W"] if skip else ["X", "W"]
+            nodes = [
+                helper.make_node("Cast", [name], [f"{name}32"], to=TensorProto.FLOAT)
+                for name in names
+            ]
+            nodes.extend(
+                [
+                    helper.make_node(
+                        "SkipSimplifiedLayerNormalization" if skip else _OP,
+                        [f"{name}32" for name in names],
+                        ["normalized"],
+                        domain=domain,
+                        epsilon=1.0e-5,
+                    ),
+                    helper.make_node("Cast", ["normalized"], ["Y"], to=TensorProto.FLOAT16),
+                ]
+            )
+            model = helper.make_model(
+                helper.make_graph(
+                    nodes,
+                    "cast-normalization",
+                    [
+                        helper.make_tensor_value_info(
+                            name, TensorProto.FLOAT16, [4] if name == "W" else [2, 4]
+                        )
+                        for name in names
+                    ],
+                    [helper.make_tensor_value_info("Y", TensorProto.FLOAT16, [2, 4])],
+                ),
+                opset_imports=[
+                    helper.make_opsetid("", 23),
+                    helper.make_opsetid("com.microsoft", 1),
+                ],
+            )
+            builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
+            builder.device = Device.kCPU
+            GraphGraph(builder, patterns=[normalization_cast_pattern(kernel)]).optimize()
+            result = builder.to_onnx()
+            self.assertEqual(len(result.graph.node), 1 if skip else len(nodes))
+            normalization = next(
+                node for node in result.graph.node if node.op_type.endswith("Normalization")
+            )
+            self.assertEqual(normalization.domain, domain)
 
     def test_separate_experimental_schema_provider(self):
         schemas = experimental_op_schemas(_OP)
