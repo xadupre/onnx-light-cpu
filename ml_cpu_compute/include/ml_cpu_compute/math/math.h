@@ -133,6 +133,9 @@ void SigmoidBFloat16_AVX512BF16(const std::uint16_t *input, std::uint16_t *outpu
 void SigmoidFloat64_AVX2_FMA(const double *input, double *output, std::size_t count);
 void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
                              std::size_t columns);
+/// In-place exp(x - row_max) and per-row sums for finite inputs, without normalization.
+void SoftmaxUnnormalizedFloat32_AVX2_FMA(float *input_output, float *denominators, std::size_t rows,
+                                         std::size_t columns);
 void SoftmaxFloat64_AVX2_FMA(const double *input, double *output, std::size_t rows,
                              std::size_t columns);
 #endif

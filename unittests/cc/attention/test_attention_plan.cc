@@ -6,6 +6,7 @@
 
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
 #include "ml_cpu_compute/attention/avx2/attention_avx2_fma.h"
@@ -340,8 +341,8 @@ TEST(AttentionExp, DenseUnnormalizedRowsMatchOnlineSoftmax) {
             expected.data() + row * columns, columns, -std::numeric_limits<float>::infinity(),
             expected_denominators[row]);
       }
-      ml_cpu_compute::AttentionSoftmaxRowsFloat32_AVX2_FMA(scores.data(), denominators.data(), 3,
-                                                           columns);
+      ml_cpu_compute::SoftmaxUnnormalizedFloat32_AVX2_FMA(scores.data(), denominators.data(), 3,
+                                                          columns);
       ExpectClose(scores, expected, 2e-6f);
       for (std::size_t row = 0; row < 3; ++row) {
         EXPECT_NEAR(denominators[row], expected_denominators[row],
@@ -2039,6 +2040,19 @@ TEST(ComputeAttentionFloat32Streaming, ShortTilesPreserveComputedScoreNaNs) {
 #else
   GTEST_SKIP() << "AVX2/FMA kernels were not built";
 #endif
+}
+
+TEST(ComputeAttentionFloat32Streaming, RejectsNegativeTiledOutputStride) {
+  AttentionDescriptor descriptor;
+  const std::int64_t shape[] = {1, 1, 128, 64};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, shape, shape, shape, {},
+                     AttentionMaskKind::kNone);
+  plan.y_strides.sequence = -1;
+  const std::vector<float> input(128 * 64, 0.0f);
+  std::vector<float> output(input.size());
+  EXPECT_THROW(ComputeAttentionFloat32Streaming(plan, input.data(), input.data(), input.data(),
+                                                nullptr, output.data()),
+               std::invalid_argument);
 }
 
 TEST(ComputeAttentionFloat32Streaming, DenseSoftmaxPreservesNonfiniteScoreFallback) {

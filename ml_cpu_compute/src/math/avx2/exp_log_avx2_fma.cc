@@ -4,7 +4,6 @@
 
 #include "ml_cpu_compute/math/math.h"
 
-#include "ml_cpu_compute/attention/avx2/attention_avx2_fma.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 
 #include <immintrin.h>
@@ -516,9 +515,9 @@ void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows
   SoftmaxRows<true>(input, output, rows, columns, nullptr);
 }
 
-void AttentionSoftmaxRowsFloat32_AVX2_FMA(float *scores, float *denominators, std::size_t rows,
-                                          std::size_t columns) {
-  SoftmaxRows<false>(scores, scores, rows, columns, denominators);
+void SoftmaxUnnormalizedFloat32_AVX2_FMA(float *input_output, float *denominators, std::size_t rows,
+                                         std::size_t columns) {
+  SoftmaxRows<false>(input_output, input_output, rows, columns, denominators);
 }
 
 void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {

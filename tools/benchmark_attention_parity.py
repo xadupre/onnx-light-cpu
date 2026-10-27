@@ -250,9 +250,20 @@ def _command_output(command: Sequence[str]) -> str:
     return output.splitlines()[0] if output else "unknown"
 
 
+def _module_version(module_name: str) -> str:
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if error.name != module_name:
+            raise
+        return "not installed"
+    version = getattr(module, "__version__", None)
+    return str(version) if version is not None else "unknown"
+
+
 def _package_versions() -> dict[str, str]:
     return {
-        package: str(importlib.import_module(package.replace("-", "_")).__version__)
+        package: _module_version(package.replace("-", "_"))
         for package in ("numpy", "ml-dtypes", "onnx-light", "onnx-light-cpu", "onnxruntime")
     }
 

@@ -15,10 +15,6 @@ bool AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(const float *values, std::size
                                                   float absolute_bound);
 bool AttentionAllFiniteFloat16_AVX2_FMA(const std::uint16_t *values, std::size_t count);
 
-// Finite dense scores only. Leaves exponentials unnormalized for the value product.
-void AttentionSoftmaxRowsFloat32_AVX2_FMA(float *scores, float *denominators, std::size_t rows,
-                                          std::size_t columns);
-
 /// AVX2+FMA counterpart of AttentionSoftmaxBlockResult (the AVX-512
 /// primitive lives in impl/attention/avx512); kept as a separate type so
 /// this header has no dependency on the AVX-512 one.

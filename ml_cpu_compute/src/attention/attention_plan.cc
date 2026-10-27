@@ -1485,6 +1485,8 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   if (plan.batch == 0 || plan.q_num_heads == 0 || plan.v_head_dim == 0) {
     return;
   }
+  const std::size_t output_sequence_stride =
+      ToSize(plan.y_strides.sequence, "Y sequence stride must be non-negative.");
   const std::size_t kv_block = AttentionKvBlock(plan);
   std::size_t query_block = AttentionQueryBlock(plan);
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
@@ -1710,8 +1712,8 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
             if (use_dense_softmax_avx2 && single_kv_block &&
                 AttentionAllFiniteFloat32_AVX2_FMA(scores.data(), rows * columns)) {
-              AttentionSoftmaxRowsFloat32_AVX2_FMA(scores.data(), denominators.data(), rows,
-                                                   columns);
+              SoftmaxUnnormalizedFloat32_AVX2_FMA(scores.data(), denominators.data(), rows,
+                                                  columns);
               std::fill_n(valid.begin(), rows, std::uint8_t{1});
               dense_softmax = true;
             }
@@ -1896,16 +1898,19 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
             if (single_kv_block) {
               float *destination;
-              std::ptrdiff_t destination_stride = static_cast<std::ptrdiff_t>(plan.v_head_dim);
+              std::size_t destination_stride = plan.v_head_dim;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+              const bool use_avx512_strided_value =
+                  use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64;
+#endif
               if constexpr (std::is_same_v<Codec, Float32Codec>) {
                 destination = y_block;
                 bool direct_output = UseAvx2AttentionValueGemm(rows, plan.v_head_dim, columns);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
-                direct_output = direct_output ||
-                                (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64);
+                direct_output = direct_output || use_avx512_strided_value;
 #endif
                 if (direct_output) {
-                  destination_stride = plan.y_strides.sequence;
+                  destination_stride = output_sequence_stride;
                 } else if (plan.y_strides.sequence !=
                            static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
                   output.resize(rows * plan.v_head_dim);
@@ -1919,7 +1924,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               if (use_q8_avx512) {
                 AttentionProbabilityValueQ8K128D64Float32_AVX512(scores.data(), v_block,
                                                                  destination, destination_stride);
-              } else if (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64) {
+              } else if (use_avx512_strided_value) {
                 for (std::size_t row = 0; row < rows; row += 8) {
                   AttentionProbabilityValueQ8K128D64Float32_AVX512(
                       scores.data() + row * columns, v_block,
@@ -1928,7 +1933,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               } else
 #endif
                 AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block, nullptr,
-                                   destination, static_cast<std::size_t>(destination_stride));
+                                   destination, destination_stride);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_dense_softmax_avx512) {
                 AttentionNormalizeRowsFloat32_AVX512(destination, denominators.data(), rows,
