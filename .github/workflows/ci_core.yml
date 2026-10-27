@@ -47,7 +47,7 @@ jobs:
           arch: x64
 
       # This matrix validates the standalone CPU kernels. The separate
-      # setup_onnx_light_source job owns integration with onnx-light 0.2.0 on
+      # setup_onnx_light_source job owns integration with onnx-light 0.2.1 on
       # every OS, avoiding a second integration path through a released wheel.
       - name: Build and install package (Unix)
         if: runner.os != 'Windows'
@@ -150,7 +150,7 @@ jobs:
           fail_ci_if_error: false
 
   setup_onnx_light_source:
-    name: onnx-light 0.2.0 (${{ matrix.os }}, ${{ matrix.python-abi }})
+    name: onnx-light 0.2.1 (${{ matrix.os }}, ${{ matrix.python-abi }})
     runs-on: ${{ matrix.os }}
     # onnx-light is compiled from source before onnx-light-cpu, so this job
     # needs more time than a plain build; sccache keeps repeat runs fast.
@@ -210,7 +210,7 @@ jobs:
           sccache --start-server || :
           pip install nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
           onnx_light_source="${RUNNER_TEMP}/onnx-light"
-          git clone --depth 1 --branch 0.2.0 https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
+          git clone --depth 1 --branch 0.2.1 https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
           CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON"

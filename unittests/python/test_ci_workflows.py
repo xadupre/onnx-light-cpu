@@ -72,7 +72,7 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
 
 
 def test_documentation_does_not_replace_onnx_light_release():
-    assert "git clone --depth 1 --branch 0.2.0" in _DOCS_WORKFLOW
+    assert "git clone --depth 1 --branch 0.2.1" in _DOCS_WORKFLOW
     assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
@@ -89,7 +89,7 @@ def test_standalone_source_build_allows_time_for_both_projects():
 
 def test_standalone_source_build_uses_onnx_light_release():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
-    assert "git clone --depth 1 --branch 0.2.0" in standalone_job
+    assert "git clone --depth 1 --branch 0.2.1" in standalone_job
     assert "git clone --depth 1 --branch main" not in standalone_job
 
 
@@ -224,8 +224,8 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "name: onnx-light 0.2.0 (" in source_job
-    assert "git clone --depth 1 --branch 0.2.0" in source_job
+    assert "name: onnx-light 0.2.1 (" in source_job
+    assert "git clone --depth 1 --branch 0.2.1" in source_job
     assert "git clone --depth 1 --branch main" not in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
