@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gc
-import importlib.metadata
+import importlib
 import json
 import os
 import platform
@@ -250,14 +250,22 @@ def _command_output(command: Sequence[str]) -> str:
     return output.splitlines()[0] if output else "unknown"
 
 
+def _module_version(module_name: str) -> str:
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if error.name != module_name:
+            raise
+        return "not installed"
+    version = getattr(module, "__version__", None)
+    return str(version) if version is not None else "unknown"
+
+
 def _package_versions() -> dict[str, str]:
-    versions = {}
-    for package in ("numpy", "ml-dtypes", "onnx-light", "onnx-light-cpu", "onnxruntime"):
-        try:
-            versions[package] = importlib.metadata.version(package)
-        except importlib.metadata.PackageNotFoundError:
-            versions[package] = "not installed"
-    return versions
+    return {
+        package: _module_version(package.replace("-", "_"))
+        for package in ("numpy", "ml-dtypes", "onnx-light", "onnx-light-cpu", "onnxruntime")
+    }
 
 
 def _collect_cases(include_large: bool, patterns: Sequence[str]) -> list[Any]:
@@ -289,8 +297,10 @@ def _repeat_count(case: dict[str, Any], minimum: int, maximum: int) -> int:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     import numpy as np
+    import onnx_light_cpu
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light_cpu._benchmark import _prepare_feeds
     from onnx_light_cpu import (
         clear_used_kernel_names,
         register_kernels,
@@ -322,10 +332,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if value.name not in initializer_names
         ]
         data_set = test_case.data_sets[0]
-        feeds = {
-            name: _tensor_numpy(tensor)
-            for name, tensor in zip(input_names, data_set.inputs, strict=True)
-        }
+        cpu_feeds, numpy_feeds = _prepare_feeds(input_names, [data_set])
+        feeds = numpy_feeds[0]
 
         cpu = ReferenceEvaluator(test_case.model, cpu_execution={"num_threads": args.threads})
         resolution = cpu.cpu_execution_resolution
@@ -345,7 +353,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
         )
 
-        def cpu_run(session=cpu, current_feeds=feeds):
+        def cpu_run(session=cpu, current_feeds=cpu_feeds[0]):
             return session.run(None, current_feeds)
 
         def ort_run(session=ort, current_feeds=feeds):
@@ -448,6 +456,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "git_revision": _command_output(("git", "rev-parse", "HEAD")),
             "python": platform.python_version(),
             "versions": _package_versions(),
+            "cpu_simd_level": onnx_light_cpu.detect_simd_level().name,
+            "cpu_feeds": "backend tensors",
+            "ort_build_info": onnxruntime.get_build_info(),
+            "runtime_module_paths": {
+                name: str(Path(importlib.import_module(name).__file__).resolve())
+                for name in (
+                    "onnx_light",
+                    "onnx_light_cpu.onnx_py._cpukernels",
+                    "onnx_light_cpu.onnx_py._cpuregister",
+                    "onnxruntime",
+                )
+            },
             "large_corpus": args.large,
         },
         "results": rows,

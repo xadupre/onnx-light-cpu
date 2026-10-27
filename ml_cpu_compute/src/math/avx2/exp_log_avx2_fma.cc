@@ -247,8 +247,8 @@ ML_CPU_COMPUTE_FORCE_INLINE __m256 TanhFloat16Ps256Fma(__m256 value) {
   return Select(_mm256_cmp_ps(value, value, _CMP_UNORD_Q), quiet_nan, result);
 }
 
-template <bool normal_range>
-void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns, __m256 maximum) {
+template <bool normal_range, bool normalize>
+float SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns, __m256 maximum) {
   const std::size_t vector_columns = columns - columns % 8;
   const __m256i tail_mask = TailMask(columns - vector_columns);
   const auto exponential = [](const __m256 value) {
@@ -318,8 +318,12 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
     _mm256_maskstore_ps(output + column, tail_mask, exponent);
     sum0 = _mm256_add_ps(sum0, _mm256_and_ps(exponent, _mm256_castsi256_ps(tail_mask)));
   }
-  const __m256 inverse_sum = _mm256_set1_ps(
-      1.0f / HorizontalSum(_mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3))));
+  const float total =
+      HorizontalSum(_mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)));
+  if constexpr (!normalize) {
+    return total;
+  }
+  const __m256 inverse_sum = _mm256_set1_ps(1.0f / total);
   for (column = 0; column + 32 <= vector_columns; column += 32) {
     _mm256_storeu_ps(output + column, _mm256_mul_ps(_mm256_loadu_ps(output + column), inverse_sum));
     _mm256_storeu_ps(output + column + 8,
@@ -336,6 +340,7 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
     _mm256_maskstore_ps(output + column, tail_mask,
                         _mm256_mul_ps(_mm256_maskload_ps(output + column, tail_mask), inverse_sum));
   }
+  return total;
 }
 
 #undef ML_CPU_COMPUTE_FORCE_INLINE
@@ -433,8 +438,11 @@ void SigmoidFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, 
 }
 #endif
 
-void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
-                             std::size_t columns) {
+namespace {
+
+template <bool normalize>
+void SoftmaxRows(const float *input, float *output, std::size_t rows, std::size_t columns,
+                 float *denominators) {
   const __m256 negative_infinity = _mm256_set1_ps(-std::numeric_limits<float>::infinity());
   const __m256 positive_infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
   const std::size_t vector_columns = columns - columns % 8;
@@ -490,12 +498,26 @@ void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows
 
     const float minimum = -HorizontalMax(
         _mm256_sub_ps(_mm256_setzero_ps(), _mm256_min_ps(minimum_vector0, minimum_vector1)));
-    if (_mm256_cvtss_f32(maximum) - minimum <= 87.0f) {
-      SoftmaxNormalizeRow<true>(row_input, row_output, columns, maximum);
-    } else {
-      SoftmaxNormalizeRow<false>(row_input, row_output, columns, maximum);
+    const float total =
+        _mm256_cvtss_f32(maximum) - minimum <= 87.0f
+            ? SoftmaxNormalizeRow<true, normalize>(row_input, row_output, columns, maximum)
+            : SoftmaxNormalizeRow<false, normalize>(row_input, row_output, columns, maximum);
+    if constexpr (!normalize) {
+      denominators[row] = total;
     }
   }
+}
+
+} // namespace
+
+void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
+                             std::size_t columns) {
+  SoftmaxRows<true>(input, output, rows, columns, nullptr);
+}
+
+void SoftmaxUnnormalizedFloat32_AVX2_FMA(float *input_output, float *denominators, std::size_t rows,
+                                         std::size_t columns) {
+  SoftmaxRows<false>(input_output, input_output, rows, columns, denominators);
 }
 
 void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {

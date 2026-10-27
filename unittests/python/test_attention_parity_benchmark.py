@@ -1,15 +1,48 @@
 import math
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
 
 from tools.benchmark_attention_parity import (
     _expand_cpu_part,
+    _module_version,
+    _package_versions,
     estimate_temporary_memory,
     measure_alternating,
     parse_args,
     parse_case_name,
     summarize,
 )
+
+
+def test_versions_describe_imported_runtimes_including_source_checkouts():
+    import onnx_light_cpu
+
+    versions = _package_versions()
+    assert versions["onnx-light-cpu"] == onnx_light_cpu.__version__
+    if "onnxruntime" in sys.modules:
+        assert versions["onnxruntime"] == sys.modules["onnxruntime"].__version__
+
+
+def test_version_collection_reports_missing_optional_packages_and_versions():
+    assert _module_version("_onnx_light_cpu_missing_benchmark_package") == "not installed"
+    assert _module_version("math") == "unknown"
+
+
+def test_version_collection_does_not_hide_missing_transitive_dependencies():
+    name = "_onnx_light_cpu_broken_benchmark_package"
+    dependency = "_onnx_light_cpu_missing_benchmark_dependency"
+    with TemporaryDirectory() as directory:
+        (Path(directory) / f"{name}.py").write_text(f"import {dependency}\n", encoding="utf-8")
+        sys.path.insert(0, directory)
+        try:
+            with TestCase().assertRaises(ModuleNotFoundError) as raised:
+                _module_version(name)
+            assert raised.exception.name == dependency
+        finally:
+            sys.path.remove(directory)
 
 
 def test_backend_case_name_is_traceable_and_complete():
