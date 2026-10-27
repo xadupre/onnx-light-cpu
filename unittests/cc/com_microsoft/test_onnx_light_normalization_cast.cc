@@ -238,8 +238,6 @@ TEST(NormalizationCast, CreatesInitializersWithoutConstantNodesOrMutatingSharedW
 }
 
 TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
-  onnx_light_cpu::RegisterCastKernel();
-  onnx_light_cpu::RegisterNaiveSkipSimplifiedLayerNormalizationKernel();
   for (const std::string output : {"X32", "R32", "W32", "B32"}) {
     SCOPED_TRACE(output);
     auto model = MakeGraph({.bias = true})->ToModel();
@@ -261,26 +259,20 @@ TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
         node.set_overload("with_add");
       }
     }
-    builder::GraphBuilder graph(model, SchemaLookup);
-    graph.set_device(sym::Device::kCPU);
-    const auto before = graph.ToModel();
-    const rt::Tensors inputs = {
-        rt::MakeFloat16Tensor("X", {2, 4}, {1, 2, -3, 4, 0.5F, -1, 2, -2}),
-        rt::MakeFloat16Tensor("R", {2, 4}, {0.5F, -1, 1, 2, 1, -2, 0.5F, 1}),
-        rt::MakeFloat16Tensor("W", {4}, {1, 0.5F, 2, -1}),
-        rt::MakeFloat16Tensor("B", {4}, {0.5F, -1, 0.5F, 1})};
-    const auto expected = rt::RunModel(before, inputs);
-    builder::GraphGraph optimizer(graph, Patterns());
-    EXPECT_EQ(Pattern(kKernel).Match(optimizer, Normalization(graph)).pattern, nullptr);
-    optimizer.Optimize();
-    EXPECT_EQ(graph.ToModel().SerializeAsString(), before.SerializeAsString());
-    const auto actual = rt::RunModel(graph.ToModel(), inputs);
-    ASSERT_EQ(actual.size(), expected.size());
-    for (std::size_t i = 0; i < actual.size(); ++i) {
-      EXPECT_EQ(actual[i].data_type, expected[i].data_type);
-      EXPECT_EQ(actual[i].shape, expected[i].shape);
-      EXPECT_EQ(Bytes(actual[i]), Bytes(expected[i]));
+    EXPECT_THROW(builder::GraphBuilder(model, SchemaLookup), builder::BuilderError);
+  }
+}
+
+TEST(NormalizationCast, RejectsInputCastOverloads) {
+  for (const std::string output : {"X32", "R32", "W32", "B32"}) {
+    SCOPED_TRACE(output);
+    auto model = MakeGraph({.bias = true})->ToModel();
+    for (auto &node : model.mutable_graph()->ref_node()) {
+      if (node.op_type() == "Cast" && node.output(0) == output) {
+        node.set_overload("with_add");
+      }
     }
+    EXPECT_THROW(builder::GraphBuilder(model, SchemaLookup), builder::BuilderError);
   }
 }
 

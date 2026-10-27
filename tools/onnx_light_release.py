@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ONNX_LIGHT_VERSION = "0.2.0"
+ONNX_LIGHT_VERSION = "0.2.1"
 
 
 def wheel_name(system, machine, python_version):
