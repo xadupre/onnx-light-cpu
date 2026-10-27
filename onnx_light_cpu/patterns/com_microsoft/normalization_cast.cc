@@ -223,14 +223,13 @@ NormalizationCastEliminationPattern::Apply(builder::GraphGraph &graph,
       if (!ExactHalfConstant(graph.GetComputedConstant(name), &weight)) {
         throw builder::BuilderError("NormalizationCastEliminationPattern: inexact weight.");
       }
-      const auto weight_name = graph.Builder().UniqueName(name + "_fp16");
-      auto constant = ONNX_LIGHT_NAMESPACE::MakeNode("Constant", {}, {weight_name});
-      auto *attribute = constant.add_attribute();
-      attribute->set_name("value");
-      attribute->set_type(AttributeProto::AttributeType::TENSOR);
-      attribute->ref_t() = std::move(weight);
-      replacements.push_back(std::move(constant));
-      replacement.ref_input()[i] = weight_name;
+      const auto prefix = name + "_fp16";
+      auto weight_name = prefix;
+      for (std::size_t suffix = 0; graph.Builder().HasName(weight_name); ++suffix) {
+        weight_name = prefix + "_" + std::to_string(suffix);
+      }
+      weight.set_name(weight_name);
+      replacement.ref_input()[i] = graph.Builder().MakeInitializer(weight);
     }
   }
   replacement.ref_output()[0] = nodes[1]->output(0);

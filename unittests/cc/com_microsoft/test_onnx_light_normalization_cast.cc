@@ -206,6 +206,37 @@ TEST(NormalizationCast, PreservesOtherInputCastConsumers) {
   EXPECT_EQ(Normalization(*graph).input(0), "X");
 }
 
+TEST(NormalizationCast, CreatesInitializersWithoutConstantNodesOrMutatingSharedWeights) {
+  for (const bool raw : {false, true}) {
+    for (const float value : {1.0F, -0.0F}) {
+      auto graph = MakeGraph({.constant_weight = true, .weight = value, .raw_weight = raw});
+      graph->MakeOutput("W32");
+      const auto original = graph->Initializers()[0].SerializeAsString();
+      TensorProto collision = graph->Initializers()[0];
+      collision.set_name("W32_fp16");
+      graph->MakeInitializer(collision);
+      builder::GraphGraph optimizer(*graph, Patterns());
+      const Pattern pattern(kKernel);
+      const auto match = pattern.Match(optimizer, Normalization(*graph));
+      ASSERT_NE(match.pattern, nullptr) << match.ToString();
+      const auto replacements = pattern.Apply(optimizer, match.nodes);
+      ASSERT_EQ(replacements.size(), 1U);
+      EXPECT_EQ(replacements[0].op_type(), "SkipSimplifiedLayerNormalization");
+      ASSERT_EQ(graph->Initializers().size(), 3U);
+      EXPECT_EQ(graph->Initializers()[0].SerializeAsString(), original);
+      EXPECT_EQ(graph->Initializers()[1].SerializeAsString(), collision.SerializeAsString());
+      const auto &converted = graph->Initializers()[2];
+      EXPECT_EQ(replacements[0].input(2), converted.name());
+      EXPECT_NE(converted.name(), "W32");
+      EXPECT_NE(converted.name(), collision.name());
+      EXPECT_EQ(converted.data_type(), TensorProto::DataType::FLOAT16);
+      ASSERT_EQ(converted.dims().size(), 1U);
+      EXPECT_EQ(converted.dims(0), graph->Initializers()[0].dims(0));
+      EXPECT_EQ(graph->GetShape(converted.name()).Dtype(), sym::TensorType::kFloat16);
+    }
+  }
+}
+
 TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
   onnx_light_cpu::RegisterCastKernel();
   onnx_light_cpu::RegisterNaiveSkipSimplifiedLayerNormalizationKernel();

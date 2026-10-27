@@ -141,6 +141,12 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
                     helper.make_node("Cast", ["normalized"], ["Y"], to=TensorProto.FLOAT16),
                 ]
             )
+            opsets = [
+                helper.make_opsetid("", 23),
+                helper.make_opsetid("com.microsoft", 1),
+            ]
+            if domain == "ai.onnx":
+                opsets.append(helper.make_opsetid("ai.onnx", 23))
             model = helper.make_model(
                 helper.make_graph(
                     nodes,
@@ -153,10 +159,7 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
                     ],
                     [helper.make_tensor_value_info("Y", TensorProto.FLOAT16, [2, 4])],
                 ),
-                opset_imports=[
-                    helper.make_opsetid("", 23),
-                    helper.make_opsetid("com.microsoft", 1),
-                ],
+                opset_imports=opsets,
             )
             builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
             builder.device = Device.kCPU

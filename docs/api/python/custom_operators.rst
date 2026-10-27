@@ -23,7 +23,8 @@ Microsoft normalization cast elimination
 .. py:function:: normalization_cast_pattern(kernel_name)
 
    Returns a native ``MicrosoftNormalizationCast`` pattern for an explicit
-   execution-kernel contract. Pass it in the optimizer's pattern list and set
+   execution-kernel contract. Operator-support metadata exposes the same
+   ``MicrosoftNormalizationCast`` registry name. Pass it in the optimizer's pattern list and set
    the builder's target device to CPU. The caller must guarantee that both the
    original and rewritten graphs execute with the named kernel, including
    session-local overrides.
@@ -39,8 +40,8 @@ Microsoft normalization cast elimination
    The rewrite bypasses FLOAT16-to-FLOAT input casts and absorbs the final
    FLOAT16 cast. Scale and bias must come from FLOAT16 casts or exactly
    representable, finite FLOAT constants; arbitrary FLOAT weights are never
-   rounded. Exact weight copies are emitted as FLOAT16 Constant nodes; the
-   usual constant-folding pass can materialize them as initializers.
+   rounded. Exact weight copies are emitted directly as FLOAT16 initializers,
+   without adding Constant nodes or requiring a constant-folding pass.
    Shared input casts remain available to their other consumers.
    FLOAT statistics keep their names and types. A live residual sum must
    exclusively feed a FLOAT16 cast; a live FLOAT residual prevents rewriting.
