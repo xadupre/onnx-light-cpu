@@ -136,7 +136,7 @@ The ``MicrosoftMoE`` optimization pattern fuses FLOAT expert networks after
 the standard-domain ``GroupedMatMul`` pattern has run (opset 29 or later).
 It recognizes softmax/top-k routing, optional renormalization of selected
 weights, two grouped projections with optional expert biases, an identity,
-ReLU, SiLU or tanh-approximated GELU activation, and a weighted sum over
+ReLU or tanh-approximated GELU activation, and a weighted sum over
 selected experts.
 The intervening reshapes must preserve token/expert order. Expert weights
 are transposed to MoE's output-major layout, and expert numbering is reversed
@@ -144,6 +144,11 @@ to preserve ONNX ``TopK``'s lower-index tie selection with MoE's higher-index
 tie selection. Shared intermediates, unsupported layouts or attributes, and
 low-precision graphs are left unchanged; low-precision grouped projections
 round intermediates differently from MoE.
+SiLU is left unfused because the kernel's activation does not preserve the
+standalone Sigmoid/Mul arithmetic for extreme inputs. Expert weights and
+biases must be constant, so their layout conversions can be folded during
+optimization rather than copying full expert banks on every inference.
+Retained inputs must be produced outside the fused block.
 
 Microsoft QMoE
 ~~~~~~~~~~~~~~

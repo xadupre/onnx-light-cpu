@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,6 +42,7 @@ struct Options {
   bool bias2 = true;
   bool commute = false;
   bool symbolic = false;
+  std::string runtime_parameter;
   sym::TensorType type = sym::TensorType::kFloat;
 };
 
@@ -72,13 +74,31 @@ std::unique_ptr<builder::GraphBuilder> MakeGraph(const Options &options = {}) {
   const sym::SymDim tokens = options.symbolic ? sym::SymDim("M") : sym::SymDim(3);
   graph->MakeInput("X", options.type, sym::SymShape({tokens, sym::SymDim(2)}));
   graph->MakeInput("logits", options.type, sym::SymShape({tokens, sym::SymDim(3)}));
-  graph->MakeInput("W1", options.type, sym::SymShape({3, 2, 4}));
-  graph->MakeInput("W2", options.type, sym::SymShape({3, 4, 2}));
+  const auto parameter = [&](const std::string &name, const std::vector<int64_t> &shape,
+                             const std::vector<float> &values) {
+    if (options.runtime_parameter == name || options.type != sym::TensorType::kFloat) {
+      sym::SymShape symbolic_shape;
+      for (const auto dimension : shape) {
+        symbolic_shape.PushBack(sym::SymDim(dimension));
+      }
+      graph->MakeInput(name, options.type, symbolic_shape);
+    } else {
+      graph->MakeInitializer(
+          ONNX_LIGHT_NAMESPACE::MakeInitializer<float>(name.c_str(), shape, values));
+    }
+  };
+  std::vector<float> w1(24), w2(24);
+  for (std::size_t i = 0; i < w1.size(); ++i) {
+    w1[i] = static_cast<float>(static_cast<int>(i % 7) - 2) * 0.17F;
+    w2[i] = static_cast<float>(static_cast<int>(i % 11) - 4) * 0.23F;
+  }
+  parameter("W1", {3, 2, 4}, w1);
+  parameter("W2", {3, 4, 2}, w2);
   if (options.bias1) {
-    graph->MakeInput("B1", options.type, sym::SymShape({3, 4}));
+    parameter("B1", {3, 4}, {0, 1, -1, 2, 3, -2, 1, 0, -1, 0, 2, 1});
   }
   if (options.bias2) {
-    graph->MakeInput("B2", options.type, sym::SymShape({3, 2}));
+    parameter("B2", {3, 2}, {1, -1, 2, 0, -3, 1});
   }
   Initializer(*graph, "k", {options.k});
   Initializer(*graph, "axis1", {1});
@@ -159,7 +179,7 @@ void Reject(builder::GraphBuilder &graph) {
 TEST(MoEFusion, RegistryAcceptsRoutingActivationsBiasesAndSymbolicTokens) {
   for (const int64_t k : {1, 2, 3}) {
     for (const bool normalize : {false, true}) {
-      for (const std::string activation : {"", "Identity", "Relu", "SiLU", "GeluTanh"}) {
+      for (const std::string activation : {"", "Identity", "Relu", "GeluTanh"}) {
         for (const bool bias : {false, true}) {
           auto graph = MakeGraph({.k = k,
                                   .normalize = normalize,
@@ -273,7 +293,9 @@ TEST(MoEFusion, RejectsCapturedIntermediates) {
   }
 }
 
-TEST(MoEFusion, SiluRequiresAnIsolatedSigmoidOfTheSameExpertOutput) {
+TEST(MoEFusion, RejectsSiluWithoutAnEquivalentActivationContract) {
+  auto isolated = MakeGraph({.activation = "SiLU"});
+  Reject(*isolated);
   for (const bool shared : {false, true}) {
     auto graph = MakeGraph({.activation = "SiLU"});
     if (shared) {
@@ -283,6 +305,30 @@ TEST(MoEFusion, SiluRequiresAnIsolatedSigmoidOfTheSameExpertOutput) {
     }
     Reject(*graph);
   }
+}
+
+TEST(MoEFusion, RejectsRetainedInputsProducedByTheMatchedBlock) {
+  auto graph = MakeGraph();
+  Node(*graph, "fc1").ref_input()[0] = "values";
+  Reject(*graph);
+}
+
+TEST(MoEFusion, RejectsRuntimeExpertWeightsAndBiases) {
+  for (const std::string parameter : {"W1", "W2", "B1", "B2"}) {
+    SCOPED_TRACE(parameter);
+    auto graph = MakeGraph({.runtime_parameter = parameter});
+    Reject(*graph);
+  }
+}
+
+TEST(MoEFusion, FoldsImmutableExpertLayoutsBeforeInference) {
+  auto graph = MakeGraph();
+  builder::GraphGraph(*graph, Patterns()).Optimize();
+  ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
+  ASSERT_EQ(graph->Nodes().size(), 2U);
+  const auto &router = Node(*graph, Node(*graph, "Y").input(1));
+  EXPECT_EQ(router.op_type(), "Gather");
+  EXPECT_EQ(router.input(0), "logits");
 }
 
 TEST(MoEFusion, RejectsNonFloatUnsupportedOpsetsAndAlteredContracts) {
@@ -376,31 +422,12 @@ TEST(MoEFusion, RejectsModelLocalFunctionsWithDefaultOverload) {
   }
 }
 
-rt::Tensors RunGraph(builder::GraphBuilder &graph, bool bias1, bool bias2, bool ties) {
+rt::Tensors RunGraph(builder::GraphBuilder &graph,
+                     std::vector<std::pair<std::string, rt::Tensor>> inputs) {
   const auto model = graph.ToModel();
   const rt::OpsetImports opsets = {{"", 29}, {"ai.onnx", 29}, {"com.microsoft", 1}};
   rt::RuntimeContext runtime{rt::KernelContext(rt::DefaultOpset(29), nullptr, &opsets)};
   rt::SubgraphSession session(model.graph(), &opsets);
-  std::vector<float> w1(24), w2(24);
-  for (std::size_t i = 0; i < w1.size(); ++i) {
-    w1[i] = static_cast<float>(static_cast<int>(i % 7) - 2) * 0.17F;
-    w2[i] = static_cast<float>(static_cast<int>(i % 11) - 4) * 0.23F;
-  }
-  std::vector<std::pair<std::string, rt::Tensor>> inputs = {
-      {"X", rt::Tensor::FromFloat("X", {3, 2}, {1, -2, 0.5F, 3, -1, 2})},
-      {"logits",
-       rt::Tensor::FromFloat("logits", {3, 3},
-                             ties ? std::vector<float>{0, 0, 0, 1, 1, -1, -1, 2, 2}
-                                  : std::vector<float>{0.2F, -0.5F, 1, 2, -1, 0, -2, 1, 3})},
-      {"W1", rt::Tensor::FromFloat("W1", {3, 2, 4}, w1)},
-      {"W2", rt::Tensor::FromFloat("W2", {3, 4, 2}, w2)}};
-  if (bias1) {
-    inputs.emplace_back(
-        "B1", rt::Tensor::FromFloat("B1", {3, 4}, {0, 1, -1, 2, 3, -2, 1, 0, -1, 0, 2, 1}));
-  }
-  if (bias2) {
-    inputs.emplace_back("B2", rt::Tensor::FromFloat("B2", {3, 2}, {1, -1, 2, 0, -3, 1}));
-  }
   auto outputs = session.Run(std::move(inputs), runtime);
   for (auto &output : outputs) {
     output = output.ToOwned();
@@ -408,11 +435,57 @@ rt::Tensors RunGraph(builder::GraphBuilder &graph, bool bias1, bool bias2, bool 
   return outputs;
 }
 
+rt::Tensors RunGraph(builder::GraphBuilder &graph, bool ties) {
+  return RunGraph(graph,
+                  {{"X", rt::Tensor::FromFloat("X", {3, 2}, {1, -2, 0.5F, 3, -1, 2})},
+                   {"logits", rt::Tensor::FromFloat(
+                                  "logits", {3, 3},
+                                  ties ? std::vector<float>{0, 0, 0, 1, 1, -1, -1, 2, 2}
+                                       : std::vector<float>{0.2F, -0.5F, 1, 2, -1, 0, -2, 1, 3})}});
+}
+
+TEST(MoEFusion, PreservesNanFromSelectedExpertsWithUnderflowedRoutingWeights) {
+  onnx_light_cpu::RegisterMoEKernel();
+  for (const bool normalize : {false, true}) {
+    auto model =
+        MakeGraph({.normalize = normalize, .activation = "", .bias1 = false, .bias2 = false})
+            ->ToModel();
+    std::vector<float> w1(24, 0.0F), w2(24, 1.0F);
+    w1[0] = 1.0F;
+    w1[8] = 3.0e38F;
+    for (auto &initializer : model.mutable_graph()->ref_initializer()) {
+      if (initializer.name() == "W1") {
+        initializer = ONNX_LIGHT_NAMESPACE::MakeInitializer<float>("W1", {3, 2, 4}, w1);
+      } else if (initializer.name() == "W2") {
+        initializer = ONNX_LIGHT_NAMESPACE::MakeInitializer<float>("W2", {3, 4, 2}, w2);
+      }
+    }
+    builder::GraphBuilder graph(model, SchemaLookup);
+    const auto run = [&] {
+      return RunGraph(
+          graph,
+          {{"X", rt::Tensor::FromFloat("X", {3, 2}, {2, 0, 2, 0, 2, 0})},
+           {"logits", rt::Tensor::FromFloat("logits", {3, 3},
+                                            {0, -104, -200, 0, -104, -200, 0, -104, -200})}});
+    };
+    const auto original = run();
+    builder::GraphGraph(graph, Patterns()).Optimize();
+    ASSERT_EQ(Node(graph, "Y").op_type(), "MoE");
+    const auto fused = run();
+    ASSERT_EQ(original.size(), 1U);
+    ASSERT_EQ(fused.size(), 1U);
+    for (std::size_t i = 0; i < 6; ++i) {
+      EXPECT_TRUE(std::isnan(original[0].AsFloat()[i]));
+      EXPECT_TRUE(std::isnan(fused[0].AsFloat()[i]));
+    }
+  }
+}
+
 TEST(MoEFusion, UpstreamSubgraphSessionNumericalParityIncludingRouterTies) {
   onnx_light_cpu::RegisterMoEKernel();
   for (const int64_t k : {1, 2, 3}) {
     for (const bool normalize : {false, true}) {
-      for (const std::string activation : {"", "Relu", "SiLU", "GeluTanh"}) {
+      for (const std::string activation : {"", "Relu", "GeluTanh"}) {
         for (const bool biases : {false, true}) {
           for (const bool ties : {false, true}) {
             SCOPED_TRACE(::testing::Message() << k << " " << normalize << " " << activation << " "
@@ -423,10 +496,10 @@ TEST(MoEFusion, UpstreamSubgraphSessionNumericalParityIncludingRouterTies) {
                                     .bias1 = biases,
                                     .bias2 = biases,
                                     .commute = true});
-            const auto original = RunGraph(*graph, biases, biases, ties);
+            const auto original = RunGraph(*graph, ties);
             builder::GraphGraph(*graph, Patterns()).Optimize();
             ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
-            const auto fused = RunGraph(*graph, biases, biases, ties);
+            const auto fused = RunGraph(*graph, ties);
             ASSERT_EQ(original.size(), 1U);
             ASSERT_EQ(fused.size(), 1U);
             EXPECT_EQ(original[0].shape, fused[0].shape);
@@ -458,14 +531,14 @@ TEST(MoEFusion, InsertsAfterSharedComputedWeightsRatherThanBeforeTheRouter) {
     }
   }
   builder::GraphBuilder graph(model, SchemaLookup);
-  const auto before = RunGraph(graph, true, true, true);
+  const auto before = RunGraph(graph, true);
   builder::GraphGraph optimizer(graph, Patterns());
   const Pattern pattern;
   const auto match = pattern.Match(optimizer, Node(graph, "Y"));
   ASSERT_NE(match.pattern, nullptr);
   EXPECT_EQ(match.insert_at, &Node(graph, "Y"));
   optimizer.Optimize();
-  const auto after = RunGraph(graph, true, true, true);
+  const auto after = RunGraph(graph, true);
   ASSERT_EQ(Node(graph, "Y").op_type(), "MoE");
   for (std::size_t i = 0; i < 6; ++i) {
     EXPECT_NEAR(before[0].AsFloat()[i], after[0].AsFloat()[i], 2.0e-5F);

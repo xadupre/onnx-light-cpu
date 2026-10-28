@@ -258,13 +258,16 @@ private:
  *
  * T/E/H/I/K denote tokens, experts, hidden width, intermediate width and selected
  * experts. Normalize? is p / ReduceSum(p,axis=1,keepdims=1), or just p when absent.
- * Activation? is identity, Relu, Gelu(approximate="tanh"), or Mul(a,Sigmoid(a)).
+ * Activation? is identity, Relu, or Gelu(approximate="tanh").
  * Biases b1[E,I] and b2[E,H] are optional. reverse is [E-1,...,0].
  *
  * Supports FLOAT, static positive expert/hidden/intermediate dimensions, constant
- * reshape targets, optional biases, Relu, SiLU, tanh-Gelu and identity activations.
+ * reshape targets, constant weights and optional constant biases, Relu, tanh-Gelu
+ * and identity activations.
  * FLOAT16/BFLOAT16 are excluded: the unfused graph rounds its intermediates.
  * Exact Gelu is excluded: the MoE CPU kernel uses a tanh approximation.
+ * SiLU is excluded: MoE and standalone Sigmoid/Mul differ for extreme inputs.
+ * Retained inputs must be produced outside the matched block.
  * Expert order is reversed for logits, weights and biases before transposing
  * weights. This preserves ONNX TopK's low-index tie breaking with MoE's
  * high-index tie breaking. Shared source tensors are never modified.

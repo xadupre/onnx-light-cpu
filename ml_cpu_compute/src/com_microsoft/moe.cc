@@ -218,12 +218,6 @@ void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1,
         float *second = activated + intermediate;
         const float weight = routes[slot].weight;
         const std::size_t expert = routes[slot].expert;
-        if (weight == 0.0f) {
-          if (disjoint_results != nullptr) {
-            std::fill_n(disjoint_results + slot * hidden, hidden, 0.0f);
-          }
-          continue;
-        }
         detail::MoEMatVecFloat32(input + token * hidden, fc1 + expert * fc1_width * hidden, first,
                                  fc1_width, hidden);
         if (bias1 != nullptr) {

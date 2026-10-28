@@ -126,6 +126,27 @@ TEST(MoE, EmptyTokensDoNotReadRouter) {
   EXPECT_FLOAT_EQ(output, 42.0f);
 }
 
+TEST(MoE, EvaluatesZeroWeightExpertsToPreserveNanPropagation) {
+  const float input[] = {2.0f};
+  const float router[] = {0.0f, -104.0f};
+  const float fc1[] = {1.0f, 3.0e38f};
+  const float fc2[] = {1.0f, 1.0f};
+  float output = 0.0f;
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+  attributes.k = 2;
+  for (const bool normalize : {false, true}) {
+    attributes.normalize = normalize;
+    RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, MoEDataType::kFloat32,
+           attributes);
+    EXPECT_TRUE(std::isnan(output));
+  }
+  attributes.k = 1;
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, MoEDataType::kFloat32,
+         attributes);
+  EXPECT_FLOAT_EQ(output, 2.0f);
+}
+
 TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   constexpr std::size_t tokens = 8;
   const std::vector<float> input(tokens, 2.0f);

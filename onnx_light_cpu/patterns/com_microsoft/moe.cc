@@ -161,7 +161,6 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
     return false;
   }
   const auto *activation = graph.NodeBefore(flat->input(0));
-  const NodeProto *sigmoid = nullptr;
   const NodeProto *first = activation;
   if (Op(graph, activation, "Relu", 1) && activation->attribute().empty()) {
     match.activation = "relu";
@@ -176,17 +175,6 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
     first = graph.NodeBefore(activation->input(0));
   } else if (Op(graph, activation, "Identity", 1) && activation->attribute().empty()) {
     first = graph.NodeBefore(activation->input(0));
-  } else if (Op(graph, activation, "Mul", 2) && activation->attribute().empty()) {
-    for (int side = 0; side < 2; ++side) {
-      const auto *node = graph.NodeBefore(activation->input(side));
-      if (Op(graph, node, "Sigmoid", 1) && node->attribute().empty() &&
-          node->input(0) == activation->input(1 - side)) {
-        sigmoid = node;
-        first = graph.NodeBefore(node->input(0));
-        match.activation = "silu";
-        break;
-      }
-    }
   } else {
     activation = nullptr;
   }
@@ -246,6 +234,10 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
     return false;
   }
   for (const auto *node : {first, second}) {
+    if (!graph.IsConstant(node->input(1)) ||
+        (node->input_size() == 4 && !node->input(3).empty() && !graph.IsConstant(node->input(3)))) {
+      return false;
+    }
     if (node->input_size() == 4 && !node->input(3).empty() &&
         !FloatShape(graph, node->input(3),
                     sym::SymShape({experts, node == first ? intermediate : hidden}))) {
@@ -272,9 +264,6 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
     match.nodes.push_back(div);
   }
   match.nodes.push_back(first);
-  if (sigmoid != nullptr) {
-    match.nodes.push_back(sigmoid);
-  }
   if (activation != nullptr) {
     match.nodes.push_back(activation);
   }
@@ -284,6 +273,18 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
   const std::unordered_set<const NodeProto *> members(match.nodes.begin(), match.nodes.end());
   if (members.size() != match.nodes.size()) {
     return false;
+  }
+  const auto internal = [&](const std::string &input) {
+    return members.contains(graph.NodeBefore(input));
+  };
+  if (internal(x) || internal(logits)) {
+    return false;
+  }
+  for (const auto *node : {first, second}) {
+    if (internal(node->input(1)) ||
+        (node->input_size() == 4 && !node->input(3).empty() && internal(node->input(3)))) {
+      return false;
+    }
   }
   for (const auto *node : match.nodes) {
     if (node == &candidate) {
