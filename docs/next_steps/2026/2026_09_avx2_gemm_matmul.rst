@@ -420,7 +420,7 @@ threads, with reference outputs computed before CPU-kernel registration
 (FP32 ``rtol=atol=1e-4``, FP16 ``rtol=atol=1e-2``).
 
 October 2026 Gemm follow-up (#981)
---------------------------------
+----------------------------------
 
 This follow-up measures the 36 exact dynamic-input cases in
 `issue #981 <https://github.com/xadupre/onnx-light-cpu/issues/981>`_ on
@@ -560,7 +560,7 @@ The ORT column spans its medians across the four processes.
    "big_m128_n16384_k128_float16", "7.329262 / 7.416645", "6.807513 / 6.772940", "11.576530–12.601624"
 
 Interpretation and remaining gaps
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Comparing the means of the two per-process medians, the cases using the
 changed tile improve by 1.04–1.11x. Both FP32 and FP16 256/512-square cases

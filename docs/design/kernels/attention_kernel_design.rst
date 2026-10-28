@@ -501,7 +501,7 @@ finite values to verify invocation-local selection. No AVX-512 or scalar
 performance claim is made.
 
 Issue 1029: retained AVX2 dense-softmax and strided-output optimization
---------------------------------------------------------------------
+-----------------------------------------------------------------------
 
 The 2026-10-27 follow-up retains two computation changes, rather than only
 documenting attribution:
@@ -613,7 +613,7 @@ the runner's ORT performance-parity thresholds. No AVX-512 or scalar
 performance improvement is claimed.
 
 Corrected AUTO/AVX-512 comparison
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The follow-up removes the installed editable distribution and its import
 hook. Normal Python imports now load both native CPU modules from the source
