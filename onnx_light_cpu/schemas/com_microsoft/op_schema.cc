@@ -483,7 +483,8 @@ LightOpSchema MakeMoESchema() {
       "ONNX Runtime CPU MoE: softmax router logits, select top-k experts and combine "
       "their outputs. FC1 and FC2 weights are expert-major, output-major.",
       {{"input", "Rank-2 (tokens, hidden) or rank-3 (batch, sequence, hidden).", "T"},
-       {"router_probs", "Rank-2 (tokens, experts) logits.", "T"},
+       {"router_probs",
+        "Rank-2 (tokens, experts) logits, or probabilities when router_probs_are_logits=0.", "T"},
        {"fc1_experts_weights", "(experts, intermediate * fusion, hidden).", "T"},
        {"fc1_experts_bias", "Optional (experts, intermediate * fusion).", "T"},
        {"fc2_experts_weights", "(experts, hidden, intermediate).", "T"},
@@ -499,6 +500,10 @@ LightOpSchema MakeMoESchema() {
                       "CPU extension: select lower expert indices on equal routing weights "
                       "when 1. Default 0 preserves higher-index tie selection.",
                       AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"router_probs_are_logits",
+                      "CPU extension: apply Softmax to router input when 1 (default); "
+                      "consume supplied routing probabilities unchanged when 0.",
+                      AttributeType::INT, false, int64_t{1}},
        AttributeParam{"activation_type", "relu, gelu, silu, identity or swiglu.",
                       AttributeType::STRING, false, std::string("relu")},
        AttributeParam{"swiglu_fusion", "Interleaved SwiGLU requires 1.", AttributeType::INT, false,

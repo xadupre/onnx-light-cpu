@@ -47,6 +47,33 @@ struct RouteGreater {
   }
 };
 
+float PrepareRoutes(const float *router, std::size_t experts, const MoEAttributes &attributes,
+                    MoERoute *routes) {
+  if (attributes.router_probs_are_logits) {
+    const float max_logit = *std::max_element(router, router + experts);
+    float denominator = 0.0f;
+    for (std::size_t expert = 0; expert < experts; ++expert) {
+      const float weight = std::exp(router[expert] - max_logit);
+      routes[expert] = MoERoute{weight, expert};
+      denominator += weight;
+    }
+    for (std::size_t expert = 0; expert < experts; ++expert) {
+      routes[expert].weight /= denominator;
+    }
+  } else {
+    for (std::size_t expert = 0; expert < experts; ++expert) {
+      routes[expert] = MoERoute{router[expert], expert};
+    }
+  }
+  std::partial_sort(routes, routes + attributes.k, routes + experts,
+                    RouteGreater{attributes.topk_tie_break_low});
+  float top_sum = 0.0f;
+  for (std::size_t slot = 0; slot < attributes.k; ++slot) {
+    top_sum += routes[slot].weight;
+  }
+  return top_sum;
+}
+
 std::size_t ElementBytes(MoEDataType data_type) {
   return data_type == MoEDataType::kFloat32 ? sizeof(float) : sizeof(std::uint16_t);
 }
@@ -197,25 +224,7 @@ void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1,
     float *expert_results = parallel_experts ? cursor : nullptr;
     cursor += parallel_experts ? attributes.k * hidden : 0;
     float *workspaces = cursor;
-    float max_logit = Read(router, token * experts);
-    for (std::size_t expert = 1; expert < experts; ++expert) {
-      max_logit = std::max(max_logit, Read(router, token * experts + expert));
-    }
-    float denominator = 0.0f;
-    for (std::size_t expert = 0; expert < experts; ++expert) {
-      const float weight = std::exp(Read(router, token * experts + expert) - max_logit);
-      routes[expert] = MoERoute{weight, expert};
-      denominator += weight;
-    }
-    for (std::size_t expert = 0; expert < experts; ++expert) {
-      routes[expert].weight /= denominator;
-    }
-    std::partial_sort(routes, routes + attributes.k, routes + experts,
-                      RouteGreater{attributes.topk_tie_break_low});
-    float top_sum = 0.0f;
-    for (std::size_t slot = 0; slot < attributes.k; ++slot) {
-      top_sum += routes[slot].weight;
-    }
+    const float top_sum = PrepareRoutes(router + token * experts, experts, attributes, routes);
     std::fill(result, result + hidden, 0.0f);
     const auto compute_slots = [&](std::size_t slot_begin, std::size_t slot_end,
                                    float *disjoint_results) {
@@ -310,22 +319,7 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
     cursor += parallel_experts ? attributes.k * hidden : 0;
     float *workspaces = cursor;
     Codec::Convert(router + token * experts, router_values, experts);
-    const float max_logit = *std::max_element(router_values, router_values + experts);
-    float denominator = 0.0f;
-    for (std::size_t expert = 0; expert < experts; ++expert) {
-      const float weight = std::exp(router_values[expert] - max_logit);
-      routes[expert] = MoERoute{weight, expert};
-      denominator += weight;
-    }
-    for (std::size_t expert = 0; expert < experts; ++expert) {
-      routes[expert].weight /= denominator;
-    }
-    std::partial_sort(routes, routes + attributes.k, routes + experts,
-                      RouteGreater{attributes.topk_tie_break_low});
-    float top_sum = 0.0f;
-    for (std::size_t slot = 0; slot < attributes.k; ++slot) {
-      top_sum += routes[slot].weight;
-    }
+    const float top_sum = PrepareRoutes(router_values, experts, attributes, routes);
     std::fill(result, result + hidden, 0.0f);
     const auto compute_slots = [&](std::size_t slot_begin, std::size_t slot_end,
                                    float *disjoint_results) {

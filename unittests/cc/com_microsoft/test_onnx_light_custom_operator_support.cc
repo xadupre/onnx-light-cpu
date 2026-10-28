@@ -663,6 +663,44 @@ TEST(CustomOperatorSupport, MoEExplicitTieBreakModePreservesNearTieSoftmaxOrder)
   EXPECT_FLOAT_EQ(original(input, router, fc1, nullptr, fc2, nullptr).AsFloat()[0], 2.0F);
 }
 
+TEST(CustomOperatorSupport, MoEValidatesProbabilityInputModeAndPreservesLogitsDefault) {
+  NodeProto base;
+  base.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  base.set_op_type("MoE");
+  for (const char *name : {"input", "router", "fc1", "", "fc2"}) {
+    base.add_input(name);
+  }
+  base.add_output("output");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(base, "activation_type", std::string("identity"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(base, "k", int64_t{2});
+  const rt_ns::KernelContext context{rt_ns::OpsetId(onnx_light_cpu::kMicrosoftDomain, 1)};
+  const Tensor input = Tensor::FromFloat("", {1, 1}, {1});
+  const Tensor router = Tensor::FromFloat("", {1, 2}, {0.125F, 0.375F});
+  const Tensor fc1 = Tensor::FromFloat("", {2, 1, 1}, {1, 3});
+  const Tensor fc2 = Tensor::FromFloat("", {2, 1, 1}, {1, 1});
+  const float logits_output = 1.0F + 2.0F / (1.0F + std::exp(-0.25F));
+  for (const int64_t mode : {-1, 0, 1, 2}) {
+    auto node = base;
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "router_probs_are_logits", mode);
+    shapes_ns::ShapesContext shapes;
+    shapes.Set("input", SymTensor(nullptr, TensorType::kFloat, {1, 1}));
+    shapes.Set("router", SymTensor(nullptr, TensorType::kFloat, {1, 2}));
+    shapes.Set("fc1", SymTensor(nullptr, TensorType::kFloat, {2, 1, 1}));
+    shapes.Set("fc2", SymTensor(nullptr, TensorType::kFloat, {2, 1, 1}));
+    if (mode != 0 && mode != 1) {
+      EXPECT_THROW(onnx_light_cpu::MoEKernel(node, context), std::invalid_argument);
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(shapes, node), std::invalid_argument);
+    } else {
+      onnx_light_cpu::ComputeShapeMoE(shapes, node);
+      const onnx_light_cpu::MoEKernel kernel(node, context);
+      const Tensor output = kernel(input, router, fc1, nullptr, fc2, nullptr);
+      EXPECT_FLOAT_EQ(output.AsFloat()[0], mode == 0 ? 1.25F : logits_output);
+    }
+  }
+  const onnx_light_cpu::MoEKernel original(base, context);
+  EXPECT_FLOAT_EQ(original(input, router, fc1, nullptr, fc2, nullptr).AsFloat()[0], logits_output);
+}
+
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
   shapes_ns::ShapesContext ctx;
   ctx.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim("M"), SymDim("N")}));

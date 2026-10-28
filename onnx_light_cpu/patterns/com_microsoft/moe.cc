@@ -126,7 +126,7 @@ struct MoEMatch {
 bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch &match) {
   const auto &opsets = graph.Builder().OpsetVersions();
   const auto microsoft = opsets.find("com.microsoft");
-  if (graph.Builder().OpsetVersion("") < 29 ||
+  if (graph.Builder().device() != sym::Device::kCPU || graph.Builder().OpsetVersion("") < 29 ||
       (microsoft != opsets.end() && microsoft->second != 1) ||
       Local(graph, "com.microsoft", "MoE") || Local(graph, "", "Transpose") ||
       !Sum(graph, &candidate, 0, false)) {
@@ -257,7 +257,7 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
   } else {
     div = nullptr;
   }
-  match.nodes = {softmax, topk};
+  match.nodes = {topk};
   if (sum != nullptr) {
     match.nodes.push_back(sum);
     match.nodes.push_back(div);
@@ -352,11 +352,12 @@ MoEFusionPattern::Apply(builder::GraphGraph &graph,
   };
   const auto b1 = bias(*match.first);
   const auto b2 = bias(*match.second);
-  auto moe = MakeNode("MoE", {match.first->input(0), match.softmax->input(0), w1, b1, w2, b2},
+  auto moe = MakeNode("MoE", {match.first->input(0), match.softmax->output(0), w1, b1, w2, b2},
                       {nodes.back()->output(0)});
   moe.set_domain("com.microsoft");
   AddAttribute(moe, "k", match.k);
   AddAttribute(moe, "topk_tie_break_low", int64_t{1});
+  AddAttribute(moe, "router_probs_are_logits", int64_t{0});
   AddAttribute(moe, "activation_type", match.activation);
   AddAttribute(moe, "normalize_routing_weights", static_cast<int64_t>(match.normalize));
   replacements.push_back(std::move(moe));

@@ -232,7 +232,7 @@ private:
 };
 
 /**
- * Fuses Softmax/TopK routing and two GroupedMatMul-29 expert layers into MoE.
+ * Fuses TopK routing and two GroupedMatMul-29 expert layers into a CPU MoE.
  *
  * @code
  * Before:
@@ -247,11 +247,13 @@ private:
  *   experts, w --> Mul --> ReduceSum(axis=1,keepdims=0) --> Y[T,H]
  *
  * After:
+ *   logits --> Softmax(-1) --> probabilities
  *   W1,W2 --> Transpose[0,2,1] ---> W1',W2'
  *
- *   X, logits, W1', b1?, W2', b2? --> com.microsoft::MoE --> Y[T,H]
+ *   X, probabilities, W1', b1?, W2', b2? --> com.microsoft::MoE --> Y[T,H]
  *                                       k=K, activation_type=Activation,
  *                                       topk_tie_break_low=1,
+ *                                       router_probs_are_logits=0,
  *                                       normalize_routing_weights=Normalize?
  * @endcode
  *
@@ -260,21 +262,25 @@ private:
  * Activation? is identity, Relu, or Gelu(approximate="tanh").
  * Biases b1[E,I] and b2[E,H] are optional.
  *
- * Supports FLOAT, static positive expert/hidden/intermediate dimensions, constant
+ * Requires an explicitly CPU-targeted builder. Supports FLOAT, static positive
+ * expert/hidden/intermediate dimensions, constant
  * reshape targets, constant weights and optional constant biases, Relu, tanh-Gelu
  * and identity activations.
  * FLOAT16/BFLOAT16 are excluded: the unfused graph rounds its intermediates.
  * Exact Gelu is excluded: the MoE CPU kernel uses a tanh approximation.
  * SiLU is excluded: MoE and standalone Sigmoid/Mul differ for extreme inputs.
  * Retained inputs must be produced outside the matched block.
- * The explicit CPU extension topk_tie_break_low=1 preserves ONNX TopK's
- * low-index tie breaking without changing Softmax summation order.
+ * Explicit CPU extensions preserve ONNX TopK's low-index tie breaking and
+ * consume the original Softmax output without recomputing probabilities.
+ * Softmax remains outside the fusion to preserve the active kernel arithmetic.
  * Logits, expert numbering and biases retain their original order.
  * Shared source tensors are never modified.
  */
 class MoEFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  MoEFusionPattern() : PatternOptimization(0, "MicrosoftMoE") {}
+  MoEFusionPattern()
+      : PatternOptimization(0, "MicrosoftMoE", ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU) {
+  }
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult

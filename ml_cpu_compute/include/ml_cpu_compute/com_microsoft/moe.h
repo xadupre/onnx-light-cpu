@@ -19,6 +19,7 @@ struct MoEAttributes {
   float beta = 0.0f;
   float limit = std::numeric_limits<float>::infinity();
   bool topk_tie_break_low = false;
+  bool router_probs_are_logits = true;
 };
 
 enum class MoEDataType {

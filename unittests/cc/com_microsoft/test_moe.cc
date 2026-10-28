@@ -127,6 +127,42 @@ TEST(MoE, ExplicitLowerIndexTiesKeepTheDefaultModeUnchangedForAllTypes) {
   }
 }
 
+TEST(MoE, ConsumesSuppliedProbabilitiesWithoutRecomputingSoftmaxForAllTypes) {
+  const float input[] = {1.0F};
+  const float router[] = {0.125F, 0.375F};
+  const float fc1[] = {1.0F, 3.0F};
+  const float fc2[] = {1.0F, 1.0F};
+  for (const MoEDataType type :
+       {MoEDataType::kFloat32, MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+    MoEAttributes attributes;
+    attributes.activation = "identity";
+    attributes.k = 2;
+    attributes.router_probs_are_logits = false;
+    for (const bool normalize : {false, true}) {
+      attributes.normalize = normalize;
+      float output = 0.0F;
+      if (type == MoEDataType::kFloat32) {
+        RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, type, attributes);
+      } else {
+        const auto encode = [&](float value) {
+          return type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(value)
+                                               : detail::FloatToBFloat16Bits(value);
+        };
+        const std::uint16_t low_input[] = {encode(input[0])};
+        const std::uint16_t low_router[] = {encode(router[0]), encode(router[1])};
+        const std::uint16_t low_fc1[] = {encode(fc1[0]), encode(fc1[1])};
+        const std::uint16_t low_fc2[] = {encode(fc2[0]), encode(fc2[1])};
+        std::uint16_t low_output = 0;
+        RunMoE(low_input, low_router, low_fc1, nullptr, low_fc2, nullptr, &low_output, 1, 1, 2, 1,
+               type, attributes);
+        output = type == MoEDataType::kFloat16 ? detail::Float16BitsToFloat(low_output)
+                                               : detail::Bfloat16BitsToFloat(low_output);
+      }
+      EXPECT_FLOAT_EQ(output, normalize ? 2.5F : 1.25F);
+    }
+  }
+}
+
 TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
   const float input[] = {2.0f};
   const float router[] = {0.0f};

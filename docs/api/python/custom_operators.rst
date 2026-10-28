@@ -127,8 +127,13 @@ The CPU-specific INT attribute ``topk_tie_break_low`` defaults to ``0``,
 preserving higher-index selection for equal routing weights. Setting it to
 ``1`` selects lower original expert indices, matching ONNX ``TopK``, without
 reordering logits or changing the Softmax accumulation order. This attribute
-extends the upstream Microsoft schema; models using it require this CPU
-extension rather than an unmodified ONNX Runtime MoE implementation.
+extends the upstream Microsoft schema.
+
+The CPU-specific INT attribute ``router_probs_are_logits`` defaults to ``1``,
+preserving the ordinary logits input and internal softmax. Setting it to ``0``
+consumes supplied routing probabilities unchanged, without recomputing softmax.
+Models using either CPU extension require this implementation rather than an
+unmodified ONNX Runtime MoE implementation.
 
 Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
 ``BFLOAT16``. Low-precision inputs and weights are converted in bounded row
@@ -140,16 +145,20 @@ See `ONNX Runtime's MoE CPU implementation
 for the upstream compatibility contract.
 
 The ``MicrosoftMoE`` optimization pattern fuses FLOAT expert networks after
-the standard-domain ``GroupedMatMul`` pattern has run (opset 29 or later).
+the standard-domain ``GroupedMatMul`` pattern has run (opset 29 or later),
+and only for an explicitly CPU-targeted builder.
 It recognizes softmax/top-k routing, optional renormalization of selected
 weights, two grouped projections with optional expert biases, an identity,
 ReLU or tanh-approximated GELU activation, and a weighted sum over
 selected experts.
 The intervening reshapes must preserve token/expert order. Expert weights
 are transposed to MoE's output-major layout, and ``topk_tie_break_low=1``
-preserves ONNX ``TopK``'s lower-index tie selection. Logits, expert numbering
-and biases retain their original order, including for nearly tied routing
-probabilities. Shared intermediates, unsupported layouts or attributes, and
+preserves ONNX ``TopK``'s lower-index tie selection. The original Softmax
+remains outside the fused block; its output feeds MoE with
+``router_probs_are_logits=0`` to preserve the active Softmax kernel's exact
+arithmetic, including nearly tied routing probabilities. Expert numbering
+and biases retain their original order. Shared intermediates other than the
+retained Softmax output, unsupported layouts or attributes, and
 low-precision graphs are left unchanged; low-precision grouped projections
 round intermediates differently from MoE.
 SiLU is left unfused because the kernel's activation does not preserve the

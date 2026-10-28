@@ -70,6 +70,11 @@ MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::K
     throw std::invalid_argument("MoE: topk_tie_break_low must be 0 or 1.");
   }
   attributes_.topk_tie_break_low = tie_break_low == 1;
+  const auto router_logits = rt_ns::GetAttributeIntOrDefault(node, "router_probs_are_logits", 1);
+  if (router_logits != 0 && router_logits != 1) {
+    throw std::invalid_argument("MoE: router_probs_are_logits must be 0 or 1.");
+  }
+  attributes_.router_probs_are_logits = router_logits == 1;
   attributes_.alpha = rt_ns::GetAttributeFloatOrDefault(node, "activation_alpha", 1.0f);
   attributes_.beta = rt_ns::GetAttributeFloatOrDefault(node, "activation_beta", 0.0f);
   attributes_.limit = rt_ns::GetAttributeFloatOrDefault(node, "swiglu_limit",

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
+#include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
@@ -70,6 +71,7 @@ std::unique_ptr<builder::GraphBuilder> MakeGraph(const Options &options = {}) {
   ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterShapeFunctions();
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   auto graph = std::make_unique<builder::GraphBuilder>("moe_pattern", SchemaLookup);
+  graph->set_device(sym::Device::kCPU);
   graph->SetOpsetVersion("", 29);
   const sym::SymDim tokens = options.symbolic ? sym::SymDim("M") : sym::SymDim(3);
   graph->MakeInput("X", options.type, sym::SymShape({tokens, sym::SymDim(2)}));
@@ -222,12 +224,16 @@ TEST(MoEFusion, ApplyRevalidatesAndTransposesWeightsWithoutReorderingExperts) {
   EXPECT_NE(replacements[0].output(0), "W1_moe_transposed");
   EXPECT_EQ(replacements[1].op_type(), "Transpose");
   EXPECT_EQ(replacements[1].input(0), "W2");
-  EXPECT_EQ(replacements[2].input(1), "logits");
+  EXPECT_EQ(replacements[2].input(1), "probabilities");
   EXPECT_EQ(replacements[2].input(3), "B1");
   EXPECT_EQ(replacements[2].input(5), "B2");
   const auto *mode = ONNX_LIGHT_NAMESPACE::FindAttribute(replacements[2], "topk_tie_break_low");
   ASSERT_NE(mode, nullptr);
   EXPECT_EQ(mode->i(), 1);
+  const auto *router =
+      ONNX_LIGHT_NAMESPACE::FindAttribute(replacements[2], "router_probs_are_logits");
+  ASSERT_NE(router, nullptr);
+  EXPECT_EQ(router->i(), 0);
   auto invalid = match.nodes;
   std::swap(invalid[0], invalid[1]);
   EXPECT_THROW(pattern.Apply(optimizer, invalid), builder::BuilderError);
@@ -237,8 +243,8 @@ TEST(MoEFusion, ApplyRevalidatesAndTransposesWeightsWithoutReorderingExperts) {
 
 TEST(MoEFusion, RejectsEveryEscapingIntermediateIncludingBothTopKOutputs) {
   for (const std::string output :
-       {"probabilities", "values", "indices", "denominator", "normalized", "fc1", "activated",
-        "flat", "flat_indices", "fc2", "experts", "routing", "weighted"}) {
+       {"values", "indices", "denominator", "normalized", "fc1", "activated", "flat",
+        "flat_indices", "fc2", "experts", "routing", "weighted"}) {
     for (const bool graph_output : {false, true}) {
       SCOPED_TRACE(output);
       auto graph = MakeGraph();
@@ -250,6 +256,22 @@ TEST(MoEFusion, RejectsEveryEscapingIntermediateIncludingBothTopKOutputs) {
       }
       Reject(*graph);
     }
+  }
+}
+
+TEST(MoEFusion, PreservesSharedSoftmaxOutput) {
+  for (const bool graph_output : {false, true}) {
+    auto graph = MakeGraph();
+    if (graph_output) {
+      graph->MakeOutput("probabilities");
+    } else {
+      graph->MakeNode("Identity", {"probabilities"}, {"side"});
+      graph->MakeOutput("side");
+    }
+    builder::GraphGraph(*graph, Patterns()).Optimize();
+    ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
+    EXPECT_EQ(Node(*graph, "Y").input(1), "probabilities");
+    EXPECT_EQ(Node(*graph, "probabilities").op_type(), "Softmax");
   }
 }
 
@@ -288,6 +310,7 @@ TEST(MoEFusion, RejectsCapturedIntermediates) {
     condition.mutable_type()->mutable_tensor_type()->set_elem_type(TensorProto::DataType::BOOL);
     condition.mutable_type()->mutable_tensor_type()->mutable_shape();
     builder::GraphBuilder graph(model, SchemaLookup);
+    graph.set_device(sym::Device::kCPU);
     Reject(graph);
   }
 }
@@ -320,12 +343,21 @@ TEST(MoEFusion, RejectsRuntimeExpertWeightsAndBiases) {
   }
 }
 
+TEST(MoEFusion, RejectsGpuAndUnspecifiedTargets) {
+  for (const auto device : {sym::Device::kGPU0, sym::Device::kUndefined}) {
+    auto graph = MakeGraph();
+    graph->set_device(device);
+    Reject(*graph);
+  }
+}
+
 TEST(MoEFusion, FoldsImmutableExpertLayoutsBeforeInference) {
   auto graph = MakeGraph();
   builder::GraphGraph(*graph, Patterns()).Optimize();
   ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
-  ASSERT_EQ(graph->Nodes().size(), 1U);
-  EXPECT_EQ(Node(*graph, "Y").input(1), "logits");
+  ASSERT_EQ(graph->Nodes().size(), 2U);
+  EXPECT_EQ(Node(*graph, "Y").input(1), "probabilities");
+  EXPECT_EQ(Node(*graph, "probabilities").op_type(), "Softmax");
 }
 
 TEST(MoEFusion, RejectsNonFloatUnsupportedOpsetsAndAlteredContracts) {
@@ -420,12 +452,19 @@ TEST(MoEFusion, RejectsModelLocalFunctionsWithDefaultOverload) {
 }
 
 rt::Tensors RunGraph(builder::GraphBuilder &graph,
-                     std::vector<std::pair<std::string, rt::Tensor>> inputs) {
+                     std::vector<std::pair<std::string, rt::Tensor>> inputs,
+                     bool require_cpu_softmax = false) {
   const auto model = graph.ToModel();
   const rt::OpsetImports opsets = {{"", 29}, {"ai.onnx", 29}, {"com.microsoft", 1}};
   rt::RuntimeContext runtime{rt::KernelContext(rt::DefaultOpset(29), nullptr, &opsets)};
+  runtime.set_kernel_usage_enabled(require_cpu_softmax);
   rt::SubgraphSession session(model.graph(), &opsets);
   auto outputs = session.Run(std::move(inputs), runtime);
+  if (require_cpu_softmax) {
+    const auto usage = runtime.GetKernelUsage();
+    EXPECT_NE(std::find(usage.begin(), usage.end(), onnx_light_cpu::SoftmaxKernel::kName),
+              usage.end());
+  }
   for (auto &output : outputs) {
     output = output.ToOwned();
   }
@@ -441,19 +480,24 @@ rt::Tensors RunGraph(builder::GraphBuilder &graph, bool ties) {
                                        : std::vector<float>{0.2F, -0.5F, 1, 2, -1, 0, -2, 1, 3})}});
 }
 
-TEST(MoEFusion, NearTieRoutingPreservesOriginalSoftmaxOrderAndSelectedExperts) {
+void CheckNearTieRouting(bool cpu_softmax) {
   onnx_light_cpu::RegisterMoEKernel();
   for (const int64_t k : {1, 2, 3}) {
     for (const bool normalize : {false, true}) {
       SCOPED_TRACE(::testing::Message() << k << " " << normalize);
       auto graph = MakeGraph({.k = k, .normalize = normalize});
+      if (cpu_softmax) {
+        onnx_light_cpu::RegisterSoftmaxKernel();
+      }
       const auto run = [&] {
         return RunGraph(
-            *graph, {{"X", rt::Tensor::FromFloat("X", {3, 2}, {1, -2, 0.5F, 3, -1, 2})},
-                     {"logits", rt::Tensor::FromFloat(
-                                    "logits", {3, 3},
+            *graph,
+            {{"X", rt::Tensor::FromFloat("X", {3, 2}, {1, -2, 0.5F, 3, -1, 2})},
+             {"logits",
+              rt::Tensor::FromFloat("logits", {3, 3},
                                     {-5.960464477539063e-08F, 0, -0.017000000923871994F, 0,
-                                     -5.960464477539063e-08F, -0.017000000923871994F, 0, 0, 0})}});
+                                     -5.960464477539063e-08F, -0.017000000923871994F, 0, 0, 0})}},
+            cpu_softmax);
       };
       const auto original = run();
       builder::GraphGraph(*graph, Patterns()).Optimize();
@@ -466,6 +510,14 @@ TEST(MoEFusion, NearTieRoutingPreservesOriginalSoftmaxOrderAndSelectedExperts) {
       }
     }
   }
+}
+
+TEST(MoEFusion, NearTieRoutingPreservesOriginalSoftmaxOrderAndSelectedExperts) {
+  CheckNearTieRouting(false);
+}
+
+TEST(MoEFusion, NearTieRoutingPreservesRegisteredCpuSoftmaxArithmetic) {
+  CheckNearTieRouting(true);
 }
 
 TEST(MoEFusion, PreservesNanFromSelectedExpertsWithUnderflowedRoutingWeights) {
@@ -485,6 +537,7 @@ TEST(MoEFusion, PreservesNanFromSelectedExpertsWithUnderflowedRoutingWeights) {
       }
     }
     builder::GraphBuilder graph(model, SchemaLookup);
+    graph.set_device(sym::Device::kCPU);
     const auto run = [&] {
       return RunGraph(
           graph,
@@ -555,6 +608,7 @@ TEST(MoEFusion, InsertsAfterSharedComputedWeightsRatherThanBeforeTheRouter) {
     }
   }
   builder::GraphBuilder graph(model, SchemaLookup);
+  graph.set_device(sym::Device::kCPU);
   const auto before = RunGraph(graph, true);
   builder::GraphGraph optimizer(graph, Patterns());
   const Pattern pattern;
