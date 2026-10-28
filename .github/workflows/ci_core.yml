@@ -280,7 +280,7 @@ jobs:
         shell: bash
         run: |
           if gh pr diff "${{ github.event.pull_request.html_url }}" --name-only |
-            grep -Eq '^(onnx_light_cpu/(backend_test/cases|kernels)/|ml_cpu_compute/)'; then
+            grep -Eq '^(onnx_light_cpu/(backend_test/cases|kernels)/|ml_cpu_compute/(src|include)/)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"

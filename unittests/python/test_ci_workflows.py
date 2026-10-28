@@ -5,6 +5,7 @@
 """Tests the cross-repository CI ownership contract."""
 
 import ast
+import re
 import shlex
 from pathlib import Path
 
@@ -364,12 +365,39 @@ def test_pr_benchmark_infers_filters_and_updates_comment():
         "  arm_gemm_native:", 1
     )[0]
     assert "runner.os == 'Linux'" in source_job
-    assert "onnx_light_cpu/(backend_test/cases|kernels)/|ml_cpu_compute/" in source_job
+    assert (
+        "onnx_light_cpu/(backend_test/cases|kernels)/|ml_cpu_compute/(src|include)/" in source_job
+    )
     assert '--from-pr "${{ github.event.pull_request.html_url }}"' in source_job
     assert "actions/upload-artifact@v7" in source_job
     assert "needs: setup_onnx_light_source" in report_job
     assert "pull-requests: write" in report_job
     assert "gh pr comment" in report_job
+
+
+def test_pr_benchmark_change_detection_skips_release_metadata():
+    detection = _CORE_WORKFLOW.split("      - name: Detect benchmark changes\n", 1)[1].split(
+        "      - name: Benchmark modified operator and data type\n", 1
+    )[0]
+    pattern = re.search(r"grep -Eq '([^']+)'", detection)
+    assert pattern is not None
+    for paths, expected in (
+        (
+            (
+                "CHANGELOGS.md\nCMakeLists.txt\nml_cpu_compute/CMakeLists.txt\n"
+                "onnx_light_cpu/__init__.py\npyproject.toml\nsetup.py\n"
+                "unittests/python/test_project_metadata.py\n"
+            ),
+            False,
+        ),
+        ("ml_cpu_compute/cmake/ComputeLibrary.cmake\n", False),
+        ("ml_cpu_compute/src/math/abs.cc\n", True),
+        ("ml_cpu_compute/include/ml_cpu_compute/math/math.h\n", True),
+        ("onnx_light_cpu/backend_test/cases/math/cases_abs.cc\n", True),
+        ("onnx_light_cpu/kernels/math/abs_kernel.cc\n", True),
+        ("CMakeLists.txt\nml_cpu_compute/src/math/abs.cc\n", True),
+    ):
+        assert bool(re.search(pattern.group(1), paths, re.M)) == expected, paths
 
 
 def test_python_test_classes_inherit_from_ext_test_case():
