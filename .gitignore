@@ -89,6 +89,7 @@ _skbuild/
 .vscode/
 
 # Test artifacts
+/.moe-validation/
 dump_test/
 temp_*
 gmon.out

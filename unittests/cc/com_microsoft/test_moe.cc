@@ -92,6 +92,77 @@ TEST(MoE, SelectsTopExpertsAndNormalizes) {
   EXPECT_LT(output[0], 1.0f + 2.0f * top);
 }
 
+TEST(MoE, ExplicitLowerIndexTiesKeepTheDefaultModeUnchangedForAllTypes) {
+  const float input[] = {1.0f};
+  const float router[] = {0.0f, 0.0f, 0.0f};
+  const float fc1[] = {1.0f, 2.0f, 3.0f};
+  const float fc2[] = {1.0f, 1.0f, 1.0f};
+  for (const MoEDataType type :
+       {MoEDataType::kFloat32, MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+    MoEAttributes attributes;
+    attributes.activation = "identity";
+    attributes.normalize = true;
+    for (const bool low : {false, true}) {
+      attributes.topk_tie_break_low = low;
+      float output = 0.0f;
+      if (type == MoEDataType::kFloat32) {
+        RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 3, 1, type, attributes);
+      } else {
+        const auto encode = [&](float value) {
+          return type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(value)
+                                               : detail::FloatToBFloat16Bits(value);
+        };
+        const std::uint16_t low_input[] = {encode(input[0])};
+        const std::uint16_t low_router[] = {0, 0, 0};
+        const std::uint16_t low_fc1[] = {encode(fc1[0]), encode(fc1[1]), encode(fc1[2])};
+        const std::uint16_t low_fc2[] = {encode(fc2[0]), encode(fc2[1]), encode(fc2[2])};
+        std::uint16_t low_output = 0;
+        RunMoE(low_input, low_router, low_fc1, nullptr, low_fc2, nullptr, &low_output, 1, 1, 3, 1,
+               type, attributes);
+        output = type == MoEDataType::kFloat16 ? detail::Float16BitsToFloat(low_output)
+                                               : detail::Bfloat16BitsToFloat(low_output);
+      }
+      EXPECT_FLOAT_EQ(output, low ? 1.0f : 3.0f);
+    }
+  }
+}
+
+TEST(MoE, ConsumesSuppliedProbabilitiesWithoutRecomputingSoftmaxForAllTypes) {
+  const float input[] = {1.0F};
+  const float router[] = {0.125F, 0.375F};
+  const float fc1[] = {1.0F, 3.0F};
+  const float fc2[] = {1.0F, 1.0F};
+  for (const MoEDataType type :
+       {MoEDataType::kFloat32, MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+    MoEAttributes attributes;
+    attributes.activation = "identity";
+    attributes.k = 2;
+    attributes.router_probs_are_logits = false;
+    for (const bool normalize : {false, true}) {
+      attributes.normalize = normalize;
+      float output = 0.0F;
+      if (type == MoEDataType::kFloat32) {
+        RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, type, attributes);
+      } else {
+        const auto encode = [&](float value) {
+          return type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(value)
+                                               : detail::FloatToBFloat16Bits(value);
+        };
+        const std::uint16_t low_input[] = {encode(input[0])};
+        const std::uint16_t low_router[] = {encode(router[0]), encode(router[1])};
+        const std::uint16_t low_fc1[] = {encode(fc1[0]), encode(fc1[1])};
+        const std::uint16_t low_fc2[] = {encode(fc2[0]), encode(fc2[1])};
+        std::uint16_t low_output = 0;
+        RunMoE(low_input, low_router, low_fc1, nullptr, low_fc2, nullptr, &low_output, 1, 1, 2, 1,
+               type, attributes);
+        output = type == MoEDataType::kFloat16 ? detail::Float16BitsToFloat(low_output)
+                                               : detail::Bfloat16BitsToFloat(low_output);
+      }
+      EXPECT_FLOAT_EQ(output, normalize ? 2.5F : 1.25F);
+    }
+  }
+}
+
 TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
   const float input[] = {2.0f};
   const float router[] = {0.0f};
@@ -124,6 +195,72 @@ TEST(MoE, EmptyTokensDoNotReadRouter) {
   RunMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1,
          ml_cpu_compute::MoEDataType::kFloat32, attributes);
   EXPECT_FLOAT_EQ(output, 42.0f);
+}
+
+TEST(MoE, EvaluatesZeroWeightExpertsToPreserveNanPropagation) {
+  const float input[] = {2.0f};
+  const float router[] = {0.0f, -104.0f};
+  const float fc1[] = {1.0f, 3.0e38f};
+  const float fc2[] = {1.0f, 1.0f};
+  float output = 0.0f;
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+  attributes.k = 2;
+  for (const bool normalize : {false, true}) {
+    attributes.normalize = normalize;
+    RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, MoEDataType::kFloat32,
+           attributes);
+    EXPECT_TRUE(std::isnan(output));
+  }
+  attributes.k = 1;
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, MoEDataType::kFloat32,
+         attributes);
+  EXPECT_FLOAT_EQ(output, 2.0f);
+}
+
+TEST(MoE, EvaluatesZeroWeightExpertsForAllTypesAndRouterModes) {
+  const float input[] = {1.0F};
+  const float fc1[] = {1.0F, std::numeric_limits<float>::infinity()};
+  const float fc2[] = {1.0F, 1.0F};
+  for (const MoEDataType type :
+       {MoEDataType::kFloat32, MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+    for (const bool logits : {false, true}) {
+      MoEAttributes attributes;
+      attributes.activation = "identity";
+      attributes.router_probs_are_logits = logits;
+      const float router[] = {logits ? 0.0F : 1.0F, logits ? -104.0F : 0.0F};
+      const auto run = [&] {
+        float output = 0.0F;
+        if (type == MoEDataType::kFloat32) {
+          RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 2, 1, type, attributes);
+        } else {
+          const auto encode = [&](float value) {
+            return type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(value)
+                                                 : detail::FloatToBFloat16Bits(value);
+          };
+          const std::uint16_t low_input[] = {encode(input[0])};
+          const std::uint16_t low_router[] = {encode(router[0]), encode(router[1])};
+          const std::uint16_t low_fc1[] = {encode(fc1[0]), encode(fc1[1])};
+          const std::uint16_t low_fc2[] = {encode(fc2[0]), encode(fc2[1])};
+          std::uint16_t low_output = 0;
+          RunMoE(low_input, low_router, low_fc1, nullptr, low_fc2, nullptr, &low_output, 1, 1, 2, 1,
+                 type, attributes);
+          output = type == MoEDataType::kFloat16 ? detail::Float16BitsToFloat(low_output)
+                                                 : detail::Bfloat16BitsToFloat(low_output);
+        }
+        return output;
+      };
+      for (const bool normalize : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << static_cast<int>(type) << " logits=" << logits
+                                          << " normalize=" << normalize);
+        attributes.normalize = normalize;
+        attributes.k = 2;
+        EXPECT_TRUE(std::isnan(run()));
+        attributes.k = 1;
+        EXPECT_FLOAT_EQ(run(), 1.0F);
+      }
+    }
+  }
 }
 
 TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {

@@ -231,6 +231,66 @@ private:
   std::string kernel_name_;
 };
 
+/**
+ * Fuses TopK routing and two GroupedMatMul-29 expert layers into a CPU MoE.
+ *
+ * @code
+ * Before:
+ *   logits[T,E] --> Softmax(-1) --> TopK(K)
+ *                                     |
+ *                                     +--> indices[T,K] --> Reshape[-1,1] --> ids
+ *                                     +--> p[T,K] --> [Normalize?] --> Unsqueeze(-1) --> w
+ *
+ *   X[T,H], W1[E,H,I], indices, b1? --> GroupedMatMul --> a[T,K,I]
+ *   a --> [Activation?] --> Reshape[-1,I] --> flat_a
+ *   flat_a, W2[E,I,H], ids, b2? --> GroupedMatMul --> Reshape[-1,K,H] --> experts
+ *   experts, w --> Mul --> ReduceSum(axis=1,keepdims=0) --> Y[T,H]
+ *
+ * After:
+ *   logits --> Softmax(-1) --> probabilities
+ *   W1,W2 --> Transpose[0,2,1] ---> W1',W2'
+ *
+ *   X, probabilities, W1', b1?, W2', b2? --> com.microsoft::MoE --> Y[T,H]
+ *                                       k=K, activation_type=Activation,
+ *                                       topk_tie_break_low=1,
+ *                                       router_probs_are_logits=0,
+ *                                       normalize_routing_weights=Normalize?
+ * @endcode
+ *
+ * T/E/H/I/K denote tokens, experts, hidden width, intermediate width and selected
+ * experts. Normalize? is p / ReduceSum(p,axis=1,keepdims=1), or just p when absent.
+ * Activation? is identity, Relu, or Gelu(approximate="tanh").
+ * Biases b1[E,I] and b2[E,H] are optional.
+ *
+ * Requires an explicitly CPU-targeted builder. Supports FLOAT, static positive
+ * expert/hidden/intermediate dimensions, constant
+ * reshape targets, constant weights and optional constant biases, Relu, tanh-Gelu
+ * and identity activations.
+ * FLOAT16/BFLOAT16 are excluded: the unfused graph rounds its intermediates.
+ * Exact Gelu is excluded: the MoE CPU kernel uses a tanh approximation.
+ * SiLU is excluded: MoE and standalone Sigmoid/Mul differ for extreme inputs.
+ * Retained inputs must be produced outside the matched block.
+ * Explicit CPU extensions preserve ONNX TopK's low-index tie breaking and
+ * consume the original Softmax output without recomputing probabilities.
+ * Softmax remains outside the fusion to preserve the active kernel arithmetic.
+ * Logits, expert numbering and biases retain their original order.
+ * Shared source tensors are never modified.
+ */
+class MoEFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
+public:
+  MoEFusionPattern()
+      : PatternOptimization(0, "MicrosoftMoE", ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU) {
+  }
+
+  std::set<std::string> FastOpType() const override;
+  ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
+  Match(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const ONNX_LIGHT_NAMESPACE::NodeProto &candidate) const override;
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<ONNX_LIGHT_NAMESPACE::NodeProto>
+  Apply(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
+};
+
 void RegisterCustomOperatorPatterns();
 
 } // namespace onnx_light_cpu
