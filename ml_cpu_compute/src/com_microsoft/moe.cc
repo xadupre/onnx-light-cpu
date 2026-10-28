@@ -329,12 +329,6 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
         float *second = activated + intermediate;
         const float weight = routes[slot].weight;
         const std::size_t expert = routes[slot].expert;
-        if (weight == 0.0f) {
-          if (disjoint_results != nullptr) {
-            std::fill_n(disjoint_results + slot * hidden, hidden, 0.0f);
-          }
-          continue;
-        }
         LowPrecisionMatVec<Codec>(input + token * hidden, fc1 + expert * fc1_width * hidden, first,
                                   fc1_width, hidden);
         if (bias1 != nullptr) {
