@@ -1,0 +1,49 @@
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test ML_CPU_COMPUTE_HAVE_SSSE3_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_SSSE3_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX2_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX2_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX2_FMA_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX2_FMA_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_F16C_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_F16C_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512F_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512F_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512DQ_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512DQ_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512BW_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512BW_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512FP16_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512FP16_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512BF16_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512BF16_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512VNNI_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVX512VNNI_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_TILE_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_TILE_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_BF16_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_BF16_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_INT8_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AMX_INT8_FLAG - Success
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVXVNNI_FLAG
+-- Performing Test ML_CPU_COMPUTE_HAVE_AVXVNNI_FLAG - Success
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- The C compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.13") found components: Crypto
+-- Configuring done (2.3s)
+-- Generating done (0.2s)
+-- Build files have been written to: /home/runner/work/onnx-light-cpu/onnx-light-cpu/.moe-validation/build
