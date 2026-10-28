@@ -1404,7 +1404,7 @@ TEST(CustomOperatorSupport, MatMulNBitsBiasFusionAcceptsOnlySafeBiasAdd) {
     builder_ns::GraphGraph graph(builder);
     onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
     const auto match = pattern.Match(graph, builder.Nodes()[1]);
-    ASSERT_EQ(match.pattern, &pattern);
+    ASSERT_EQ(match.pattern, &pattern) << match.ToString();
     const auto replacements = pattern.Apply(graph, match.nodes);
     ASSERT_EQ(replacements.size(), 1U);
     EXPECT_EQ(replacements[0].op_type(), "MatMulNBits");
@@ -1470,8 +1470,56 @@ TEST(CustomOperatorSupport, MatMulNBitsBiasFusionAcceptsEverySupportedTypeAndPac
       builder.MakeOutput("Y");
       builder_ns::GraphGraph graph(builder);
       onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
-      EXPECT_EQ(pattern.Match(graph, builder.Nodes()[1]).pattern, &pattern)
-          << "type=" << static_cast<int>(type) << ", bits=" << bits;
+      SCOPED_TRACE(::testing::Message() << "type=" << static_cast<int>(type) << ", bits=" << bits);
+      const auto match = pattern.Match(graph, builder.Nodes()[1]);
+      ASSERT_EQ(match.pattern, &pattern) << match.ToString();
+      const auto replacements = pattern.Apply(graph, match.nodes);
+      ASSERT_EQ(replacements.size(), 1U);
+      ASSERT_EQ(replacements[0].input_size(), 6U);
+      EXPECT_EQ(replacements[0].input(5), "bias");
+      EXPECT_EQ(replacements[0].output(0), "Y");
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsBiasFusionAcceptsDefaultDomainsAndEitherInputOrder) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  for (const char *domain : std::vector<const char *>{nullptr, "", "ai.onnx"}) {
+    for (bool bias_first : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "domain=" << (domain == nullptr ? "<unset>" : domain)
+                                        << ", bias_first=" << bias_first);
+      builder_ns::GraphBuilder builder("default_domain", SchemaLookup());
+      builder.SetOpsetVersion("", 23);
+      builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+      builder.MakeInput("A", TensorType::kFloat, sym_ns::SymShape({2, 35}));
+      builder.MakeInput("B", TensorType::kUint8, sym_ns::SymShape({3, 2, 16}));
+      builder.MakeInput("scales", TensorType::kFloat, sym_ns::SymShape({3, 2}));
+      builder.MakeInput("bias", TensorType::kFloat, sym_ns::SymShape({3}));
+      const NodeProto spec = MakeMatMulNBitsNode();
+      builder.MakeNode("MatMulNBits", {"A", "B", "scales"}, {"mm"},
+                       onnx_light_cpu::kMicrosoftDomain, "", spec.attribute());
+      NodeProto add;
+      add.set_op_type("Add");
+      if (domain != nullptr) {
+        add.set_domain(domain);
+      }
+      add.add_input(bias_first ? "bias" : "mm");
+      add.add_input(bias_first ? "mm" : "bias");
+      add.add_output("Y");
+      builder.ImportNode(add);
+      builder.MakeOutput("Y");
+      builder_ns::GraphGraph graph(builder);
+      onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
+      const auto match = pattern.Match(graph, builder.Nodes()[1]);
+      ASSERT_EQ(match.pattern, &pattern) << match.ToString();
+      const auto replacements = pattern.Apply(graph, match.nodes);
+      ASSERT_EQ(replacements.size(), 1U);
+      ASSERT_EQ(replacements[0].input_size(), 6U);
+      EXPECT_EQ(replacements[0].input(0), "A");
+      EXPECT_TRUE(replacements[0].input(3).empty());
+      EXPECT_TRUE(replacements[0].input(4).empty());
+      EXPECT_EQ(replacements[0].input(5), "bias");
+      EXPECT_EQ(replacements[0].output(0), "Y");
     }
   }
 }
