@@ -234,6 +234,33 @@ private:
 /**
  * Fuses Softmax/TopK routing and two GroupedMatMul-29 expert layers into MoE.
  *
+ * @code
+ * Before:
+ *   logits[T,E] --> Softmax(-1) --> TopK(K)
+ *                                     |
+ *                                     +--> indices[T,K] --> Reshape[-1,1] --> ids
+ *                                     +--> p[T,K] --> [Normalize?] --> Unsqueeze(-1) --> w
+ *
+ *   X[T,H], W1[E,H,I], indices, b1? --> GroupedMatMul --> a[T,K,I]
+ *   a --> [Activation?] --> Reshape[-1,I] --> flat_a
+ *   flat_a, W2[E,I,H], ids, b2? --> GroupedMatMul --> Reshape[-1,K,H] --> experts
+ *   experts, w --> Mul --> ReduceSum(axis=1,keepdims=0) --> Y[T,H]
+ *
+ * After:
+ *   logits --> Gather(reverse,axis=1) ---------------------> logits'
+ *   W1,W2 --> Gather(reverse,axis=0) --> Transpose[0,2,1] ---> W1',W2'
+ *   b1?,b2? --> Gather(reverse,axis=0) --------------------> b1'?,b2'?
+ *
+ *   X, logits', W1', b1'?, W2', b2'? --> com.microsoft::MoE --> Y[T,H]
+ *                                       k=K, activation_type=Activation,
+ *                                       normalize_routing_weights=Normalize?
+ * @endcode
+ *
+ * T/E/H/I/K denote tokens, experts, hidden width, intermediate width and selected
+ * experts. Normalize? is p / ReduceSum(p,axis=1,keepdims=1), or just p when absent.
+ * Activation? is identity, Relu, Gelu(approximate="tanh"), or Mul(a,Sigmoid(a)).
+ * Biases b1[E,I] and b2[E,H] are optional. reverse is [E-1,...,0].
+ *
  * Supports FLOAT, static positive expert/hidden/intermediate dimensions, constant
  * reshape targets, optional biases, Relu, SiLU, tanh-Gelu and identity activations.
  * FLOAT16/BFLOAT16 are excluded: the unfused graph rounds its intermediates.
