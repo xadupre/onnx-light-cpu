@@ -677,3 +677,176 @@ the old and new tables are not a controlled AVX2-versus-AVX-512 experiment.
 No ISA-only speedup or new hot-symbol attribution is claimed. Issue 1029
 remains open; default-configuration dispatch and tail handling still need
 optimization.
+
+Issue 1028: dense rank-four FP32 AVX2 profiling
+----------------------------------------------
+
+The 2026-10-28 investigation refreshed ``origin`` before configuring and
+building. Remote main was ``cc34d0d8fe6d2372cf6472466e3438a8bfae25e6``;
+the working head was ``a53f3a00449feabc3cf50b0a03c2318aa3c8dda2``
+(an initial-plan commit with the same production sources). In particular,
+this baseline already includes the later issue-1029 softmax changes.
+
+The runner was an AMD EPYC 7763 VM with four logical CPUs, GCC 13.3.0,
+CMake Release, Python 3.13.16 and an AVX2 ceiling (reported SIMD ``AVX2``).
+The onnx-light 0.2.1 CPython 3.13 release wheel corresponds to tag commit
+``30c19cceae7e1cb0b8300ec2550a3aeb5de87dc9``. It was unpacked under
+``/tmp/attention-deps/runtime`` and selected with ``PYTHONPATH``; CPU
+extensions linked its exact libraries with the matching stable ABI
+disabled. Other dependencies were NumPy 2.4.4, ml-dtypes 0.6.0 and ONNX
+Runtime 1.31.0, whose build information reports Release commit ``402979a``.
+ORT was unrestricted; this CPU does not support AVX-512.
+
+All timings used the five original registered models and inputs, CPU-0
+affinity, one thread per backend, sequential ORT execution, one inter-op
+thread, disabled ORT intra/inter-op spinning, 20 warmups and at most
+100 alternating samples with a one-second per-backend cap. No compilation
+or profiling overlapped latency measurements. CPU feeds were backend
+tensors, and only ORT received NumPy arrays. Model construction, input
+generation, recording and correctness comparisons were outside timing.
+The runner's FP32 tolerances remained rtol/atol ``2e-4/2e-5``.
+
+Initial reproduction
+~~~~~~~~~~~~~~~~~~~~
+
+These are **new** baseline CPU/ORT median milliseconds, not a relabeling
+of the 2026-10-24 table. Restore each full name with the prefix
+``test_cpu_attention_opset23_rank4_mha_`` and suffix
+``_none_stateless_float32_benchmark``.
+
+.. csv-table::
+   :header: "Case", "CPU", "ORT", "Samples per backend"
+
+   "q128_kv128_hd64", "0.751567", "0.699244", "100"
+   "q128_kv128_hd128", "1.312493", "1.248719", "100"
+   "q128_kv128_hd256", "2.562824", "2.508735", "100"
+   "q512_kv128_hd64", "3.038336", "2.890121", "100"
+   "q128_kv8192_hd64", "48.882266", "45.224664", "21"
+
+ORT remained faster on all five initial measurements, but the historical
+40%+ gaps did **not** reproduce: the new gaps were approximately 2--8%.
+Changed production code, runtime versions and tensor-feed adaptation make
+the historical absolute timings unsuitable as an optimization baseline.
+
+Kernel-only attribution
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Hardware ``perf`` remained unavailable (``perf_event_paranoid=4``).
+Callgrind 3.22.0 collected instructions only while
+``ComputeAttentionFloat32Streaming`` executed. The new parameterized
+``Rank4Float32/DenseAttention.MatchesMaterialized/0`` through ``/4`` tests
+use the five selected B1/H12 shapes. Input generation, materialized-oracle
+execution and assertions occur outside that collection region. Case 0
+was repeated five times; the other cases once.
+
+The following are inclusive percentages of **collected instructions**,
+not latency percentages. Packing is nested inside GEMM and must not be
+added to its parent. For wide heads, subtracting the separately attributed
+value-product subtree from total GEMM instructions separates QK from P*V.
+
+.. csv-table::
+   :header: "Q/KV/D", "QK GEMM", "P*V", "Softmax", "Transpose pack"
+
+   "128/128/64", "49.93%", "38.11%", "8.07%", "1.42%"
+   "128/128/128", "48.24%", "44.48%", "4.12%", "1.44%"
+   "128/128/256", "48.78%", "46.57%", "2.17%", "1.51%"
+   "512/128/64", "49.92%", "38.06%", "8.06%", "1.42%"
+   "128/8192/64", "48.77%", "36.97%", "13.60%", "1.41%"
+
+General-GEMM panel-packing subtrees account for approximately 1.5--1.6%
+of instructions in the single-block cases, including transpose packing.
+The one-thread run has no worker submissions; execution-region bookkeeping
+is below 0.01% self instructions. This does not measure multi-thread
+scheduling latency or justify changing scheduling ownership. Callgrind's
+emulated CPUID selects a four-row general GEMM tile, unlike the native
+Zen six-row tile, so these counts cannot establish native phase-time shares.
+AVX2/FMA microkernels and AVX2 softmax were present in the profiles.
+
+Rejected experiments
+~~~~~~~~~~~~~~~~~~~~
+
+A tile-specific QK GEMM blocking experiment (MC=rows, NC=columns,
+KC=head dimension, MR=6) produced the following CPU milliseconds, in
+the initial table's order: ``0.734585``, ``1.365602``, ``2.734085``,
+``2.912427``, ``50.717640``. Its simultaneous ORT controls were
+``0.706272``, ``1.258392``, ``2.619305``, ``2.774194``, ``45.190491``.
+Wide-head and long-KV regressions ruled out retaining it; the small
+hd64 differences do not establish a repeatable improvement.
+
+Reusing the fused dense exponential/reduction for online softmax also
+failed a controlled, same-session alternating old/new comparison.
+The long-KV before/after/ORT medians were
+``51.170034/52.929435/45.461127`` ms and, on repetition,
+``50.306320/51.272331/45.127530`` ms. The other four cases were unchanged
+controls (before/after ratios within approximately 0.3% of one).
+That experiment, its new math API and its temporary dispatch switch were
+removed. Neither rejected candidate changes the retained QK, packing,
+online-softmax or scheduling paths.
+
+Repeated dispatch A/B and outcome
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A third experiment used the existing AVX2 scaling primitive for final
+single-block output normalization at FP32 value-head dimensions 128--256.
+An initial pair of campaigns suggested 1--1.6% improvements. Rechecking
+the narrowed gate exposed approximately 1.3% overhead on the unchanged
+hd64 controls when eligibility was tested inside the row loop. Hoisting
+the decision outside that loop removed this overhead, but also failed to
+confirm the earlier wide-head improvement.
+
+The final two controlled campaigns below reused the **same session and
+feeds** for alternating old/new calls. An invocation-level experimental
+boolean was set outside each session run. Each A/B campaign was followed
+by the existing alternating new/ORT measurement in the same process;
+ORT columns are from that phase, not a simultaneous three-way rotation.
+All other settings matched the initial reproduction. Single-block rows
+had 100 samples per candidate; long-KV rows had 20 under the one-second cap.
+
+These are median milliseconds for every selected case, including unchanged
+controls and regressions. ``Before repeat`` and ``After repeat`` are the
+second complete campaign, not repeated samples drawn from the first.
+
+.. csv-table::
+   :header: "Case", "Before", "After", "ORT", "Before repeat", "After repeat", "ORT repeat"
+
+   "q128_kv128_hd64", "0.728324", "0.728744", "0.698087", "0.747705", "0.746297", "0.694891"
+   "q128_kv128_hd128", "1.334374", "1.336990", "1.243520", "1.365688", "1.367446", "1.242283"
+   "q128_kv128_hd256", "2.674213", "2.665763", "2.368940", "2.673859", "2.666500", "2.376103"
+   "q512_kv128_hd64", "2.858081", "2.856734", "2.619692", "2.943771", "2.942740", "2.612443"
+   "q128_kv8192_hd64", "50.793821", "50.823460", "44.810761", "51.070971", "50.945071", "45.023678"
+
+The approximately 0.3% hd256 difference is too small to establish a useful
+improvement against the controls and run-to-run variation; hd128 regressed
+slightly in both repeats. This experiment and its switch were removed too.
+**No production optimization is retained and issue 1028 is not resolved.**
+The latency-reduction acceptance criterion is still unmet; ORT remains
+faster on every final row. In particular, the long-KV gap persists, and no
+rank-three, FP16, mask, precision, tolerance or scheduling change is proposed.
+
+The retained change is reproducible kernel-only profiling coverage: eleven
+parameterized materialized-oracle comparisons include all five original
+shapes, full/tail query tiles and head-dimension eligibility boundaries.
+All 105 Attention tests and 36 shared math tests passed during investigation.
+No new allocation, dependency, runtime switch or profiling instrumentation
+is retained in production.
+
+Reproduction commands
+~~~~~~~~~~~~~~~~~~~~~
+
+With the dependency wheel unpacked as described above:
+
+.. code-block:: bash
+
+   REPO=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   export PYTHONPATH="$REPO:/tmp/attention-deps/runtime"
+   CMAKE_ARGS='-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF' \
+     python "$REPO/setup.py" build_ext --inplace --onnx-light-source --parallel 48
+   python "$REPO/tools/benchmark_attention_parity.py" --large \
+     --threads 1 --cpus 0 --warmup 20 --repeat 100 --max-repeat-time 1 \
+     --case '^test_cpu_attention_opset23_rank4_mha_(q128_kv128_hd(64|128|256)|q512_kv128_hd64|q128_kv8192_hd64)_none_stateless_float32_benchmark$' \
+     --output /tmp/attention-1028.json
+   taskset -c 0 valgrind --tool=callgrind --collect-atstart=no \
+     '--toggle-collect=*ComputeAttentionFloat32Streaming*' \
+     --callgrind-out-file=/tmp/attention-1028.callgrind \
+     "$REPO/build/temp/test_attention_plan" \
+     --gtest_filter='Rank4Float32/DenseAttention.MatchesMaterialized/0'

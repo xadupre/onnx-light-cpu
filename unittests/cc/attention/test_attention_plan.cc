@@ -1259,6 +1259,36 @@ TEST(ComputeAttentionFloat32Streaming, DenseBenchmarkShapesMatchMaterialized) {
   }
 }
 
+class DenseAttention : public ::testing::TestWithParam<std::tuple<int, int, int>> {};
+
+TEST_P(DenseAttention, MatchesMaterialized) {
+  const auto [q_len, kv_len, dim] = GetParam();
+  constexpr std::int64_t heads = 12;
+  const std::int64_t q_shape[] = {1, heads, q_len, dim};
+  const std::int64_t kv_shape[] = {1, heads, kv_len, dim};
+  const AttentionPlan plan(AttentionDescriptor{}, AttentionLayout::kRank4, q_shape, kv_shape,
+                           kv_shape, {}, AttentionMaskKind::kNone);
+  const auto q = RandomTensor(heads * q_len * dim, 1291);
+  const auto k = RandomTensor(heads * kv_len * dim, 1292);
+  const auto v = RandomTensor(k.size(), 1293);
+  std::vector<float> actual(q.size()), expected(q.size());
+  ml_cpu_compute::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      expected.data());
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+  ExpectClose(actual, expected, 2.0e-4f);
+}
+
+INSTANTIATE_TEST_SUITE_P(Rank4Float32, DenseAttention,
+                         ::testing::Values(std::tuple{128, 128, 64}, std::tuple{128, 128, 128},
+                                           std::tuple{128, 128, 256}, std::tuple{512, 128, 64},
+                                           std::tuple{128, 8192, 64}, std::tuple{127, 127, 63},
+                                           std::tuple{129, 257, 65}, std::tuple{129, 128, 127},
+                                           std::tuple{129, 128, 129}, std::tuple{128, 128, 255},
+                                           std::tuple{128, 128, 257}));
+
 // -----------------------------------------------------------------------
 // AVX2+FMA `Q == 1` decode fast path (ml_cpu_compute/attention/avx2):
 // on AVX2 hardware without AVX-512 these cases exercise
