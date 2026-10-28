@@ -19,6 +19,19 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
+Current development version: **0.2.2**. See the [changelog](CHANGELOGS.md)
+for changes. CI validates the runtime integration against **onnx-light 0.2.1**.
+
+## Installation
+
+Install the published package from PyPI:
+
+```bash
+pip install onnx-light-cpu
+```
+
+To build the current development version, use the source instructions below.
+
 ## Build from source
 
 ### Prerequisites
@@ -62,15 +75,14 @@ its `onnx_lightConfig.cmake` automatically:
 python setup.py build_ext --inplace --onnx-light
 ```
 
-When onnx-light was installed from a local checkout (for example
-`pip install --no-build-isolation -e .` in the onnx-light source tree) but its
-`onnx_lightConfig.cmake` is not available, build the integration directly from
-those sources instead. `--onnx-light-source` auto-discovers the onnx-light
-source tree from the importable onnx-light and compiles it with
-`add_subdirectory`:
+When using a locally built onnx-light checkout, make it importable through
+`PYTHONPATH` and use `--onnx-light-source`. This option discovers the headers
+and links the existing runtime libraries loaded by Python; it does not rebuild
+onnx-light or use `add_subdirectory`:
 
 ```bash
-python setup.py build_ext --inplace --onnx-light-source
+PYTHONPATH=/path/to/onnx-light \
+    python setup.py build_ext --inplace --onnx-light-source
 ```
 
 ### Pure CMake (C++ only)
@@ -269,9 +281,21 @@ onnx-light-cpu benchmark \
 Use `--dtypes all` to include every available dtype. The same command is
 available as `python -m onnx_light_cpu benchmark`. Add `--include-big` to opt
 into cases whose names contain `_big_`, which are excluded by default.
-The thread count is always
-explicit, so workers are unpinned, matching ONNX Runtime when
-`intra_op_num_threads` is explicitly set.
+By default, `--threads 0` lets the runtime and each kernel select their thread
+limits. Pass a positive value, such as `--threads 4`, to set an explicit session
+limit. Add `--onnxruntime` to compare against ONNX Runtime and `--markdown results.md`
+to save a Markdown report.
+
+To infer operator and dtype filters from a pull request without posting results:
+
+```bash
+onnx-light-cpu benchmark --from-pr 623 --markdown benchmark.md
+```
+
+This requires a pull request with identifiable operator changes; a version-only
+change has no benchmark selection. CI triggers these benchmarks for changes under
+`onnx_light_cpu/backend_test/cases/`, `onnx_light_cpu/kernels/`,
+`ml_cpu_compute/src/`, or `ml_cpu_compute/include/`, not for release metadata alone.
 
 Global registrations are owned by the process-wide dispatch table and are
 observed by sessions that resolve their nodes afterwards. Session registrations
@@ -292,11 +316,10 @@ gradient_registry = register_custom_gradients()
 
 > **Registration seems ignored?** The kernels only take effect when
 > `onnx-light-cpu` links the *same* `lib_onnx_core` that the running
-> `onnx_light` package uses. Building the integration from an onnx-light source
-> tree (`--onnx-light-source`) while a *separately installed* onnx-light Python
-> package runs the model creates two independent dispatch tables, so the
-> registration populates one the evaluator never reads. Build with
-> `--onnx-light` (`find_package`) so both share the installed shared library.
+> `onnx_light` package uses. Linking a different runtime creates two independent
+> dispatch tables, so registration populates one the evaluator never reads.
+> Use `--onnx-light-source` with the intended checkout on `PYTHONPATH`, or
+> `--onnx-light` (`find_package`) with its matching installed CMake package.
 > See the "Registering kernels" documentation page for details.
 
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`

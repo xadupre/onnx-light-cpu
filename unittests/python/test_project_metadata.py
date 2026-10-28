@@ -34,7 +34,7 @@ def test_project_version_consistency():
 def test_changelog_release_sections():
     changelog = (_ROOT / "CHANGELOGS.md").read_text(encoding="utf-8")
     sections = dict(
-        re.findall(r"^## \[(\d+\.\d+\.\d+)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
+        re.findall(r"^## \[(\d+\.\d+\.\d+(?:\.\d+)?)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
     )
     assert "Unreleased" in sections["0.2.2"]
     for number in (
