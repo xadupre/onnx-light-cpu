@@ -59,6 +59,9 @@ def test_changelog_release_sections():
         961,
         963,
         965,
+        1053,
+        1059,
+        1060,
     ):
         assert (
             f"[#{number}](https://github.com/xadupre/onnx-light-cpu/pull/{number})"
