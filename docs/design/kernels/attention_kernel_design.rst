@@ -830,6 +830,27 @@ All 105 Attention tests and 36 shared math tests passed during investigation.
 No new allocation, dependency, runtime switch or profiling instrumentation
 is retained in production.
 
+After removing every experimental change, commit
+``4741c54c7017bf006224dc18479d881e9b1193d1`` contains production sources
+identical to the initial baseline. A final repeated baseline used the same
+settings and unchanged registered cases:
+
+.. csv-table::
+   :header: "Case", "Restored CPU", "ORT", "Samples per backend"
+
+   "q128_kv128_hd64", "0.766500", "0.708352", "100"
+   "q128_kv128_hd128", "1.431300", "1.296443", "100"
+   "q128_kv128_hd256", "2.663238", "2.535965", "100"
+   "q512_kv128_hd64", "2.963773", "2.630251", "100"
+   "q128_kv8192_hd64", "50.793222", "45.060294", "20"
+
+All five ORT correctness comparisons passed. Performance-parity thresholds
+did not pass. Drift even with unchanged production sources reinforces why
+small differences from separate-process campaigns were not retained.
+The final C++ validation again passed 105 Attention and 36 shared math tests,
+with clang-format and diff checks clean. Strict Sphinx validation could not
+run because the documentation toolchain was not installed on this runner.
+
 Reproduction commands
 ~~~~~~~~~~~~~~~~~~~~~
 
