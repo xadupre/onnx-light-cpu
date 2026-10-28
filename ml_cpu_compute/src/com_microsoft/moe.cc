@@ -37,9 +37,15 @@ bool UseParallelExperts(std::size_t tokens, std::size_t hidden, std::size_t fc1_
          !ExecutionInParallelRegion();
 }
 
-bool RouteGreater(const MoERoute &left, const MoERoute &right) {
-  return left.weight > right.weight || (left.weight == right.weight && left.expert > right.expert);
-}
+struct RouteGreater {
+  bool tie_break_low;
+
+  bool operator()(const MoERoute &left, const MoERoute &right) const {
+    return left.weight > right.weight ||
+           (left.weight == right.weight &&
+            (tie_break_low ? left.expert < right.expert : left.expert > right.expert));
+  }
+};
 
 std::size_t ElementBytes(MoEDataType data_type) {
   return data_type == MoEDataType::kFloat32 ? sizeof(float) : sizeof(std::uint16_t);
@@ -204,7 +210,8 @@ void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1,
     for (std::size_t expert = 0; expert < experts; ++expert) {
       routes[expert].weight /= denominator;
     }
-    std::partial_sort(routes, routes + attributes.k, routes + experts, RouteGreater);
+    std::partial_sort(routes, routes + attributes.k, routes + experts,
+                      RouteGreater{attributes.topk_tie_break_low});
     float top_sum = 0.0f;
     for (std::size_t slot = 0; slot < attributes.k; ++slot) {
       top_sum += routes[slot].weight;
@@ -313,7 +320,8 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
     for (std::size_t expert = 0; expert < experts; ++expert) {
       routes[expert].weight /= denominator;
     }
-    std::partial_sort(routes, routes + attributes.k, routes + experts, RouteGreater);
+    std::partial_sort(routes, routes + attributes.k, routes + experts,
+                      RouteGreater{attributes.topk_tie_break_low});
     float top_sum = 0.0f;
     for (std::size_t slot = 0; slot < attributes.k; ++slot) {
       top_sum += routes[slot].weight;

@@ -486,10 +486,12 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   const auto &experts = router.Shape()[1];
   const auto &intermediate = fc2.Shape()[2];
   const auto k = GetGqaIntAttribute(node, "k", 1);
+  const auto tie_break_low = GetGqaIntAttribute(node, "topk_tie_break_low", 0);
   const auto activation = GetStringAttribute(node, "activation_type", "relu");
   const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
   if (k < 1 || (experts.IsInt() && k > experts.AsInt()) ||
-      (activation == "swiglu" && fusion != 1) || (activation != "swiglu" && fusion != 0) ||
+      (tie_break_low != 0 && tie_break_low != 1) || (activation == "swiglu" && fusion != 1) ||
+      (activation != "swiglu" && fusion != 0) ||
       (activation != "relu" && activation != "gelu" && activation != "silu" &&
        activation != "identity" && activation != "swiglu") ||
       GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0) {

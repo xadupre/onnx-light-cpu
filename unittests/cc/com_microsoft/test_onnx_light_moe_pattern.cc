@@ -206,29 +206,28 @@ TEST(MoEFusion, RegistryAcceptsRoutingActivationsBiasesAndSymbolicTokens) {
   }
 }
 
-TEST(MoEFusion, ApplyRevalidatesAndReversesExpertsWithoutMutatingSharedInputs) {
+TEST(MoEFusion, ApplyRevalidatesAndTransposesWeightsWithoutReorderingExperts) {
   auto graph = MakeGraph();
   graph->MakeOutput("X");
   graph->MakeOutput("W1");
-  Initializer(*graph, "moe_reverse_experts", {99});
-  graph->MakeInput("W1_moe_reversed", sym::TensorType::kFloat, sym::SymShape({1}));
+  graph->MakeInput("W1_moe_transposed", sym::TensorType::kFloat, sym::SymShape({1}));
   builder::GraphGraph optimizer(*graph, Patterns());
   const Pattern pattern;
   const auto match = pattern.Match(optimizer, Node(*graph, "Y"));
   ASSERT_NE(match.pattern, nullptr) << match.ToString();
   const auto replacements = pattern.Apply(optimizer, match.nodes);
-  ASSERT_EQ(replacements.size(), 8U);
-  EXPECT_EQ(replacements[0].op_type(), "Gather");
-  EXPECT_EQ(replacements[0].input(0), "logits");
-  EXPECT_EQ(replacements[1].input(0), "W1");
-  EXPECT_NE(replacements[1].output(0), "W1_moe_reversed");
-  EXPECT_EQ(replacements[2].op_type(), "Transpose");
-  const auto &reverse = graph->Initializers()[graph->Initializers().size() - 1];
-  EXPECT_NE(reverse.name(), "moe_reverse_experts");
-  ASSERT_EQ(reverse.int64_data().size(), 3U);
-  EXPECT_EQ(reverse.int64_data()[0], 2);
-  EXPECT_EQ(reverse.int64_data()[1], 1);
-  EXPECT_EQ(reverse.int64_data()[2], 0);
+  ASSERT_EQ(replacements.size(), 3U);
+  EXPECT_EQ(replacements[0].op_type(), "Transpose");
+  EXPECT_EQ(replacements[0].input(0), "W1");
+  EXPECT_NE(replacements[0].output(0), "W1_moe_transposed");
+  EXPECT_EQ(replacements[1].op_type(), "Transpose");
+  EXPECT_EQ(replacements[1].input(0), "W2");
+  EXPECT_EQ(replacements[2].input(1), "logits");
+  EXPECT_EQ(replacements[2].input(3), "B1");
+  EXPECT_EQ(replacements[2].input(5), "B2");
+  const auto *mode = ONNX_LIGHT_NAMESPACE::FindAttribute(replacements[2], "topk_tie_break_low");
+  ASSERT_NE(mode, nullptr);
+  EXPECT_EQ(mode->i(), 1);
   auto invalid = match.nodes;
   std::swap(invalid[0], invalid[1]);
   EXPECT_THROW(pattern.Apply(optimizer, invalid), builder::BuilderError);
@@ -325,10 +324,8 @@ TEST(MoEFusion, FoldsImmutableExpertLayoutsBeforeInference) {
   auto graph = MakeGraph();
   builder::GraphGraph(*graph, Patterns()).Optimize();
   ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
-  ASSERT_EQ(graph->Nodes().size(), 2U);
-  const auto &router = Node(*graph, Node(*graph, "Y").input(1));
-  EXPECT_EQ(router.op_type(), "Gather");
-  EXPECT_EQ(router.input(0), "logits");
+  ASSERT_EQ(graph->Nodes().size(), 1U);
+  EXPECT_EQ(Node(*graph, "Y").input(1), "logits");
 }
 
 TEST(MoEFusion, RejectsNonFloatUnsupportedOpsetsAndAlteredContracts) {
@@ -402,7 +399,7 @@ TEST(MoEFusion, RejectsNonFloatUnsupportedOpsetsAndAlteredContracts) {
 
 TEST(MoEFusion, RejectsModelLocalFunctionsWithDefaultOverload) {
   for (const std::string op : {"Softmax", "TopK", "GroupedMatMul", "Relu", "Reshape", "Unsqueeze",
-                               "Mul", "Div", "ReduceSum", "Gather", "Transpose", "MoE"}) {
+                               "Mul", "Div", "ReduceSum", "Transpose", "MoE"}) {
     auto graph = MakeGraph();
     auto function = std::make_shared<ONNX_LIGHT_NAMESPACE::FunctionProto>();
     function->set_name(op);
@@ -442,6 +439,33 @@ rt::Tensors RunGraph(builder::GraphBuilder &graph, bool ties) {
                                   "logits", {3, 3},
                                   ties ? std::vector<float>{0, 0, 0, 1, 1, -1, -1, 2, 2}
                                        : std::vector<float>{0.2F, -0.5F, 1, 2, -1, 0, -2, 1, 3})}});
+}
+
+TEST(MoEFusion, NearTieRoutingPreservesOriginalSoftmaxOrderAndSelectedExperts) {
+  onnx_light_cpu::RegisterMoEKernel();
+  for (const int64_t k : {1, 2, 3}) {
+    for (const bool normalize : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << k << " " << normalize);
+      auto graph = MakeGraph({.k = k, .normalize = normalize});
+      const auto run = [&] {
+        return RunGraph(
+            *graph, {{"X", rt::Tensor::FromFloat("X", {3, 2}, {1, -2, 0.5F, 3, -1, 2})},
+                     {"logits", rt::Tensor::FromFloat(
+                                    "logits", {3, 3},
+                                    {-5.960464477539063e-08F, 0, -0.017000000923871994F, 0,
+                                     -5.960464477539063e-08F, -0.017000000923871994F, 0, 0, 0})}});
+      };
+      const auto original = run();
+      builder::GraphGraph(*graph, Patterns()).Optimize();
+      ASSERT_EQ(Node(*graph, "Y").op_type(), "MoE");
+      const auto fused = run();
+      ASSERT_EQ(original.size(), 1U);
+      ASSERT_EQ(fused.size(), 1U);
+      for (std::size_t i = 0; i < 6; ++i) {
+        EXPECT_NEAR(original[0].AsFloat()[i], fused[0].AsFloat()[i], 2.0e-5F);
+      }
+    }
+  }
 }
 
 TEST(MoEFusion, PreservesNanFromSelectedExpertsWithUnderflowedRoutingWeights) {

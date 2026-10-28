@@ -118,7 +118,6 @@ struct MoEMatch {
   const NodeProto *first = nullptr;
   const NodeProto *second = nullptr;
   const NodeProto *softmax = nullptr;
-  int64_t experts = 0;
   int64_t k = 0;
   bool normalize = false;
   std::string activation = "identity";
@@ -129,8 +128,8 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
   const auto microsoft = opsets.find("com.microsoft");
   if (graph.Builder().OpsetVersion("") < 29 ||
       (microsoft != opsets.end() && microsoft->second != 1) ||
-      Local(graph, "com.microsoft", "MoE") || Local(graph, "", "Gather") ||
-      Local(graph, "", "Transpose") || !Sum(graph, &candidate, 0, false)) {
+      Local(graph, "com.microsoft", "MoE") || Local(graph, "", "Transpose") ||
+      !Sum(graph, &candidate, 0, false)) {
     return false;
   }
   const auto *mul = graph.NodeBefore(candidate.input(0));
@@ -304,7 +303,6 @@ bool Recognize(builder::GraphGraph &graph, const NodeProto &candidate, MoEMatch 
   match.first = first;
   match.second = second;
   match.softmax = softmax;
-  match.experts = experts;
   match.k = selected;
   return true;
 }
@@ -339,43 +337,26 @@ MoEFusionPattern::Apply(builder::GraphGraph &graph,
     reserved.insert(name);
     return name;
   };
-  TensorProto reverse;
-  reverse.set_name(unique("moe_reverse_experts"));
-  reverse.set_data_type(TensorProto::DataType::INT64);
-  reverse.add_dims(match.experts);
-  for (int64_t expert = match.experts; expert > 0; --expert) {
-    reverse.ref_int64_data().push_back(expert - 1);
-  }
-  const auto order = graph.Builder().MakeInitializer(reverse);
   ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto> replacements;
-  const auto gather = [&](const std::string &input, int64_t axis) {
-    const auto output = unique(input + "_moe_reversed");
-    auto node = MakeNode("Gather", {input, order}, {output});
-    AddAttribute(node, "axis", axis);
-    replacements.push_back(std::move(node));
-    return output;
-  };
   const auto transpose = [&](const std::string &input) {
-    const auto reversed = gather(input, 0);
     const auto output = unique(input + "_moe_transposed");
-    auto node = MakeNode("Transpose", {reversed}, {output});
+    auto node = MakeNode("Transpose", {input}, {output});
     AddAttribute(node, "perm", std::vector<int64_t>{0, 2, 1});
     replacements.push_back(std::move(node));
     return output;
   };
-  const auto logits = gather(match.softmax->input(0), 1);
   const auto w1 = transpose(match.first->input(1));
   const auto w2 = transpose(match.second->input(1));
   const auto bias = [&](const NodeProto &node) {
-    return node.input_size() == 4 && !node.input(3).empty() ? gather(node.input(3), 0)
-                                                            : std::string{};
+    return node.input_size() == 4 ? node.input(3).value() : std::string{};
   };
   const auto b1 = bias(*match.first);
   const auto b2 = bias(*match.second);
-  auto moe =
-      MakeNode("MoE", {match.first->input(0), logits, w1, b1, w2, b2}, {nodes.back()->output(0)});
+  auto moe = MakeNode("MoE", {match.first->input(0), match.softmax->input(0), w1, b1, w2, b2},
+                      {nodes.back()->output(0)});
   moe.set_domain("com.microsoft");
   AddAttribute(moe, "k", match.k);
+  AddAttribute(moe, "topk_tie_break_low", int64_t{1});
   AddAttribute(moe, "activation_type", match.activation);
   AddAttribute(moe, "normalize_routing_weights", static_cast<int64_t>(match.normalize));
   replacements.push_back(std::move(moe));

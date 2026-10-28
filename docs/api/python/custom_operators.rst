@@ -123,6 +123,13 @@ with alternating gate and linear rows, and supports ``swiglu_limit``,
 ``activation_alpha``, and ``activation_beta``. The other supported activations
 are ``relu`` (default), ``gelu``, ``silu``, and ``identity``.
 
+The CPU-specific INT attribute ``topk_tie_break_low`` defaults to ``0``,
+preserving higher-index selection for equal routing weights. Setting it to
+``1`` selects lower original expert indices, matching ONNX ``TopK``, without
+reordering logits or changing the Softmax accumulation order. This attribute
+extends the upstream Microsoft schema; models using it require this CPU
+extension rather than an unmodified ONNX Runtime MoE implementation.
+
 Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
 ``BFLOAT16``. Low-precision inputs and weights are converted in bounded row
 tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
@@ -139,9 +146,10 @@ weights, two grouped projections with optional expert biases, an identity,
 ReLU or tanh-approximated GELU activation, and a weighted sum over
 selected experts.
 The intervening reshapes must preserve token/expert order. Expert weights
-are transposed to MoE's output-major layout, and expert numbering is reversed
-to preserve ONNX ``TopK``'s lower-index tie selection with MoE's higher-index
-tie selection. Shared intermediates, unsupported layouts or attributes, and
+are transposed to MoE's output-major layout, and ``topk_tie_break_low=1``
+preserves ONNX ``TopK``'s lower-index tie selection. Logits, expert numbering
+and biases retain their original order, including for nearly tied routing
+probabilities. Shared intermediates, unsupported layouts or attributes, and
 low-precision graphs are left unchanged; low-precision grouped projections
 round intermediates differently from MoE.
 SiLU is left unfused because the kernel's activation does not preserve the

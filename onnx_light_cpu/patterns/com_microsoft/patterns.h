@@ -247,19 +247,18 @@ private:
  *   experts, w --> Mul --> ReduceSum(axis=1,keepdims=0) --> Y[T,H]
  *
  * After:
- *   logits --> Gather(reverse,axis=1) ---------------------> logits'
- *   W1,W2 --> Gather(reverse,axis=0) --> Transpose[0,2,1] ---> W1',W2'
- *   b1?,b2? --> Gather(reverse,axis=0) --------------------> b1'?,b2'?
+ *   W1,W2 --> Transpose[0,2,1] ---> W1',W2'
  *
- *   X, logits', W1', b1'?, W2', b2'? --> com.microsoft::MoE --> Y[T,H]
+ *   X, logits, W1', b1?, W2', b2? --> com.microsoft::MoE --> Y[T,H]
  *                                       k=K, activation_type=Activation,
+ *                                       topk_tie_break_low=1,
  *                                       normalize_routing_weights=Normalize?
  * @endcode
  *
  * T/E/H/I/K denote tokens, experts, hidden width, intermediate width and selected
  * experts. Normalize? is p / ReduceSum(p,axis=1,keepdims=1), or just p when absent.
  * Activation? is identity, Relu, or Gelu(approximate="tanh").
- * Biases b1[E,I] and b2[E,H] are optional. reverse is [E-1,...,0].
+ * Biases b1[E,I] and b2[E,H] are optional.
  *
  * Supports FLOAT, static positive expert/hidden/intermediate dimensions, constant
  * reshape targets, constant weights and optional constant biases, Relu, tanh-Gelu
@@ -268,9 +267,10 @@ private:
  * Exact Gelu is excluded: the MoE CPU kernel uses a tanh approximation.
  * SiLU is excluded: MoE and standalone Sigmoid/Mul differ for extreme inputs.
  * Retained inputs must be produced outside the matched block.
- * Expert order is reversed for logits, weights and biases before transposing
- * weights. This preserves ONNX TopK's low-index tie breaking with MoE's
- * high-index tie breaking. Shared source tensors are never modified.
+ * The explicit CPU extension topk_tie_break_low=1 preserves ONNX TopK's
+ * low-index tie breaking without changing Softmax summation order.
+ * Logits, expert numbering and biases retain their original order.
+ * Shared source tensors are never modified.
  */
 class MoEFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:

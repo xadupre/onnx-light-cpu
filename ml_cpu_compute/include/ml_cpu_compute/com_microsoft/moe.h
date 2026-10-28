@@ -18,6 +18,7 @@ struct MoEAttributes {
   float alpha = 1.0f;
   float beta = 0.0f;
   float limit = std::numeric_limits<float>::infinity();
+  bool topk_tie_break_low = false;
 };
 
 enum class MoEDataType {

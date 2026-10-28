@@ -495,6 +495,10 @@ LightOpSchema MakeMoESchema() {
         {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
         "Matching FLOAT, FLOAT16 or BFLOAT16 tensors."}},
       {AttributeParam{"k", "Number of selected experts.", AttributeType::INT, false, int64_t{1}},
+       AttributeParam{"topk_tie_break_low",
+                      "CPU extension: select lower expert indices on equal routing weights "
+                      "when 1. Default 0 preserves higher-index tie selection.",
+                      AttributeType::INT, false, int64_t{0}},
        AttributeParam{"activation_type", "relu, gelu, silu, identity or swiglu.",
                       AttributeType::STRING, false, std::string("relu")},
        AttributeParam{"swiglu_fusion", "Interleaved SwiGLU requires 1.", AttributeType::INT, false,
