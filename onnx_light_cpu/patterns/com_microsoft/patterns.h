@@ -231,6 +231,30 @@ private:
   std::string kernel_name_;
 };
 
+/**
+ * Fuses Softmax/TopK routing and two GroupedMatMul-29 expert layers into MoE.
+ *
+ * Supports FLOAT, static positive expert/hidden/intermediate dimensions, constant
+ * reshape targets, optional biases, Relu, SiLU, tanh-Gelu and identity activations.
+ * FLOAT16/BFLOAT16 are excluded: the unfused graph rounds its intermediates.
+ * Exact Gelu is excluded: the MoE CPU kernel uses a tanh approximation.
+ * Expert order is reversed for logits, weights and biases before transposing
+ * weights. This preserves ONNX TopK's low-index tie breaking with MoE's
+ * high-index tie breaking. Shared source tensors are never modified.
+ */
+class MoEFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
+public:
+  MoEFusionPattern() : PatternOptimization(0, "MicrosoftMoE") {}
+
+  std::set<std::string> FastOpType() const override;
+  ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
+  Match(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const ONNX_LIGHT_NAMESPACE::NodeProto &candidate) const override;
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<ONNX_LIGHT_NAMESPACE::NodeProto>
+  Apply(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
+};
+
 void RegisterCustomOperatorPatterns();
 
 } // namespace onnx_light_cpu

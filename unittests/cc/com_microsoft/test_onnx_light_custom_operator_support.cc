@@ -414,7 +414,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       {"com.microsoft", "MultiHeadAttention", "", false},
       {"com.microsoft", "LinearAttention", "onnx_light_cpu::LinearAttentionFusionPattern", false},
       {"com.microsoft", "MatMulNBits", "onnx_light_cpu::MatMulNBitsBiasFusionPattern", true},
-      {"com.microsoft", "MoE", "", false},
+      {"com.microsoft", "MoE", "MicrosoftMoE", false},
       {"com.microsoft", "QMoE", "", false},
       {"com.microsoft", "RotaryEmbedding", "", false},
       {"ai.onnx", "RotaryEmbedding", "", false},
@@ -435,7 +435,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
         entry.fusion[0] ? std::vector<std::string>{entry.fusion} : std::vector<std::string>{};
     EXPECT_EQ(actual->fusion_patterns, fusions);
     EXPECT_EQ(actual->has_gradient, entry.has_gradient);
-    if (actual->op_type == "SkipSimplifiedLayerNormalization") {
+    if (actual->op_type == "SkipSimplifiedLayerNormalization" || actual->op_type == "MoE") {
       onnx_light_cpu::RegisterCustomOperatorPatterns();
       const auto names = builder_ns::RegisteredPatternNames();
       ASSERT_EQ(actual->fusion_patterns.size(), 1U);
@@ -1171,6 +1171,7 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
             patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftMatMulNBitsBias"),
             patterns.end());
+  EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftMoE"), patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftNormalizationCast"),
             patterns.end());
 }

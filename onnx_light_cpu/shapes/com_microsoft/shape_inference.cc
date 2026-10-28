@@ -377,7 +377,7 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "MoE",
        "onnx_light_cpu::ComputeShapeMoE",
        "onnx_light_cpu::ComputePeakMemoryMoE",
-       {},
+       {"MicrosoftMoE"},
        false},
       {kMicrosoftDomain,
        "QMoE",

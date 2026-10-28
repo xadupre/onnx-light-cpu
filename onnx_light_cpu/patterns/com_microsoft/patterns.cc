@@ -471,6 +471,8 @@ void RegisterCustomOperatorPatterns() {
     builder_ns::RegisterPattern("MicrosoftNormalizationCast", [] {
       return std::make_unique<NormalizationCastEliminationPattern>();
     });
+    builder_ns::RegisterPattern("MicrosoftMoE",
+                                [] { return std::make_unique<MoEFusionPattern>(); });
   });
 }
 
