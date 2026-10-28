@@ -56,7 +56,7 @@ from ._backend_correctness import (
 )
 from ._simd import SimdLevel, detect_simd_level, has_cpu_kernels
 
-__version__ = "0.2.0"
+__version__ = "0.2.1.1"
 
 __all__ = [
     "BackendCaseResult",
