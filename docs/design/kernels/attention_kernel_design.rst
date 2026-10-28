@@ -677,3 +677,103 @@ the old and new tables are not a controlled AVX2-versus-AVX-512 experiment.
 No ISA-only speedup or new hot-symbol attribution is claimed. Issue 1029
 remains open; default-configuration dispatch and tail handling still need
 optimization.
+
+Issue 1028: retained Intel AVX2 dense FP32 improvement
+------------------------------------------------------------
+
+The 2026-10-28 follow-up starts from refreshed remote main
+``cc34d0d8fe6d2372cf6472466e3438a8bfae25e6``. Unlike the closed profiling-only
+PR 1058, this change retains two production optimizations:
+
+* QK uses the actual attention tile depth for GEMM blocking and six register
+  rows. The general GEMM profile's nominal KC otherwise selects unnecessarily
+  narrow packed column panels for these short dot products.
+* P*V with 128 value columns uses a three-row, 32-column register tile.
+  Twelve accumulators, three broadcast probabilities and one loaded value
+  vector fit in sixteen YMM registers, without packing or allocating scratch.
+  Existing GEMM micro-tiles handle the remaining one or two query rows.
+
+Both require the Intel Core GEMM profile, AVX2 with FMA, rank-four FP32,
+at least 128 queries, no mask, causal/window bound, softcap or nonpad length.
+Individual tile bounds retain the existing fallback for small tiles and
+unsupported head sizes. Scheduling ownership, score-tile sizes, accumulation
+precision and tolerances do not change. AMD, generic profiles, rank-three,
+FP16/BF16 and the default AVX-512 path remain unchanged: the rejected AMD
+blocking experiments in PR 1058 do not justify enabling these gates there.
+
+Matched, repeated A/B measurements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The host is an Intel Xeon Platinum 8480C, GCC 13.2 Release, Python 3.12.15,
+NumPy 2.5.3 and ml-dtypes 0.5.4. The onnx-light 0.2.2 source checkout is
+``06912a3676fa2c58a47ce51d5acd124d8e0bedd4`` with stable ABI enabled.
+ORT 1.32.0 is the local Release build at ``782dc0c5b5``.
+The CPU build reports AVX2 using ``ML_CPU_COMPUTE_MAX_SIMD_LEVEL=AVX2``;
+ORT is unrestricted on this AVX-512-capable host. These are not ISA-parity
+measurements, nor a reproduction on the original AMD runner.
+
+Both independent campaigns use the original five registered models and
+inputs, CPU-0 affinity, one thread per backend, sequential ORT, one inter-op
+thread and disabled ORT spinning. Baseline, candidate and ORT calls rotate
+order in the same process, reusing the same sessions and feeds. A temporary
+invocation-level gate selects the original or optimized path outside timing;
+it is removed from the retained code. There are 20 warmups and up to 100
+samples per path, stopping once every path has accumulated two seconds.
+The long-KV case collects 63 and 60 samples per path; the other cases collect
+100. Model construction, data generation, correctness and compilation are
+outside timing. CPU feeds are backend tensors, not NumPy arrays.
+
+All values below are median milliseconds. Case names use the prefix
+``test_cpu_attention_opset23_rank4_mha_`` and suffix
+``_none_stateless_float32_benchmark``.
+
+.. csv-table::
+   :header: "Case", "Before", "After", "ORT", "Before repeat", "After repeat", "ORT repeat"
+
+   "q128_kv128_hd64", "0.641815", "0.586902", "0.413437", "0.647782", "0.597532", "0.427517"
+   "q512_kv128_hd64", "2.484012", "2.294868", "1.499381", "2.731780", "2.532912", "1.656027"
+   "q128_kv8192_hd64", "43.550382", "42.091625", "30.219244", "45.617714", "45.018527", "31.222460"
+   "q128_kv128_hd128", "1.315575", "1.201075", "0.838056", "1.212978", "1.108685", "0.758204"
+   "q128_kv128_hd256", "2.258434", "2.182405", "1.388872", "2.256909", "2.175080", "1.368227"
+
+The four shorter cases improve by 3.4--8.7% in both campaigns. The long-KV
+reduction is only 1.3--3.4%; its smaller, less stable gain should not be
+extrapolated. No selected case regresses in either matched comparison.
+Final production-only measurements, after removing the temporary gate,
+give the following additional CPU/ORT medians under the same settings:
+
+.. csv-table::
+   :header: "Q/KV/D", "Retained CPU", "ORT"
+
+   "128/128/64", "0.675312", "0.446491"
+   "512/128/64", "2.326355", "1.447188"
+   "128/8192/64", "41.828070", "27.840577"
+   "128/128/128", "1.147282", "0.774157"
+   "128/128/256", "2.204210", "1.347139"
+
+Separate-process drift remains visible, particularly in the first case;
+the gain claims use the matched A/B campaigns, not differences between
+separate runs. A separate native ``perf record -e cpu-clock:u`` run confirms
+both the six-row AVX2 GEMM and ``AttentionValue128Float32_AVX2_FMA`` execute.
+Its samples include startup and ORT, so no kernel phase-time share is claimed.
+Hardware cycles/instructions are unsupported on this VM.
+
+All 108 Attention C++ tests pass with the AVX2 ceiling. Coverage includes
+the five original shapes, eligibility boundaries, head/query/KV tails,
+multi-block accumulation, unaligned operands and padded output strides.
+The five registered cases also pass ORT comparisons with one and two runtime
+threads at the unchanged FP32 rtol/atol ``2e-4/2e-5``.
+**ORT remains faster on all five cases, and issue 1028 remains open.**
+The original AMD gap and default-ISA parity are not resolved by these
+Intel AVX2-specific improvements.
+
+The retained path can be reproduced from a source-linked build with:
+
+.. code-block:: bash
+
+   CMAKE_ARGS='-DML_CPU_COMPUTE_MAX_SIMD_LEVEL=AVX2' \
+     python setup.py build_ext --inplace --onnx-light-source --parallel 48
+   python tools/benchmark_attention_parity.py --large \
+     --threads 1 --cpus 0 --warmup 20 --repeat 100 --max-repeat-time 2 \
+     --case '^test_cpu_attention_opset23_rank4_mha_(q128_kv128_hd(64|128|256)|q512_kv128_hd64|q128_kv8192_hd64)_none_stateless_float32_benchmark$' \
+     --output /tmp/attention-1028.json

@@ -877,8 +877,17 @@ void LoadKvRows(const AttentionPlan &plan, const typename Codec::Storage *curren
 template <typename Codec>
 void AttentionQkGemm(std::size_t rows, std::size_t columns, std::size_t head_dim, float scale,
                      const typename Codec::Storage *q, const typename Codec::Storage *k,
-                     float *scores) {
+                     float *scores, [[maybe_unused]] bool dense_rank4) {
   if constexpr (std::is_same_v<Codec, Float32Codec>) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+    if (dense_rank4 && rows >= 64 && columns >= 64 && head_dim >= 64 && head_dim <= 256) {
+      // Size packed column panels from the actual tile depth, not the general GEMM KC.
+      const GemmBlocking blocking{rows, columns, head_dim, kGemmAVX2MR, 16};
+      detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(
+          false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores, &blocking);
+      return;
+    }
+#endif
     GemmFloat32(false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores);
   } else {
     const GemmEpilogue<float> epilogue;
@@ -1454,10 +1463,27 @@ bool UseAvx2AttentionValueGemm(std::size_t rows, std::size_t dimension, std::siz
 #endif
 }
 
+bool UseAvx2DenseRank4Gemm() {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  static const bool available =
+      DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() &&
+      detail::DetectGemmMicroarchitecture() == GemmMicroarchitecture::kIntelCore;
+  return available;
+#else
+  return false;
+#endif
+}
+
 void AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t columns,
                         const float *scores, const float *values, const float *previous,
-                        float *output, [[maybe_unused]] std::size_t output_stride) {
+                        float *output, [[maybe_unused]] std::size_t output_stride,
+                        [[maybe_unused]] bool dense_rank4 = false) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (dense_rank4 && dimension == 128 && rows >= 64 && columns >= 64 && columns <= 512) {
+    AttentionValue128Float32_AVX2_FMA(rows, columns, scores, values, previous, output,
+                                      output_stride);
+    return;
+  }
   // Attention already owns scheduling and contiguous tiles. Reuse those tiles directly rather
   // than repacking both operands through the general GEMM driver.
   if (UseAvx2AttentionValueGemm(rows, dimension, columns)) {
@@ -1491,6 +1517,11 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   std::size_t query_block = AttentionQueryBlock(plan);
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
+  const bool dense_rank4 =
+      std::is_same_v<Codec, Float32Codec> && plan.q_length >= 128 &&
+      plan.layout == AttentionLayout::kRank4 && plan.mask_kind == AttentionMaskKind::kNone &&
+      !plan.causal && plan.softcap == 0.0f && plan.left_window_size < 0 &&
+      plan.right_window_size < 0 && nonpad_kv_seqlen == nullptr && UseAvx2DenseRank4Gemm();
   constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
   const std::size_t kv_heads = plan.batch * plan.kv_num_heads;
   const std::size_t shared_k_elements = CheckedProduct(
@@ -1693,7 +1724,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             } else
 #endif
               AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
-                                     scores.data());
+                                     scores.data(), dense_rank4);
             const float *v_block;
             if constexpr (std::is_same_v<Codec, Float32Codec>) {
               v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
@@ -1933,7 +1964,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               } else
 #endif
                 AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block, nullptr,
-                                   destination, destination_stride);
+                                   destination, destination_stride, dense_rank4);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_dense_softmax_avx512) {
                 AttentionNormalizeRowsFloat32_AVX512(destination, denominators.data(), rows,
@@ -1982,7 +2013,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
             // Fuse the running sum into GEMM while keeping its bias and output disjoint.
             AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block,
-                               accumulator.data(), product.data(), plan.v_head_dim);
+                               accumulator.data(), product.data(), plan.v_head_dim, dense_rank4);
             accumulator.swap(product);
           }
 

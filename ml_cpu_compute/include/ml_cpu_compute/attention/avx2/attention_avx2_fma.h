@@ -15,6 +15,11 @@ bool AttentionAllFiniteAndBoundedFloat32_AVX2_FMA(const float *values, std::size
                                                   float absolute_bound);
 bool AttentionAllFiniteFloat16_AVX2_FMA(const std::uint16_t *values, std::size_t count);
 
+/// P @ V with 128 value columns, optional disjoint previous output, and output_stride >= 128.
+void AttentionValue128Float32_AVX2_FMA(std::size_t rows, std::size_t columns, const float *scores,
+                                       const float *values, const float *previous, float *output,
+                                       std::size_t output_stride);
+
 /// AVX2+FMA counterpart of AttentionSoftmaxBlockResult (the AVX-512
 /// primitive lives in impl/attention/avx512); kept as a separate type so
 /// this header has no dependency on the AVX-512 one.

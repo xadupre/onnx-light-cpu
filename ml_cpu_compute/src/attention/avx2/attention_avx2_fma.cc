@@ -4,6 +4,7 @@
 
 #include "ml_cpu_compute/attention/avx2/attention_avx2_fma.h"
 
+#include "ml_cpu_compute/math/gemm/avx2/gemm_avx2_fma.h"
 #include "ml_cpu_compute/math/math.h"
 
 #include <algorithm>
@@ -89,6 +90,64 @@ inline void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight
 }
 
 } // namespace
+
+void AttentionValue128Float32_AVX2_FMA(std::size_t rows, std::size_t columns, const float *scores,
+                                       const float *values, const float *previous, float *output,
+                                       std::size_t output_stride) {
+  constexpr std::size_t dimension = 128;
+  std::size_t row = 0;
+  for (; row + 3 <= rows; row += 3) {
+    // Twelve accumulators, three probabilities and one value vector fit in sixteen YMMs.
+    for (std::size_t d = 0; d < dimension; d += 32) {
+      __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
+      __m256 c02 = _mm256_setzero_ps(), c03 = _mm256_setzero_ps();
+      __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
+      __m256 c12 = _mm256_setzero_ps(), c13 = _mm256_setzero_ps();
+      __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
+      __m256 c22 = _mm256_setzero_ps(), c23 = _mm256_setzero_ps();
+      for (std::size_t k = 0; k < columns; ++k) {
+        const __m256 p0 = _mm256_set1_ps(scores[row * columns + k]);
+        const __m256 p1 = _mm256_set1_ps(scores[(row + 1) * columns + k]);
+        const __m256 p2 = _mm256_set1_ps(scores[(row + 2) * columns + k]);
+        const auto accumulate = [&](std::size_t offset, __m256 &a, __m256 &b, __m256 &c) {
+          const __m256 v = _mm256_loadu_ps(values + k * dimension + d + offset);
+          a = _mm256_fmadd_ps(p0, v, a);
+          b = _mm256_fmadd_ps(p1, v, b);
+          c = _mm256_fmadd_ps(p2, v, c);
+        };
+        accumulate(0, c00, c10, c20);
+        accumulate(8, c01, c11, c21);
+        accumulate(16, c02, c12, c22);
+        accumulate(24, c03, c13, c23);
+      }
+      const auto store = [&](std::size_t r, __m256 a, __m256 b, __m256 c, __m256 e) {
+        if (previous != nullptr) {
+          const float *bias = previous + (row + r) * dimension + d;
+          a = _mm256_add_ps(a, _mm256_loadu_ps(bias));
+          b = _mm256_add_ps(b, _mm256_loadu_ps(bias + 8));
+          c = _mm256_add_ps(c, _mm256_loadu_ps(bias + 16));
+          e = _mm256_add_ps(e, _mm256_loadu_ps(bias + 24));
+        }
+        float *destination = output + (row + r) * output_stride + d;
+        _mm256_storeu_ps(destination, a);
+        _mm256_storeu_ps(destination + 8, b);
+        _mm256_storeu_ps(destination + 16, c);
+        _mm256_storeu_ps(destination + 24, e);
+      };
+      store(0, c00, c01, c02, c03);
+      store(1, c10, c11, c12, c13);
+      store(2, c20, c21, c22, c23);
+    }
+  }
+  if (row < rows) {
+    GemmMicroTile_AVX2FMA_F32(rows - row, dimension, columns, 1.0f, 1.0f, values, dimension,
+                              previous != nullptr ? previous + row * dimension : nullptr, dimension,
+                              output + row * output_stride, output_stride, 0,
+                              previous != nullptr ? GemmAccumMode::kInitBias
+                                                  : GemmAccumMode::kInitZero,
+                              scores + row * columns);
+  }
+}
 
 bool AttentionAllFiniteFloat32_AVX2_FMA(const float *values, std::size_t count) {
   const __m256i exponent = _mm256_set1_epi32(0x7f800000);

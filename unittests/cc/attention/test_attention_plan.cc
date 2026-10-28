@@ -1259,6 +1259,82 @@ TEST(ComputeAttentionFloat32Streaming, DenseBenchmarkShapesMatchMaterialized) {
   }
 }
 
+class DenseRank4Attention : public ::testing::TestWithParam<std::tuple<int, int, int, int>> {};
+
+TEST_P(DenseRank4Attention, MatchesMaterialized) {
+  const auto [q_len, kv_len, head_dim, v_head_dim] = GetParam();
+  constexpr std::int64_t heads = 12;
+  const std::int64_t q_shape[] = {1, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {1, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {1, heads, kv_len, v_head_dim};
+  const AttentionPlan plan(AttentionDescriptor{}, AttentionLayout::kRank4, q_shape, k_shape,
+                           v_shape, {}, AttentionMaskKind::kNone);
+  const auto q = RandomTensor(heads * q_len * head_dim, 1291);
+  const auto k = RandomTensor(heads * kv_len * head_dim, 1292);
+  const auto v = RandomTensor(heads * kv_len * v_head_dim, 1293);
+  std::vector<float> actual(heads * q_len * v_head_dim), expected(actual.size());
+  ml_cpu_compute::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      expected.data());
+  InlineExecutor executor;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::AttentionExecutionInfo info;
+  {
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                     nullptr, nullptr, nullptr, &info);
+  }
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_FALSE(executor.nested);
+  ExpectClose(actual, expected, 2.0e-4f);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DenseFloat32, DenseRank4Attention,
+    ::testing::Values(std::tuple{128, 128, 64, 64}, std::tuple{128, 128, 128, 128},
+                      std::tuple{128, 128, 256, 256}, std::tuple{512, 128, 64, 64},
+                      std::tuple{128, 8192, 64, 64}, std::tuple{129, 127, 65, 128},
+                      std::tuple{129, 513, 128, 128}, std::tuple{128, 129, 255, 128},
+                      std::tuple{128, 128, 257, 129}, std::tuple{127, 128, 128, 128},
+                      std::tuple{128, 63, 64, 128}, std::tuple{128, 64, 64, 128},
+                      std::tuple{128, 128, 63, 127}));
+
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+TEST(AttentionValue128Avx2, HandlesRowTailsPreviousOutputAndStrides) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2 and FMA are required.";
+  }
+  constexpr std::size_t dimension = 128, stride = 137;
+  for (const auto &[rows, columns] :
+       {std::pair{64u, 127u}, std::pair{65u, 513u}, std::pair{128u, 128u}}) {
+    const auto scores = RandomTensor(rows * columns + 1, 1294);
+    const auto values = RandomTensor(columns * dimension + 1, 1295);
+    const auto previous = RandomTensor(rows * dimension, 1296);
+    for (const bool accumulate : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << rows << "/" << columns << "/" << accumulate);
+      std::vector<float> actual(rows * stride + 2, -1234.0f), expected(rows * dimension);
+      const float *bias = accumulate ? previous.data() : nullptr;
+      ml_cpu_compute::GemmFloat32(false, false, rows, dimension, columns, 1.0f, scores.data() + 1,
+                                  values.data() + 1, accumulate ? 1.0f : 0.0f, bias,
+                                  expected.data());
+      ml_cpu_compute::AttentionValue128Float32_AVX2_FMA(
+          rows, columns, scores.data() + 1, values.data() + 1, bias, actual.data() + 1, stride);
+      EXPECT_EQ(actual.front(), -1234.0f);
+      EXPECT_EQ(actual.back(), -1234.0f);
+      for (std::size_t row = 0; row < rows; ++row) {
+        for (std::size_t d = 0; d < dimension; ++d) {
+          EXPECT_NEAR(actual[1 + row * stride + d], expected[row * dimension + d], 2.0e-4f);
+        }
+        for (std::size_t d = dimension; d < stride; ++d) {
+          EXPECT_EQ(actual[1 + row * stride + d], -1234.0f);
+        }
+      }
+    }
+  }
+}
+#endif
+
 // -----------------------------------------------------------------------
 // AVX2+FMA `Q == 1` decode fast path (ml_cpu_compute/attention/avx2):
 // on AVX2 hardware without AVX-512 these cases exercise
