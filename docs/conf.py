@@ -9,8 +9,11 @@ sys.path.insert(0, os.path.abspath("_ext"))
 
 from cpp_api_pages import generate_cpp_api_pages
 
+from onnx_light_cpu import __version__
+
 project = "onnx-light-cpu"
 author = "xadupre"
+release = __version__
 
 extensions = [
     "breathe",
