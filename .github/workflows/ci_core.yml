@@ -78,7 +78,7 @@ jobs:
         run: pip freeze
 
       - name: Reconfigure CMake before CTest
-        run: cmake -S . -B build
+        run: cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF
 
       - name: Run C++ unit tests
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
