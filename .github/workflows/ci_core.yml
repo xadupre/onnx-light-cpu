@@ -77,6 +77,9 @@ jobs:
       - name: pip freeze
         run: pip freeze
 
+      - name: Reconfigure CMake before CTest
+        run: cmake -S . -B build
+
       - name: Run C++ unit tests
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
