@@ -10,6 +10,8 @@ documentation reflects the current status of the project.
 """
 
 from pathlib import Path
+import runpy
+import sys
 
 import onnx_light_cpu
 from onnx_light.ext_test_case import ExtTestCase
@@ -24,6 +26,18 @@ _PYTHON_API_TOPICS = (
 
 
 class TestApiDocReflectsPublicApi(ExtTestCase):
+    def test_homepage_displays_package_version(self):
+        docs_dir = _PYTHON_API_DIR.parents[1]
+        original_path = sys.path[:]
+        try:
+            sys.path.insert(0, str(docs_dir / "_ext"))
+            config = runpy.run_path(str(docs_dir / "conf.py"))
+        finally:
+            sys.path[:] = original_path
+        self.assertEqual(config["release"], onnx_light_cpu.__version__)
+        homepage = (docs_dir / "index.rst").read_text(encoding="utf-8")
+        self.assertIn("Version |release|.", homepage)
+
     def test_every_public_symbol_is_documented(self):
         assert _PYTHON_API_DIR.is_dir(), "docs/api/python is missing"
         python_index_path = _PYTHON_API_DIR / "index.rst"

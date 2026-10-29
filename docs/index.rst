@@ -1,6 +1,8 @@
 onnx-light-cpu
 ==============
 
+Version |release|.
+
 Highly optimized CPU kernels for
 `onnx-light <https://github.com/xadupre/onnx-light>`_.
 
