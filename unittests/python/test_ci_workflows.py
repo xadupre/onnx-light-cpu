@@ -107,6 +107,15 @@ def test_onnx_light_build_workflows_install_cmake_four_or_newer():
         assert install.start() < workflow.index(build_command), name
 
 
+def test_core_workflow_installs_cmake_outside_build_isolation():
+    core_job = _CORE_WORKFLOW.split("  core_tests:", 1)[1].split(
+        "  setup_onnx_light_source:", 1
+    )[0]
+    install = core_job.index('python -m pip install "cmake>=4"')
+    build = core_job.index("pip install -C build-dir=build")
+    assert install < build
+
+
 def test_source_integration_uses_matching_nanobind_abi():
     cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert (

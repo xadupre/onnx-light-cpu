@@ -237,7 +237,7 @@ TEST(NormalizationCast, CreatesInitializersWithoutConstantNodesOrMutatingSharedW
   }
 }
 
-TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
+TEST(NormalizationCast, PreservesModelLocalInputCastOverloads) {
   for (const std::string output : {"X32", "R32", "W32", "B32"}) {
     SCOPED_TRACE(output);
     auto model = MakeGraph({.bias = true})->ToModel();
@@ -259,7 +259,10 @@ TEST(NormalizationCast, RejectsModelLocalInputCastOverloads) {
         node.set_overload("with_add");
       }
     }
-    EXPECT_THROW(builder::GraphBuilder(model, SchemaLookup), builder::BuilderError);
+    auto graph = std::make_unique<builder::GraphBuilder>(model, SchemaLookup);
+    const auto before = graph->ToGraph().SerializeAsString();
+    builder::GraphGraph(*graph, Patterns()).Optimize();
+    EXPECT_EQ(graph->ToGraph().SerializeAsString(), before);
   }
 }
 
