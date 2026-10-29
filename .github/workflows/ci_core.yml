@@ -208,7 +208,7 @@ jobs:
         shell: bash
         run: |
           sccache --start-server || :
-          pip install nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
+          pip install "cmake>=4" nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
           onnx_light_source="${RUNNER_TEMP}/onnx-light"
           git clone --depth 1 --branch 0.2.2 https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
           CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"

@@ -94,6 +94,19 @@ def test_standalone_source_build_uses_onnx_light_release():
     assert "git clone --depth 1 --branch main" not in standalone_job
 
 
+def test_onnx_light_build_workflows_install_cmake_four_or_newer():
+    for name, build_command in (
+        ("ci_core.yml", "git clone --depth 1 --branch"),
+        ("docs.yml", "git clone --depth 1 --branch"),
+        ("cpp_standalone.yml", "git clone --depth 1 --branch"),
+        ("avx2_parity.yml", "python setup.py"),
+    ):
+        workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        install = re.search(r'(?:python -m )?pip install "cmake>=4"', workflow)
+        assert install is not None, name
+        assert install.start() < workflow.index(build_command), name
+
+
 def test_source_integration_uses_matching_nanobind_abi():
     cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert (
@@ -137,7 +150,7 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "CIBW_BEFORE_BUILD: >-" in body
         assert (
             "CIBW_BEFORE_BUILD: >-\n"
-            "            python -m pip install scikit-build-core nanobind==3.1.0 &&\n"
+            '            python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&\n'
             f"            {install_release}"
         ) in body
         assert f"CIBW_BEFORE_TEST: {install_release}" in body

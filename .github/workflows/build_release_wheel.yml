@@ -55,7 +55,7 @@ jobs:
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
-            python -m pip install scikit-build-core nanobind==3.1.0 &&
+            python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&
             python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
@@ -129,7 +129,7 @@ jobs:
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
-            python -m pip install scikit-build-core nanobind==3.1.0 &&
+            python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&
             python {project}/tools/onnx_light_release.py install &&
             python {project}/tools/onnx_light_release.py generate-import-libraries {project}/../onnx-light/build
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
@@ -195,7 +195,7 @@ jobs:
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
-            python -m pip install scikit-build-core nanobind==3.1.0 &&
+            python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&
             python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py

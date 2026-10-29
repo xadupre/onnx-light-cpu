@@ -49,7 +49,7 @@ jobs:
           # onnx-light-cpu subsequently discovers the loaded runtime through
           # get_cpp_build_info(), avoiding a second CMake-installed copy with a
           # different dispatch registry.
-          pip install nanobind scikit-build-core numpy
+          pip install "cmake>=4" nanobind scikit-build-core numpy
           git clone --depth 1 --branch 0.2.2 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           # Match the CPU extensions' STABLE_ABI; nanobind separates ABI3 and
           # regular CPython type registries (LightOpSchema, RuntimeContext).

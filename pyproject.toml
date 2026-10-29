@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.3.3", "nanobind>=3.0"]
+requires = ["scikit-build-core>=0.8", "nanobind>=3.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -54,6 +54,7 @@ docs = [
 ]
 
 [tool.scikit-build]
+cmake.version = ">=4"
 wheel.packages = ["onnx_light_cpu"]
 build-dir = "build/{wheel_tag}"
 
