@@ -20,7 +20,7 @@ to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
 Current development version: **0.2.2**. See the [changelog](CHANGELOGS.md)
-for changes. CI validates the runtime integration against **onnx-light 0.2.2**.
+for changes. CI validates the runtime integration against **onnx-light 0.2.3**.
 
 ## Installation
 
