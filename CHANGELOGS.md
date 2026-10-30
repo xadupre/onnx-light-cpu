@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.2.2] – Unreleased
+## [0.2.3] – Unreleased
 
 ### New Features
 
@@ -41,6 +41,7 @@ All notable changes to this project are documented in this file. The format is b
 - Accelerated FLOAT/FLOAT16 split-half `RotaryEmbedding` with AVX and AVX2/F16C vector paths ([#1014](https://github.com/xadupre/onnx-light-cpu/pull/1014)).
 - Reduced FLOAT16 `CausalConvWithState` conversion overhead with bounded tiles and FLOAT16 `SimplifiedLayerNormalization` row overhead with batched dispatch ([#1021](https://github.com/xadupre/onnx-light-cpu/pull/1021), [#1022](https://github.com/xadupre/onnx-light-cpu/pull/1022)).
 - Reduced AVX2 FLOAT `CDist` latency with 4-by-16 output tiles and `TreeEnsemble` batch interleaving overhead ([#1006](https://github.com/xadupre/onnx-light-cpu/pull/1006), [#1013](https://github.com/xadupre/onnx-light-cpu/pull/1013)).
+- Improved cache locality for large, wide, parallel depth-4 FLOAT `TreeEnsemble` workloads with 64-tree by 4-row tiles, preserving the serial path and partition-local accumulation order without additional scratch allocations ([#1071](https://github.com/xadupre/onnx-light-cpu/pull/1071)).
 - Enabled streaming stores for eligible serial, out-of-place AVX2 FLOAT `Add` and `Div` tensors exceeding both 32 MiB and detected L3 capacity, preserving cached stores for other paths ([#1032](https://github.com/xadupre/onnx-light-cpu/pull/1032), [#1036](https://github.com/xadupre/onnx-light-cpu/pull/1036)).
 - Enabled AVX FLOAT `Abs` streaming stores at the L3-capacity boundary rather than only above it ([#1009](https://github.com/xadupre/onnx-light-cpu/pull/1009)).
 
@@ -55,6 +56,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Documentation & CI
 
+- Updated CI and release builds to onnx-light 0.2.2 and then 0.2.3 ([#1069](https://github.com/xadupre/onnx-light-cpu/pull/1069), [#1073](https://github.com/xadupre/onnx-light-cpu/pull/1073)).
+- Displayed the package version on the documentation homepage ([#1067](https://github.com/xadupre/onnx-light-cpu/pull/1067)).
+- Hardened `MatMulNBits` bias-fusion test assertions and expanded coverage of floating-point types, packed widths, ONNX domains, and Add input order without changing production fusion logic ([#1063](https://github.com/xadupre/onnx-light-cpu/pull/1063)).
 - Corrected the published-wheel compatibility guide to reference onnx-light 0.1.32 and added a regression check that keeps it aligned with the release version ([#901](https://github.com/xadupre/onnx-light-cpu/pull/901)).
 - Generated C++ kernel and custom-operator API pages from Doxygen declarations ([#887](https://github.com/xadupre/onnx-light-cpu/pull/887)).
 - Enabled weekly Dependabot updates for GitHub Actions and Python dependencies ([#872](https://github.com/xadupre/onnx-light-cpu/pull/872)).
