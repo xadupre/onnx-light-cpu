@@ -7,10 +7,10 @@ platforms = ["linux-64", "win-64"]
 [dependencies]
 python = ">=3.12"
 numpy = ">=2.1"
-cmake = ">=3.27"
+cmake = ">=4"
 ninja = "*"
 cxx-compiler = "*"
-scikit-build-core = ">=0.3.3"
+scikit-build-core = ">=0.8"
 nanobind = ">=3.0"
 pip = "*"
 

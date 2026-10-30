@@ -31,6 +31,15 @@ def test_project_version_consistency():
         assert match.group(1) == version, path
 
 
+def test_builds_use_cmake_four_or_newer():
+    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert metadata["tool"]["scikit-build"]["cmake"]["version"] == ">=4"
+    assert "scikit-build-core>=0.8" in metadata["build-system"]["requires"]
+    pixi = tomllib.loads((_ROOT / "pixi.toml").read_text(encoding="utf-8"))
+    assert pixi["dependencies"]["cmake"] == ">=4"
+    assert pixi["dependencies"]["scikit-build-core"] == ">=0.8"
+
+
 def test_changelog_release_sections():
     changelog = (_ROOT / "CHANGELOGS.md").read_text(encoding="utf-8")
     sections = dict(

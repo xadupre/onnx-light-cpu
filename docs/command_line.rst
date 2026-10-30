@@ -112,7 +112,7 @@ workbook:
    operator and data type without posting results. Explicit ``--tests`` and
    ``--dtypes`` filters override this inference.
 
-The Linux ``onnx-light 0.2.1`` job in the ``ci-core`` workflow invokes this
+The Linux ``onnx-light 0.2.2`` job in the ``ci-core`` workflow invokes this
 command after its existing build and tests when a pull request modifies kernel
 implementation or backend benchmark case files. A separate report job updates
 the latest benchmark comment instead of adding a new comment after every push.

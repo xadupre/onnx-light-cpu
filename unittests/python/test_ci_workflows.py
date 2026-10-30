@@ -73,7 +73,7 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
 
 
 def test_documentation_does_not_replace_onnx_light_release():
-    assert "git clone --depth 1 --branch 0.2.1" in _DOCS_WORKFLOW
+    assert "git clone --depth 1 --branch 0.2.2" in _DOCS_WORKFLOW
     assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
@@ -90,8 +90,33 @@ def test_standalone_source_build_allows_time_for_both_projects():
 
 def test_standalone_source_build_uses_onnx_light_release():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
-    assert "git clone --depth 1 --branch 0.2.1" in standalone_job
+    assert "git clone --depth 1 --branch 0.2.2" in standalone_job
     assert "git clone --depth 1 --branch main" not in standalone_job
+
+
+def test_onnx_light_build_workflows_install_cmake_four_or_newer():
+    for name, build_command in (
+        ("ci_core.yml", "git clone --depth 1 --branch"),
+        ("docs.yml", "git clone --depth 1 --branch"),
+        ("cpp_standalone.yml", "git clone --depth 1 --branch"),
+        ("avx2_parity.yml", "python setup.py"),
+    ):
+        workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        install = re.search(r'(?:python -m )?pip install "cmake>=4"', workflow)
+        assert install is not None, name
+        assert install.start() < workflow.index(build_command), name
+
+
+def test_core_workflow_installs_cmake_outside_build_isolation():
+    core_job = _CORE_WORKFLOW.split("  core_tests:", 1)[1].split("  setup_onnx_light_source:", 1)[
+        0
+    ]
+    install = core_job.index('python -m pip install "cmake>=4"')
+    build = core_job.index("pip install -C build-dir=build")
+    reconfigure = core_job.index("cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF")
+    test = core_job.index("ctest --test-dir build")
+    assert install < build
+    assert build < reconfigure < test
 
 
 def test_source_integration_uses_matching_nanobind_abi():
@@ -137,7 +162,7 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "CIBW_BEFORE_BUILD: >-" in body
         assert (
             "CIBW_BEFORE_BUILD: >-\n"
-            "            python -m pip install scikit-build-core nanobind==3.1.0 &&\n"
+            '            python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&\n'
             f"            {install_release}"
         ) in body
         assert f"CIBW_BEFORE_TEST: {install_release}" in body
@@ -225,8 +250,8 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "name: onnx-light 0.2.1 (" in source_job
-    assert "git clone --depth 1 --branch 0.2.1" in source_job
+    assert "name: onnx-light 0.2.2 (" in source_job
+    assert "git clone --depth 1 --branch 0.2.2" in source_job
     assert "git clone --depth 1 --branch main" not in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
