@@ -689,6 +689,59 @@ TEST(TreeEnsembleOracle, BalancedFloatRowVectorsPreserveRootRoutingAndTailBounds
   }
 }
 
+TEST(TreeEnsembleOracle, WideBalancedFloatForestPreservesCacheTileTailsAndStrategies) {
+  for (const std::size_t features : {1023U, 1024U, 4096U, 4097U}) {
+    auto attributes = BalancedForest(1025);
+    attributes.n_features = static_cast<std::int64_t>(features);
+    for (std::size_t node = 0; node < attributes.nodes_featureids.size(); ++node) {
+      attributes.nodes_featureids[node] = static_cast<std::int64_t>((node * 7) % features);
+    }
+    const TreeEnsembleOracle oracle(attributes);
+    for (const auto strategy : {TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                TreeEnsembleExecutionStrategy::kTreeParallel,
+                                TreeEnsembleExecutionStrategy::kRowParallel}) {
+      const auto policy = OneRegionPolicy(strategy, 2, 1, 17);
+      TreeEnsemblePlan plan(attributes, 2, policy);
+      plan.CompactRuntimeStorage();
+      for (const std::size_t rows : {0U, 1U, 3U, 4U, 5U, 65U, 128U, 131U}) {
+        SCOPED_TRACE(::testing::Message() << "features=" << features << " rows=" << rows
+                                          << " strategy=" << static_cast<int>(strategy));
+        std::vector<float> input(rows * features);
+        for (std::size_t index = 0; index < input.size(); ++index) {
+          input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.25F;
+        }
+        if (!input.empty()) {
+          input.front() = std::numeric_limits<float>::quiet_NaN();
+          input.back() = std::numeric_limits<float>::infinity();
+        }
+        const std::vector<double> reference_input(input.begin(), input.end());
+        const auto expected = oracle.Evaluate(reference_input, rows);
+        constexpr float kSentinel = -42.0F;
+        std::vector<float> actual(rows + 2, kSentinel);
+        ThreadedExecutor executor;
+        ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+        ml_cpu_compute::ExecutionExecutorScope scope(&view);
+        plan.EvaluateInto(input.data(), input.size(), rows, actual.data() + 1);
+        EXPECT_EQ(actual.front(), kSentinel);
+        EXPECT_EQ(actual.back(), kSentinel);
+        EXPECT_LE(executor.maximum_active.load(std::memory_order_relaxed), 2U);
+        if (strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch || rows == 0) {
+          EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        } else if (rows >= 65) {
+          EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        }
+        for (std::size_t row = 0; row < rows; ++row) {
+          if (strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+            EXPECT_NEAR(actual[row + 1], expected[row], 1e-5) << row;
+          } else {
+            EXPECT_FLOAT_EQ(actual[row + 1], static_cast<float>(expected[row])) << row;
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(TreeEnsembleOracle, SingleRowBalancedFloatKeepsBaseInsideTreeReduction) {
   auto attributes = StumpForest(2, 1);
   attributes.base_values = {16777216.0};

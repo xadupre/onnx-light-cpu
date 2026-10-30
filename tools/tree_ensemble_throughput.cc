@@ -104,25 +104,37 @@ struct ThreadExecutor {
   bool stopping = false;
 };
 
-ml_cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees) {
+ml_cpu_compute::TreeEnsembleAttributes MakeForest(std::size_t trees, std::size_t features = 1,
+                                                  std::size_t depth = 1) {
   ml_cpu_compute::TreeEnsembleAttributes attributes;
-  attributes.n_features = 1;
+  attributes.n_features = static_cast<std::int64_t>(features);
   attributes.n_targets = 1;
+  attributes.value_type = ml_cpu_compute::DataType::FLOAT;
   attributes.base_values = {0.5};
+  const std::size_t internal_nodes = (1U << depth) - 1;
+  const std::size_t leaves = 1U << depth;
   for (std::size_t tree = 0; tree < trees; ++tree) {
-    const std::int64_t leaf = static_cast<std::int64_t>(2 * tree);
-    attributes.tree_roots.push_back(static_cast<std::int64_t>(tree));
-    attributes.nodes_featureids.push_back(0);
-    attributes.nodes_splits.push_back(0.0);
-    attributes.nodes_modes.push_back(ml_cpu_compute::TreeBranchMode::kLeq);
-    attributes.nodes_truenodeids.push_back(leaf);
-    attributes.nodes_falsenodeids.push_back(leaf + 1);
-    attributes.nodes_trueleafs.push_back(1);
-    attributes.nodes_falseleafs.push_back(1);
-    attributes.leaf_targetids.push_back(0);
-    attributes.leaf_targetids.push_back(0);
-    attributes.leaf_weights.push_back(0.25);
-    attributes.leaf_weights.push_back(-0.25);
+    attributes.tree_roots.push_back(static_cast<std::int64_t>(tree * internal_nodes));
+    for (std::size_t node = 0; node < internal_nodes; ++node) {
+      attributes.nodes_featureids.push_back(static_cast<std::int64_t>((tree + node) % features));
+      attributes.nodes_splits.push_back(static_cast<double>(static_cast<int>(node % 7) - 3) * 0.25);
+      attributes.nodes_modes.push_back(ml_cpu_compute::TreeBranchMode::kLeq);
+      for (bool true_branch : {true, false}) {
+        const std::size_t child = 2 * node + (true_branch ? 1 : 2);
+        const bool leaf = child >= internal_nodes;
+        (true_branch ? attributes.nodes_truenodeids : attributes.nodes_falsenodeids)
+            .push_back(static_cast<std::int64_t>(leaf ? tree * leaves + child - internal_nodes
+                                                      : tree * internal_nodes + child));
+        (true_branch ? attributes.nodes_trueleafs : attributes.nodes_falseleafs)
+            .push_back(leaf ? 1 : 0);
+      }
+    }
+    for (std::size_t leaf = 0; leaf < leaves; ++leaf) {
+      attributes.leaf_targetids.push_back(0);
+      attributes.leaf_weights.push_back(
+          static_cast<double>(static_cast<int>((leaf + tree) % 11) - 5) /
+          (static_cast<double>(trees) * 8.0));
+    }
   }
   return attributes;
 }
@@ -142,11 +154,13 @@ std::string_view StrategyName(ml_cpu_compute::TreeEnsembleExecutionStrategy stra
 }
 
 void Measure(std::string_view scenario, std::string_view configuration, std::size_t trees,
-             std::size_t rows, std::size_t threads) {
-  const ml_cpu_compute::TreeEnsemblePlan plan(MakeForest(trees));
-  std::vector<double> input(rows);
-  for (std::size_t row = 0; row < rows; ++row) {
-    input[row] = (row % 2 == 0) ? -1.0 : 1.0;
+             std::size_t rows, std::size_t threads, std::size_t features = 1,
+             std::size_t depth = 1) {
+  const ml_cpu_compute::TreeEnsemblePlan plan(MakeForest(trees, features, depth));
+  std::vector<float> input(rows * features);
+  std::vector<float> output(rows);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.25F;
   }
   ThreadExecutor executor(threads);
   ml_cpu_compute::ExecutionExecutorView view{&executor, static_cast<std::int64_t>(threads),
@@ -154,14 +168,14 @@ void Measure(std::string_view scenario, std::string_view configuration, std::siz
   ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const auto decision = plan.SelectExecution(rows);
   for (int iteration = 0; iteration < 3; ++iteration) {
-    (void)plan.Evaluate(input, rows);
+    plan.EvaluateInto(input.data(), input.size(), rows, output.data());
   }
   std::vector<double> samples;
   samples.reserve(11);
   double checksum = 0.0;
   for (int iteration = 0; iteration < 11; ++iteration) {
     const auto begin = std::chrono::steady_clock::now();
-    const std::vector<double> output = plan.Evaluate(input, rows);
+    plan.EvaluateInto(input.data(), input.size(), rows, output.data());
     const auto end = std::chrono::steady_clock::now();
     samples.push_back(std::chrono::duration<double, std::micro>(end - begin).count());
     checksum += output[static_cast<std::size_t>(iteration) % output.size()];
@@ -187,6 +201,10 @@ int main() {
     Measure("single_row_large_forest", configuration, 1024, 1, threads);
     Measure("large_batch_large_forest", configuration, 81, 4096, threads);
     Measure("large_batch_small_forest", configuration, 3, 4096, threads);
+    Measure("balanced_medium", configuration, 1000, 32, threads, 1024, 4);
+    Measure("balanced_large_single_row", configuration, 10000, 1, threads, 4096, 4);
+    Measure("balanced_large_batch", configuration, 10000, 128, threads, 4096, 4);
+    Measure("balanced_large_batch_tail", configuration, 10000, 129, threads, 4097, 4);
   }
   return 0;
 }

@@ -1479,6 +1479,31 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
           values[row - value_row_offset] += leaf_weights_float_[node];
         }
       };
+      const bool cache_blocked = features >= 1024 && tree_roots_.size() >= 1024 &&
+                                 max_depth_ == 4 && rows >= kInterleavedRows &&
+                                 decision.participants > 1;
+      const auto accumulate_trees = [&](std::size_t tree_begin, std::size_t tree_end,
+                                        std::size_t row_begin, std::size_t row_end, float *values,
+                                        std::size_t value_row_offset = 0) {
+        if (!cache_blocked) {
+          for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+            accumulate_tree(tree, row_begin, row_end, values, value_row_offset);
+          }
+          return;
+        }
+        // Reuse a small tree tile across row groups without cycling through
+        // the same cache sets in every wide input row at once.
+        constexpr std::size_t kTreeBlock = 64;
+        for (std::size_t tree_block = tree_begin; tree_block < tree_end; tree_block += kTreeBlock) {
+          const std::size_t block_end = std::min(tree_end, tree_block + kTreeBlock);
+          for (std::size_t row = row_begin; row < row_end; row += kInterleavedRows) {
+            for (std::size_t tree = tree_block; tree < block_end; ++tree) {
+              accumulate_tree(tree, row, std::min(row_end, row + kInterleavedRows), values,
+                              value_row_offset);
+            }
+          }
+        }
+      };
 #if defined(ML_CPU_COMPUTE_HAVE_AVX2_FMA) || defined(ML_CPU_COMPUTE_HAVE_AVX512)
       static const SimdLevel simd_level = DetectSimdLevel();
       const bool simd_indices_fit =
@@ -1511,7 +1536,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
       }
       if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
-        if (simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
+        if (!cache_blocked && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
           constexpr std::int64_t lanes = 16;
           const std::int64_t lane_blocks = (static_cast<std::int64_t>(rows) + lanes - 1) / lanes;
           const std::int64_t row_participants = static_cast<std::int64_t>(
@@ -1534,7 +1559,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         }
 #endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
-        if (simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
+        if (!cache_blocked && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
           constexpr std::int64_t lanes = 8;
           const std::int64_t lane_blocks = (static_cast<std::int64_t>(rows) + lanes - 1) / lanes;
           const std::int64_t row_participants = static_cast<std::int64_t>(
@@ -1562,17 +1587,15 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                         const std::size_t row_begin = static_cast<std::size_t>(begin);
                         const std::size_t row_end = static_cast<std::size_t>(end);
                         std::fill(output_data + row_begin, output_data + row_end, base);
-                        for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
-                          accumulate_tree(tree, row_begin, row_end, output_data);
-                        }
+                        accumulate_trees(0, tree_roots_.size(), row_begin, row_end, output_data);
                       });
         return;
       }
       const std::size_t batch_rows = std::max<std::size_t>(decision.batch_rows, 1);
       std::size_t partial_stride = batch_rows;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
-      const bool vector_tree_partitions = simd_level == SimdLevel::kAVX512 && simd_indices_fit &&
-                                          batch_rows >= 16 && participants > 1;
+      const bool vector_tree_partitions = !cache_blocked && simd_level == SimdLevel::kAVX512 &&
+                                          simd_indices_fit && batch_rows >= 16 && participants > 1;
       if (vector_tree_partitions) {
         // Keep adjacent workers' outputs off the same cache line, even when
         // the allocation itself is not cache-line aligned.
@@ -1619,9 +1642,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                   continue;
                 }
 #endif
-                for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
-                  accumulate_tree(tree, batch, batch + active_rows, participant_values, batch);
-                }
+                accumulate_trees(tree_begin, tree_end, batch, batch + active_rows,
+                                 participant_values, batch);
               }
             });
         for (std::size_t row = 0; row < active_rows; ++row) {
