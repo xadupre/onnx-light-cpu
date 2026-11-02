@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.4] – Unreleased
+
+### Documentation & CI
+
+- Updated CI and release builds to onnx-light 0.2.4.1 and bumped the project version to 0.2.4 ([#1076](https://github.com/xadupre/onnx-light-cpu/issues/1076)).
+
 ## [0.2.3] – Unreleased
 
 ### New Features
