@@ -1852,13 +1852,35 @@ bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
 
 namespace detail {
 
+namespace {
+
+std::size_t WideWeightElementCount(std::size_t n, std::size_t k, const float *b) {
+  if (n % 16 != 0) {
+    throw std::invalid_argument("PackGemmWideB: N must be a multiple of 16.");
+  }
+  const std::size_t elements = CheckedMultiply(n, k, "PackGemmWideB", "weight elements");
+  CheckedByteSize(elements, sizeof(float), "PackGemmWideB", "weight storage");
+  if (elements != 0 && b == nullptr) {
+    throw std::invalid_argument("PackGemmWideB: nonempty source must not be null.");
+  }
+  return elements;
+}
+
+} // namespace
+
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
-  std::vector<float> packed(n * k);
+  std::vector<float> packed(WideWeightElementCount(n, k, b));
   PackGemmWideB(n, k, b, packed.data());
   return packed;
 }
 
 void PackGemmWideB(std::size_t n, std::size_t k, const float *b, float *packed) {
+  if (WideWeightElementCount(n, k, b) == 0) {
+    return;
+  }
+  if (packed == nullptr) {
+    throw std::invalid_argument("PackGemmWideB: nonempty destination must not be null.");
+  }
   constexpr std::size_t width = 16;
   for (std::size_t col = 0; col < n; col += width) {
     float *panel = packed + col * k;

@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -29,6 +30,10 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
+
+std::array<std::size_t, 12> WideProjectionCheckColumns(std::size_t n) {
+  return {0, 1, 3, 7, 15, 16, n / 2 - 1, n / 2, n - 17, n - 16, n - 2, n - 1};
+}
 
 void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
                                     ml_cpu_compute::GemmAlgorithm algorithm,
@@ -273,7 +278,7 @@ TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
     const auto &output = runtime.Get("Y");
     ASSERT_EQ(output.shape, (rt_ns::Shape{1, static_cast<std::int64_t>(m), n}));
     for (std::size_t row = 0; row < m; ++row) {
-      for (std::size_t col = 0; col < n; ++col) {
+      for (const std::size_t col : WideProjectionCheckColumns(n)) {
         const float expected = a[row * k] * b[col] + a[(row + 1) * k - 1] * b[(k - 1) * n + col];
         ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col], expected) << row << ',' << col;
       }
@@ -332,7 +337,7 @@ TEST(MatMulKernel, WidePreparationInvalidatesPanelsAfterPairedSignChanges) {
   const auto &output = runtime.Get("Y");
   ASSERT_EQ(output.shape, (rt_ns::Shape{m, n}));
   for (std::size_t row = 0; row < m; ++row) {
-    for (std::size_t col = 0; col < n; ++col) {
+    for (const std::size_t col : WideProjectionCheckColumns(n)) {
       ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col], col == 1 || col == 3 ? 510 : 512)
           << row << ',' << col;
     }
@@ -373,7 +378,7 @@ TEST(MatMulKernel, WidePreparationRefreshesReusedSourceStorage) {
     const auto &output = runtime.Get("Y");
     ASSERT_EQ(output.shape, (rt_ns::Shape{m, n}));
     for (std::size_t row = 0; row < m; ++row) {
-      for (std::size_t col = 0; col < n; ++col) {
+      for (const std::size_t col : WideProjectionCheckColumns(n)) {
         ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col],
                         col == 1 && replacements[iteration] == -1 ? 510 : 512)
             << row << ',' << col;

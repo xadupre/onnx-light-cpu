@@ -187,7 +187,7 @@ constexpr GemmCase kCases[] = {
     {"trans_b_128", 128, 128, 128, false, true, false},
     {"transformer_proj", 128, 3072, 768, false, false, true},
     {"qwen_lm_head", 128, 32000, 512, false, false, true},
-    {"qwen_lm_head_dynamic", 128, 32000, 512},
+    {"qwen_lm_head_dynamic", 128, 32000, 512, false, false, false},
     {"qwen_lm_head_tail", 128, 32016, 512, false, false, true},
     {"qwen_qkv", 128, 1024, 512, false, false, true},
     {"qwen_attention_out", 128, 512, 512, false, false, true},

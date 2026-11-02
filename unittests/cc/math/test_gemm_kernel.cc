@@ -34,6 +34,7 @@
 #include <limits>
 #include <new>
 #include <random>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -115,6 +116,35 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-3f) << "i=" << i;
   }
+}
+
+TEST(GemmFloat32, WidePackingRejectsInvalidInputsBeforeAccessingBuffers) {
+  const float source = 1;
+  float destination = -1;
+  for (std::size_t n : {1U, 15U, 17U, 31U}) {
+    EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(n, 1, &source), std::invalid_argument);
+    EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(n, 1, &source, &destination),
+                 std::invalid_argument);
+  }
+  for (std::size_t k :
+       {std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max() / 16}) {
+    EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(16, k, &source), std::invalid_argument);
+    EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(16, k, &source, &destination),
+                 std::invalid_argument);
+  }
+  EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(16, 1, nullptr), std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(16, 1, nullptr, &destination),
+               std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::detail::PackGemmWideB(16, 1, &source, nullptr),
+               std::invalid_argument);
+  EXPECT_FLOAT_EQ(destination, -1);
+}
+
+TEST(GemmFloat32, WidePackingAllowsEmptyMatricesWithoutBuffers) {
+  EXPECT_TRUE(ml_cpu_compute::detail::PackGemmWideB(0, 512, nullptr).empty());
+  EXPECT_TRUE(ml_cpu_compute::detail::PackGemmWideB(16, 0, nullptr).empty());
+  EXPECT_NO_THROW(ml_cpu_compute::detail::PackGemmWideB(0, 512, nullptr, nullptr));
+  EXPECT_NO_THROW(ml_cpu_compute::detail::PackGemmWideB(16, 0, nullptr, nullptr));
 }
 
 TEST(GemmFloat32, PreparedWidePanelsMatchReferenceWithRowTailsAndBiasAliasing) {

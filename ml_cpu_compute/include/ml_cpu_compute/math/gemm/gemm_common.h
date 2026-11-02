@@ -77,6 +77,8 @@ std::size_t SelectGemmRegisterRows(SimdLevel level, bool has_fma);
 
 /// Constant-B FP32 projection: N must be a multiple of 16. Panels have K rows
 /// of 16 contiguous columns and use the runtime-selected SIMD micro-tile.
+/// Packing rejects misaligned N, overflowing sizes, and null nonempty buffers
+/// with std::invalid_argument. Empty matrices do not access either buffer.
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b);
 void PackGemmWideB(std::size_t n, std::size_t k, const float *b, float *packed);
 void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,

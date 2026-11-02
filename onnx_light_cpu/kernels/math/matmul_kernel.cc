@@ -59,6 +59,7 @@ bool CanPrepareWideWeights(const Tensor &b) {
 }
 
 std::string PreparedWeightsKey(const std::string &name, const Tensor &b) {
+  // Pointer/shape identity cannot detect replacement of borrowed storage during preparation.
   std::uint64_t digest = 14695981039346656037ULL;
   for (std::size_t index = 0; index < b.size_bytes(); ++index) {
     digest = (digest ^ b.bytes()[index]) * 1099511628211ULL;
@@ -210,6 +211,7 @@ void MatMulKernel::DeclarePreparations(const std::unordered_set<std::string> &im
   rt_ns::KernelPreparation preparation;
   preparation.info.source_inputs = {name};
   preparation.info.representation = "MatMul:fp32-panel16-v1";
+  // Logical output declared without payloads; concrete ValueStore keys add shape and content.
   preparation.info.output_slots = {preparation.info.representation + ":" +
                                    std::to_string(name.size()) + ":" + name};
   preparation.estimate_memory = [name](const RuntimeContext &rt) {
