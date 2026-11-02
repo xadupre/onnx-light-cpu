@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -334,6 +336,93 @@ TEST(MatMulKernel, WidePreparationInvalidatesPanelsAfterPairedSignChanges) {
       ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col], col == 1 || col == 3 ? 510 : 512)
           << row << ',' << col;
     }
+  }
+}
+
+TEST(MatMulKernel, WidePreparationRefreshesReusedSourceStorage) {
+  constexpr std::size_t m = 16, k = 512, n = 32000;
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  std::vector<rt_ns::KernelPreparation> preparations;
+  kernel.DeclarePreparations({"B"}, preparations);
+  if (preparations.empty()) {
+    GTEST_SKIP() << "Wide weight preparation requires AVX2 or newer.";
+  }
+
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  runtime.Set("A", rt_ns::Tensor::FromFloat("A", {m, k}, std::vector<float>(m * k, 1)));
+  std::vector<float> b(k * n, 1);
+  const std::size_t bytes = b.size() * sizeof(float);
+  const float replacements[] = {1, -1, -1, 1};
+  for (std::size_t iteration = 0; iteration < std::size(replacements); ++iteration) {
+    SCOPED_TRACE(iteration);
+    b[1] = replacements[iteration];
+    runtime.Put("B",
+                rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT), {k, n},
+                                      reinterpret_cast<const std::uint8_t *>(b.data()), bytes));
+    EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, iteration < 2 ? bytes : 0U);
+    preparations[0].execute(runtime);
+    EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, 0U);
+    EXPECT_EQ(runtime.value_store().prepared_bytes(), (iteration == 0 ? 1 : 2) * bytes);
+    kernel.Run(runtime);
+    const auto &output = runtime.Get("Y");
+    ASSERT_EQ(output.shape, (rt_ns::Shape{m, n}));
+    for (std::size_t row = 0; row < m; ++row) {
+      for (std::size_t col = 0; col < n; ++col) {
+        ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col],
+                        col == 1 && replacements[iteration] == -1 ? 510 : 512)
+            << row << ',' << col;
+      }
+    }
+  }
+}
+
+TEST(MatMulKernel, PreparedWeightsRejectRecreatedStoreAtSameAddress) {
+  constexpr std::size_t m = 16, k = 512, n = 32000;
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  std::vector<rt_ns::KernelPreparation> preparations;
+  kernel.DeclarePreparations({"B"}, preparations);
+  if (preparations.empty()) {
+    GTEST_SKIP() << "Wide weight preparation requires AVX2 or newer.";
+  }
+
+  const std::vector<float> b(k * n, 1);
+  alignas(rt_ns::ValueStore) std::byte storage[sizeof(rt_ns::ValueStore)];
+  std::weak_ptr<rt_ns::ValueStore> previous_store;
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    SCOPED_TRACE(iteration);
+    rt_ns::RuntimeContext runtime(MakeCtx());
+    runtime.SetValueStore(std::shared_ptr<rt_ns::ValueStore>(
+        std::construct_at(reinterpret_cast<rt_ns::ValueStore *>(storage)),
+        [](rt_ns::ValueStore *store) { std::destroy_at(store); }));
+    runtime.Set("A", rt_ns::Tensor::FromFloat("A", {m, k}, std::vector<float>(m * k, 1)));
+    runtime.Set("B", rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT), {k, n},
+                                           reinterpret_cast<const std::uint8_t *>(b.data()),
+                                           b.size() * sizeof(float)));
+    if (iteration == 0) {
+      previous_store = runtime.value_store_owner();
+    } else {
+      EXPECT_TRUE(previous_store.expired());
+      ASSERT_NO_THROW(kernel.Run(runtime));
+      EXPECT_EQ(runtime.value_store().prepared_bytes(), 0U);
+      EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[1], 512);
+    }
+    EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, b.size() * sizeof(float));
+    preparations[0].execute(runtime);
+    EXPECT_EQ(runtime.value_store().prepared_bytes(), b.size() * sizeof(float));
+    ASSERT_NO_THROW(kernel.Run(runtime));
+    EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[1], 512);
   }
 }
 

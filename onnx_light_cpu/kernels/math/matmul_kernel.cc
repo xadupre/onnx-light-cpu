@@ -142,12 +142,16 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
 
 struct MatMulKernel::PreparedWeights {
   rt_ns::ValueStore::Slot slot;
-  const rt_ns::ValueStore *store;
+  std::weak_ptr<const rt_ns::ValueStore> store;
   const std::uint8_t *source;
   Shape shape;
 
+  bool MatchesStore(const RuntimeContext &rt) const {
+    return store.lock().get() == &rt.value_store();
+  }
+
   bool Matches(const Tensor &b, const RuntimeContext &rt) const {
-    return store == &rt.value_store() && source == b.bytes() && shape == b.shape;
+    return MatchesStore(rt) && source == b.bytes() && shape == b.shape;
   }
 };
 
@@ -208,11 +212,10 @@ void MatMulKernel::DeclarePreparations(const std::unordered_set<std::string> &im
   preparation.info.representation = "MatMul:fp32-panel16-v1";
   preparation.info.output_slots = {preparation.info.representation + ":" +
                                    std::to_string(name.size()) + ":" + name};
-  preparation.estimate_memory = [this, name](const RuntimeContext &rt) {
+  preparation.estimate_memory = [name](const RuntimeContext &rt) {
     const Tensor &b = rt.Get(name);
     std::size_t prepared_bytes = 0;
-    if (CanPrepareWideWeights(b) &&
-        !(prepared_weights_ != nullptr && prepared_weights_->Matches(b, rt))) {
+    if (CanPrepareWideWeights(b)) {
       const auto slot = rt.value_store().Find(PreparedWeightsKey(name, b));
       if (!slot || !rt.value_store().IsReady(*slot)) {
         prepared_bytes = b.size_bytes();
@@ -226,9 +229,6 @@ void MatMulKernel::DeclarePreparations(const std::unordered_set<std::string> &im
       prepared_weights_.reset();
       return;
     }
-    if (prepared_weights_ != nullptr && prepared_weights_->Matches(b, rt)) {
-      return;
-    }
     auto &store = rt.value_store();
     const auto slot = store.Bind(PreparedWeightsKey(name, b));
     if (!store.IsReady(slot)) {
@@ -239,8 +239,8 @@ void MatMulKernel::DeclarePreparations(const std::unordered_set<std::string> &im
                                             reinterpret_cast<float *>(packed.mutable_bytes()));
       store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
     }
-    prepared_weights_ =
-        std::make_unique<PreparedWeights>(PreparedWeights{slot, &store, b.bytes(), b.shape});
+    prepared_weights_ = std::make_unique<PreparedWeights>(
+        PreparedWeights{slot, rt.value_store_owner(), b.bytes(), b.shape});
   };
   preparations.push_back(std::move(preparation));
 }
