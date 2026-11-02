@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def test_project_version_consistency():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
-    assert version == "0.2.3"
+    assert version == "0.2.4"
 
     for path, pattern in (
         ("setup.py", r'version="([^"]+)"'),
@@ -48,7 +48,7 @@ def test_changelog_release_sections():
     sections = dict(
         re.findall(r"^## \[(\d+\.\d+\.\d+(?:\.\d+)?)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
     )
-    assert "Unreleased" in sections["0.2.3"]
+    assert "Unreleased" in sections["0.2.4"]
     for number in (
         893,
         915,
@@ -82,9 +82,9 @@ def test_changelog_release_sections():
     ):
         assert (
             f"[#{number}](https://github.com/xadupre/onnx-light-cpu/pull/{number})"
-            in sections["0.2.3"]
+            in sections["0.2.4"]
         ), number
-    assert "pinned CI and release builds to 0.1.32" not in sections["0.2.3"]
+    assert "pinned CI and release builds to 0.1.32" not in sections["0.2.4"]
     assert "2026-10-05" in sections["0.1.20"]
     assert all(f"#{number}" in sections["0.1.20"] for number in (853, 859, 860))
     assert "2026-10-05" in sections["0.1.19"]
