@@ -32,6 +32,19 @@ pip install onnx-light-cpu
 
 To build the current development version, use the source instructions below.
 
+### Recover missing macOS release wheels
+
+Maintainers can run **Build Release Wheels** from the Actions tab with
+`tag=0.2.4` and `macos_only=true` to attach the missing wheels to the existing
+release without rebuilding Linux or Windows. Select the workflow branch containing
+this recovery option; the `tag` input selects the source to build.
+
+The macOS job builds universal2 wheels for CPython 3.12, 3.13, and 3.14.
+Before uploading, cibuildwheel installs each repaired wheel alongside
+**onnx-light 0.2.4.1**, runs the native session-registration inference smoke test,
+and calls `register_kernels()` on the macOS ARM64 runner. Recovery is complete
+only after this job succeeds and the three macOS wheels appear in the release assets.
+
 ## Build from source
 
 ### Prerequisites
