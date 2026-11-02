@@ -1853,21 +1853,26 @@ bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
 namespace detail {
 
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
-  constexpr std::size_t width = 16;
   std::vector<float> packed(n * k);
+  PackGemmWideB(n, k, b, packed.data());
+  return packed;
+}
+
+void PackGemmWideB(std::size_t n, std::size_t k, const float *b, float *packed) {
+  constexpr std::size_t width = 16;
   for (std::size_t col = 0; col < n; col += width) {
-    float *panel = packed.data() + col * k;
+    float *panel = packed + col * k;
     for (std::size_t depth = 0; depth < k; ++depth) {
       std::copy_n(b + depth * n + col, width, panel + depth * width);
     }
   }
-  return packed;
 }
 
 void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
                        const float *packed_b, float beta, const float *c, float *y,
                        std::size_t mr) {
   constexpr std::size_t width = 16;
+  static const GemmImplementation kind = SelectGemmImplementation<float>();
   const GemmAccumMode mode =
       c != nullptr && beta != 0.0f ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
   ExecuteRanges(static_cast<std::int64_t>(n / width),
@@ -1879,9 +1884,9 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
                     const float *b = packed_b + col * k;
                     for (std::size_t row = 0; row < m; row += mr) {
                       const std::size_t rows = std::min(mr, m - row);
-                      GemmTileF32(GemmImplementation::kAVX2FMA, rows, width, k, alpha, beta, b,
-                                  width, c == nullptr ? nullptr : c + row * n + col, n,
-                                  y + row * n + col, n, 0, mode, a + row * k);
+                      GemmTileF32(kind, rows, width, k, alpha, beta, b, width,
+                                  c == nullptr ? nullptr : c + row * n + col, n, y + row * n + col,
+                                  n, 0, mode, a + row * k);
                     }
                   }
                 });

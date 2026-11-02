@@ -117,6 +117,41 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
   }
 }
 
+TEST(GemmFloat32, PreparedWidePanelsMatchReferenceWithRowTailsAndBiasAliasing) {
+  constexpr std::size_t m = 19, n = 48, k = 23;
+  const auto a = RandomVector(m * k, 21);
+  const auto b = RandomVector(k * n, 22);
+  const auto bias = RandomVector(m * n, 23);
+  const auto expected = ReferenceGemm(false, false, m, n, k, 0.75f, a, b, 0.5f, &bias);
+  std::vector<float> packed(b.size());
+  ml_cpu_compute::detail::PackGemmWideB(n, k, b.data(), packed.data());
+  EXPECT_EQ(packed, ml_cpu_compute::detail::PackGemmWideB(n, k, b.data()));
+  std::vector<float> output = bias;
+  ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 0.75f, a.data(), packed.data(), 0.5f,
+                                            output.data(), output.data(), 6);
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    EXPECT_NEAR(output[index], expected[index], 1e-4f) << index;
+  }
+
+  auto special_b = b;
+  special_b[0] = std::numeric_limits<float>::infinity();
+  special_b[1] = std::numeric_limits<float>::quiet_NaN();
+  const auto special_expected =
+      ReferenceGemm(false, false, m, n, k, 0.75f, a, special_b, 0.5f, &bias);
+  ml_cpu_compute::detail::PackGemmWideB(n, k, special_b.data(), packed.data());
+  ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 0.75f, a.data(), packed.data(), 0.5f,
+                                            bias.data(), output.data(), 6);
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    if (std::isnan(special_expected[index])) {
+      EXPECT_TRUE(std::isnan(output[index])) << index;
+    } else if (std::isinf(special_expected[index])) {
+      EXPECT_EQ(output[index], special_expected[index]) << index;
+    } else {
+      EXPECT_NEAR(output[index], special_expected[index], 1e-4f) << index;
+    }
+  }
+}
+
 TEST(GemmFloat32, TypedEpilogueCombinesBroadcastResidualAndRelu) {
   const std::size_t M = 2, N = 3, K = 2;
   const std::vector<float> A = {1, -2, -3, 4};

@@ -534,7 +534,7 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
   if constexpr (std::is_same_v<T, float>) {
     prepared_wide_b_ = has_constant_b_ && algorithm_ == GemmAlgorithm::kGeneral && !trans_a_ &&
                        !trans_b_ && m_ == 128 && n_ >= 32000 && n_ % 16 == 0 && k_ == 512 &&
-                       EffectiveGemmSimdLevel() == SimdLevel::kAVX2;
+                       EffectiveGemmSimdLevel() >= SimdLevel::kAVX2;
     if (prepared_wide_b_) {
       constant_b_ = detail::PackGemmWideB(n_, k_, options.constant_b.data());
     }

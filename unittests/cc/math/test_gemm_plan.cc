@@ -174,7 +174,7 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
   const ml_cpu_compute::GemmPlan<float> prepared(options);
   EXPECT_EQ(prepared.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
   EXPECT_EQ(prepared.has_prepared_b(),
-            ml_cpu_compute::EffectiveGemmSimdLevel() == ml_cpu_compute::SimdLevel::kAVX2);
+            ml_cpu_compute::EffectiveGemmSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2);
   EXPECT_FALSE(dynamic.has_prepared_b());
   std::vector<float> expected(m * n), actual(m * n);
   dynamic.Execute(a.data(), b.data(), bias.data(), expected.data());

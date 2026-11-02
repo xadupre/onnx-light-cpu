@@ -1,4 +1,5 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "unittests/cc/heap_allocation_tracker.h"
@@ -6,14 +7,19 @@
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/value_store.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
+#include "onnx_core/runtime/runtime_session.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -181,6 +187,191 @@ TEST(MatMulKernel, RuntimeCacheReusesShapesAndInvalidatesOnShapeChange) {
   kernel.Run(changed_shape_runtime);
   EXPECT_EQ(changed_shape_runtime.Get("Y").shape, (rt_ns::Shape{1, 1}));
   EXPECT_FLOAT_EQ(changed_shape_runtime.Get("Y").AsFloat()[0], 23.0f);
+}
+
+struct AllocationCheckingExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t maximum_blocks = 0;
+  std::size_t worker_allocation = 0;
+
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
+    auto &self = *static_cast<AllocationCheckingExecutor *>(context);
+    ++self.dispatches;
+    self.maximum_blocks = std::max(self.maximum_blocks, blocks);
+    self.worker_allocation = std::max(self.worker_allocation, PeakAllocationBytes([&] {
+                                        for (std::int64_t block = 0; block < blocks; ++block) {
+                                          task(task_context, block);
+                                        }
+                                      }));
+  }
+};
+
+TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
+  constexpr std::size_t k = 512, n = 32016;
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel first(MakeCtx()), second(MakeCtx());
+  first.set_node(node);
+  second.set_node(node);
+  std::vector<rt_ns::KernelPreparation> preparations;
+  first.DeclarePreparations({}, preparations);
+  EXPECT_TRUE(preparations.empty());
+  const bool available =
+      ml_cpu_compute::EffectiveGemmSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2;
+  first.DeclarePreparations({"B"}, preparations);
+  second.DeclarePreparations({"B"}, preparations);
+  ASSERT_EQ(preparations.size(), available ? 2U : 0U);
+  if (!available) {
+    return;
+  }
+
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  std::vector<float> b(k * n);
+  for (std::size_t col = 0; col < n; ++col) {
+    b[col] = static_cast<float>(col % 7) / 8;
+    b[(k - 1) * n + col] = static_cast<float>(col % 11) / 16;
+  }
+  runtime.Set("B", rt_ns::Tensor::FromFloat("B", {k, n}, b));
+  const auto memory = preparations[0].estimate_memory(runtime);
+  EXPECT_EQ(memory.source_bytes, b.size() * sizeof(float));
+  EXPECT_EQ(memory.temporary_bytes, 0U);
+  EXPECT_EQ(memory.prepared_bytes, b.size() * sizeof(float));
+  EXPECT_EQ(runtime.value_store().prepared_bytes(), 0U);
+  EXPECT_EQ(preparations[0].info.output_slots, preparations[1].info.output_slots);
+  preparations[0].execute(runtime);
+  EXPECT_EQ(preparations[1].estimate_memory(runtime).prepared_bytes, 0U);
+  preparations[1].execute(runtime);
+  EXPECT_EQ(runtime.value_store().prepared_bytes(), memory.prepared_bytes);
+  EXPECT_EQ(runtime.value_store().slot_count(), 1U);
+
+  for (std::size_t m : {0U, 1U, 17U, 128U, 129U}) {
+    SCOPED_TRACE(m);
+    std::vector<float> a(m * k, 0.25f);
+    for (std::size_t row = 0; row < m; ++row) {
+      a[row * k] = static_cast<float>(row % 13) / 4;
+      a[(row + 1) * k - 1] = static_cast<float>(row % 5) / 2;
+    }
+    runtime.Put("A", rt_ns::Tensor::FromFloat("A", {1, static_cast<std::int64_t>(m), k}, a));
+    if (m >= 16) {
+      AllocationCheckingExecutor executor;
+      ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &AllocationCheckingExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
+      second.Run(runtime);
+      EXPECT_EQ(executor.dispatches, 1);
+      EXPECT_GT(executor.maximum_blocks, 1);
+      EXPECT_LE(executor.maximum_blocks, 4);
+      EXPECT_EQ(executor.worker_allocation, 0U);
+    } else {
+      second.Run(runtime);
+    }
+    const auto &output = runtime.Get("Y");
+    ASSERT_EQ(output.shape, (rt_ns::Shape{1, static_cast<std::int64_t>(m), n}));
+    for (std::size_t row = 0; row < m; ++row) {
+      for (std::size_t col = 0; col < n; ++col) {
+        const float expected = a[row * k] * b[col] + a[(row + 1) * k - 1] * b[(k - 1) * n + col];
+        ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col], expected) << row << ',' << col;
+      }
+    }
+    EXPECT_EQ(runtime.value_store().prepared_bytes(), memory.prepared_bytes);
+  }
+
+  b[0] = 2.0f;
+  runtime.Put("B", rt_ns::Tensor::FromFloat("B", {k, n}, b));
+  EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, memory.prepared_bytes);
+  preparations[0].execute(runtime);
+  EXPECT_EQ(runtime.value_store().slot_count(), 2U);
+  EXPECT_EQ(runtime.value_store().prepared_bytes(), 2 * memory.prepared_bytes);
+  EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, 0U);
+
+  rt_ns::RuntimeContext independent(MakeCtx());
+  independent.Set("A", rt_ns::Tensor::FromFloat("A", {16, k}, std::vector<float>(16 * k, 1)));
+  independent.Set("B", rt_ns::Tensor::FromFloat("B", {k, n}, std::vector<float>(k * n, 0)));
+  first.Run(independent);
+  for (std::size_t index = 0; index < 16 * n; ++index) {
+    ASSERT_FLOAT_EQ(independent.Get("Y").AsFloat()[index], 0);
+  }
+  EXPECT_EQ(independent.value_store().prepared_bytes(), 0U);
+}
+
+TEST(MatMulKernel, WidePreparationRejectsTruncatedStorageAndSkipsUnsupportedWeights) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  std::vector<rt_ns::KernelPreparation> preparations;
+  kernel.DeclarePreparations({"B"}, preparations);
+  if (preparations.empty()) {
+    return;
+  }
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  const std::uint8_t value = 0;
+  for (const rt_ns::Shape shape : {rt_ns::Shape{511, 32000}, rt_ns::Shape{512, 31984},
+                                   rt_ns::Shape{512, 32001}, rt_ns::Shape{1, 512, 32000}}) {
+    runtime.Put("B", rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT), shape,
+                                           &value, sizeof(value)));
+    EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, 0U);
+    preparations[0].execute(runtime);
+    EXPECT_EQ(runtime.value_store().prepared_bytes(), 0U);
+  }
+  runtime.Put("B", rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT16),
+                                         {512, 32000}, &value, sizeof(value)));
+  EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, 0U);
+  preparations[0].execute(runtime);
+  runtime.Put("B", rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT),
+                                         {512, 32000}, &value, sizeof(value)));
+  EXPECT_THROW(preparations[0].estimate_memory(runtime), std::invalid_argument);
+  EXPECT_THROW(preparations[0].execute(runtime), std::invalid_argument);
+  runtime.Put("B", rt_ns::Tensor::Borrow("B", static_cast<int>(rt_ns::DataType::FLOAT),
+                                         {512, std::numeric_limits<std::int64_t>::max() - 15},
+                                         &value, sizeof(value)));
+  EXPECT_THROW(preparations[0].estimate_memory(runtime), std::invalid_argument);
+  EXPECT_EQ(runtime.value_store().prepared_bytes(), 0U);
+}
+
+TEST(MatMulKernel, RuntimeSessionPreparesWideInitializersBeforeInference) {
+  constexpr std::int64_t k = 512, n = 32000;
+  ONNX_LIGHT_NAMESPACE::ModelProto model;
+  model.add_opset_import()->set_version(18);
+  auto *graph = model.mutable_graph();
+  auto *input = graph->add_input();
+  input->set_name("A");
+  input->mutable_type()->mutable_tensor_type()->set_elem_type(rt_ns::DataType::FLOAT);
+  graph->add_output()->set_name("Y");
+  auto *node = graph->add_node();
+  node->set_op_type("MatMul");
+  node->add_input("A");
+  node->add_input("B");
+  node->add_output("Y");
+  auto *weights = graph->add_initializer();
+  weights->set_name("B");
+  weights->set_data_type(rt_ns::DataType::FLOAT);
+  weights->add_dims(k);
+  weights->add_dims(n);
+  const std::vector<float> b(k * n, 0.25f);
+  weights->set_raw_data(
+      std::string(reinterpret_cast<const char *>(b.data()), b.size() * sizeof(float)));
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", "MatMul"));
+  rt_ns::RuntimeSession session(model);
+  session.Prepare(runtime);
+  const bool available =
+      ml_cpu_compute::EffectiveGemmSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2;
+  const std::size_t prepared_bytes = available ? b.size() * sizeof(float) : 0;
+  EXPECT_EQ(session.prepared_bytes(), prepared_bytes);
+  EXPECT_FALSE(runtime.HasValue("Y"));
+  runtime.Set("A", rt_ns::Tensor::FromFloat("A", {17, k}, std::vector<float>(17 * k, 0.5f)));
+  session.Run(runtime);
+  EXPECT_EQ(session.prepared_bytes(), prepared_bytes);
+  for (std::size_t index = 0; index < 17 * n; ++index) {
+    ASSERT_FLOAT_EQ(runtime.Get("Y").AsFloat()[index], 64);
+  }
 }
 
 } // namespace

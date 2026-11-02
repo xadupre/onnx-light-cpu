@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -12,10 +13,12 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/kernels/value_store.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -35,6 +38,38 @@ using Shape = rt_ns::Shape;
 using Tensor = rt_ns::Tensor;
 
 namespace {
+
+bool CanPrepareWideWeights(const Tensor &b) {
+  if (b.data_type != static_cast<int>(DataType::FLOAT) || b.shape.size() != 2 ||
+      b.shape[0] != 512 || b.shape[1] < 32000 || b.shape[1] % 16 != 0) {
+    return false;
+  }
+  if (!std::in_range<std::size_t>(b.shape[1])) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMul: prepared weight dimension overflows size_t.");
+  }
+  const std::size_t elements = ml_cpu_compute::CheckedMultiply(
+      static_cast<std::size_t>(b.shape[0]), static_cast<std::size_t>(b.shape[1]), "MatMul",
+      "prepared weight elements");
+  const std::size_t bytes =
+      ml_cpu_compute::CheckedByteSize(elements, sizeof(float), "MatMul", "prepared weights");
+  if (b.size_bytes() != bytes) {
+    throw std::invalid_argument("onnx_light_cpu::MatMul: prepared weight storage size mismatch.");
+  }
+  return true;
+}
+
+std::string PreparedWeightsKey(const std::string &name, const Tensor &b) {
+  std::uint64_t digest = 14695981039346656037ULL;
+  // Eligible panels contain a multiple of eight bytes; memcpy permits unaligned sources.
+  for (std::size_t index = 0; index < b.size_bytes(); index += sizeof(std::uint64_t)) {
+    std::uint64_t word;
+    std::memcpy(&word, b.bytes() + index, sizeof(word));
+    digest = (digest ^ word) * 1099511628211ULL;
+  }
+  return "MatMul:fp32-panel16-v1:" + std::to_string(name.size()) + ":" + name +
+         ":N=" + std::to_string(b.shape[1]) + ":digest=" + std::to_string(digest);
+}
 
 std::vector<std::size_t> ShapeAsSize(const Shape &shape) {
   std::vector<std::size_t> result;
@@ -109,6 +144,17 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
 
 } // namespace
 
+struct MatMulKernel::PreparedWeights {
+  rt_ns::ValueStore::Slot slot;
+  const rt_ns::ValueStore *store;
+  const std::uint8_t *source;
+  Shape shape;
+
+  bool Matches(const Tensor &b, const RuntimeContext &rt) const {
+    return store == &rt.value_store() && source == b.bytes() && shape == b.shape;
+  }
+};
+
 struct MatMulKernel::MatMulPlanCache {
   int data_type = 0;
   std::vector<std::size_t> a_shape;
@@ -150,8 +196,61 @@ MatMulKernel::MatMulKernel(const rt_ns::KernelContext &ctx)
 
 MatMulKernel::~MatMulKernel() = default;
 
+bool MatMulKernel::HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const {
+  return ml_cpu_compute::EffectiveGemmSimdLevel() >= ml_cpu_compute::SimdLevel::kAVX2 &&
+         node_ != nullptr && node_->input_size() == 2 && immutable_inputs.contains(node_->input(1));
+}
+
+void MatMulKernel::DeclarePreparations(const std::unordered_set<std::string> &immutable_inputs,
+                                       std::vector<rt_ns::KernelPreparation> &preparations) {
+  if (!HasPreparations(immutable_inputs)) {
+    return;
+  }
+  const std::string name = node_->input(1);
+  rt_ns::KernelPreparation preparation;
+  preparation.info.source_inputs = {name};
+  preparation.info.representation = "MatMul:fp32-panel16-v1";
+  preparation.info.output_slots = {preparation.info.representation + ":" +
+                                   std::to_string(name.size()) + ":" + name};
+  preparation.estimate_memory = [this, name](const RuntimeContext &rt) {
+    const Tensor &b = rt.Get(name);
+    std::size_t prepared_bytes = 0;
+    if (CanPrepareWideWeights(b) &&
+        !(prepared_weights_ != nullptr && prepared_weights_->Matches(b, rt))) {
+      const auto slot = rt.value_store().Find(PreparedWeightsKey(name, b));
+      if (!slot || !rt.value_store().IsReady(*slot)) {
+        prepared_bytes = b.size_bytes();
+      }
+    }
+    return rt_ns::KernelPreparationMemory{b.size_bytes(), 0, prepared_bytes};
+  };
+  preparation.execute = [this, name](RuntimeContext &rt) {
+    const Tensor &b = rt.Get(name);
+    if (!CanPrepareWideWeights(b)) {
+      prepared_weights_.reset();
+      return;
+    }
+    if (prepared_weights_ != nullptr && prepared_weights_->Matches(b, rt)) {
+      return;
+    }
+    auto &store = rt.value_store();
+    const auto slot = store.Bind(PreparedWeightsKey(name, b));
+    if (!store.IsReady(slot)) {
+      Tensor packed = store.AllocateTensor(b.data_type, b.shape, b.size_bytes());
+      ml_cpu_compute::detail::PackGemmWideB(static_cast<std::size_t>(b.shape[1]),
+                                            static_cast<std::size_t>(b.shape[0]),
+                                            reinterpret_cast<const float *>(b.bytes()),
+                                            reinterpret_cast<float *>(packed.mutable_bytes()));
+      store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
+    }
+    prepared_weights_ =
+        std::make_unique<PreparedWeights>(PreparedWeights{slot, &store, b.bytes(), b.shape});
+  };
+  preparations.push_back(std::move(preparation));
+}
+
 Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *rt,
-                             MatMulPlanCache *cache) {
+                             MatMulPlanCache *cache, const PreparedWeights *prepared) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::MatMulKernel: inputs must share the same dtype.");
   }
@@ -166,6 +265,23 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
       plan = &*transient;
     } else {
       plan = &cache->GetOrBuild<float>(a.data_type, a_shape, b_shape);
+    }
+    if (prepared != nullptr && rt != nullptr && prepared->Matches(b, *rt) &&
+        plan->batch_count() == 1 && plan->gemm_plan().m() >= 16 && plan->gemm_plan().m() <= 512) {
+      const auto &gemm = plan->gemm_plan();
+      const Shape output_shape = OutputShape(plan->output_shape());
+      const std::size_t bytes = ElementCount(plan->output_shape()) * sizeof(float);
+      Tensor y = rt->MakeOutputTensor(0, a.data_type, output_shape, bytes);
+      const Tensor &packed = rt->value_store().Get(prepared->slot).tensor;
+      rt->RecordKernelUsage(ml_cpu_compute::EffectiveGemmSimdLevel() >=
+                                    ml_cpu_compute::SimdLevel::kAVX512
+                                ? "MatMul.prepared_b.avx512"
+                                : "MatMul.prepared_b.avx2");
+      ml_cpu_compute::detail::GemmWidePreparedB(
+          gemm.m(), gemm.n(), gemm.k(), 1.0f, reinterpret_cast<const float *>(a.bytes()),
+          reinterpret_cast<const float *>(packed.bytes()), 0.0f, nullptr,
+          reinterpret_cast<float *>(y.mutable_bytes()), gemm.blocking().mr);
+      return y;
     }
     return ComputeFloating<float>(a, b, rt, *plan);
   }
@@ -201,7 +317,7 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
 
 Tensor MatMulKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
   const RuntimeExecutionScope execution_scope;
-  return Compute(a, b, rt, nullptr);
+  return Compute(a, b, rt, nullptr, nullptr);
 }
 
 void MatMulKernel::Run(RuntimeContext &rt) {
@@ -211,7 +327,7 @@ void MatMulKernel::Run(RuntimeContext &rt) {
   rt_ns::RequireOutputCount(node, 1);
   const Tensor &a = rt_ns::GetInput(node, 0, rt.tensors());
   const Tensor &b = rt_ns::GetInput(node, 1, rt.tensors());
-  rt_ns::SetOutput(node, 0, Compute(a, b, &rt, plan_cache_.get()), rt);
+  rt_ns::SetOutput(node, 0, Compute(a, b, &rt, plan_cache_.get(), prepared_weights_.get()), rt);
 }
 
 void RegisterMatMulKernel() {
