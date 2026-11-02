@@ -50,7 +50,7 @@ def test_changelog_release_sections():
     )
     assert "Unreleased" in sections["0.2.4"]
     assert list(sections)[:2] == ["0.2.4", "0.2.3"]
-    assert "onnx-light 0.2.4" in sections["0.2.4"]
+    assert "onnx-light 0.2.4.1" in sections["0.2.4"]
     assert "[#1076](https://github.com/xadupre/onnx-light-cpu/issues/1076)" in sections["0.2.4"]
     for number in (
         893,
