@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -61,11 +60,8 @@ bool CanPrepareWideWeights(const Tensor &b) {
 
 std::string PreparedWeightsKey(const std::string &name, const Tensor &b) {
   std::uint64_t digest = 14695981039346656037ULL;
-  // Eligible panels contain a multiple of eight bytes; memcpy permits unaligned sources.
-  for (std::size_t index = 0; index < b.size_bytes(); index += sizeof(std::uint64_t)) {
-    std::uint64_t word;
-    std::memcpy(&word, b.bytes() + index, sizeof(word));
-    digest = (digest ^ word) * 1099511628211ULL;
+  for (std::size_t index = 0; index < b.size_bytes(); ++index) {
+    digest = (digest ^ b.bytes()[index]) * 1099511628211ULL;
   }
   return "MatMul:fp32-panel16-v1:" + std::to_string(name.size()) + ":" + name +
          ":N=" + std::to_string(b.shape[1]) + ":digest=" + std::to_string(digest);

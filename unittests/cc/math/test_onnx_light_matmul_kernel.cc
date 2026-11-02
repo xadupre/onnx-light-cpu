@@ -297,6 +297,46 @@ TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
   EXPECT_EQ(independent.value_store().prepared_bytes(), 0U);
 }
 
+TEST(MatMulKernel, WidePreparationInvalidatesPanelsAfterPairedSignChanges) {
+  constexpr std::size_t m = 16, k = 512, n = 32000;
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  std::vector<rt_ns::KernelPreparation> preparations;
+  kernel.DeclarePreparations({"B"}, preparations);
+  if (preparations.empty()) {
+    GTEST_SKIP() << "Wide weight preparation requires AVX2 or newer.";
+  }
+
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  runtime.Set("A", rt_ns::Tensor::FromFloat("A", {m, k}, std::vector<float>(m * k, 1)));
+  std::vector<float> b(k * n, 1);
+  runtime.Set("B", rt_ns::Tensor::FromFloat("B", {k, n}, b));
+  preparations[0].execute(runtime);
+  kernel.Run(runtime);
+  ASSERT_FLOAT_EQ(runtime.Get("Y").AsFloat()[1], 512);
+  ASSERT_FLOAT_EQ(runtime.Get("Y").AsFloat()[3], 512);
+
+  b[1] = -1;
+  b[3] = -1;
+  runtime.Put("B", rt_ns::Tensor::FromFloat("B", {k, n}, b));
+  EXPECT_EQ(preparations[0].estimate_memory(runtime).prepared_bytes, b.size() * sizeof(float));
+  preparations[0].execute(runtime);
+  kernel.Run(runtime);
+  const auto &output = runtime.Get("Y");
+  ASSERT_EQ(output.shape, (rt_ns::Shape{m, n}));
+  for (std::size_t row = 0; row < m; ++row) {
+    for (std::size_t col = 0; col < n; ++col) {
+      ASSERT_FLOAT_EQ(output.AsFloat()[row * n + col], col == 1 || col == 3 ? 510 : 512)
+          << row << ',' << col;
+    }
+  }
+}
+
 TEST(MatMulKernel, WidePreparationRejectsTruncatedStorageAndSkipsUnsupportedWeights) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("MatMul");
