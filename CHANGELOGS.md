@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [0.2.4] – Unreleased
 
+### Documentation & CI
+
+- Updated CI and release builds to onnx-light 0.2.4 and bumped the project version to 0.2.4 ([#1076](https://github.com/xadupre/onnx-light-cpu/issues/1076)).
+
+## [0.2.3] – Unreleased
+
 ### New Features
 
 - Added `RotaryEmbedding` CPU kernels for ONNX and `com.microsoft` with FLOAT, FLOAT16, and BFLOAT16 inputs and split-half or interleaved layouts ([#883](https://github.com/xadupre/onnx-light-cpu/pull/883)).
