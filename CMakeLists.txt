@@ -11,6 +11,8 @@ endif()
 
 project(onnx_light_cpu VERSION 0.2.6 LANGUAGES CXX)
 
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml")
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" _onnx_light_requirement
     REGEX "^[ \t]*\"onnx-light>=[0-9.]+\"")
 string(REGEX MATCH "[0-9]+(\\.[0-9]+)*"
