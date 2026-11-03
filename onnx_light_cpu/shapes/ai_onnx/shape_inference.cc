@@ -183,8 +183,10 @@ void ComputeShapeRotaryEmbedding(shapes_ns::ShapesContext &ctx,
   ctx.Set(node.output(0), SymTensor(nullptr, type, shape));
 }
 
-int64_t ComputePeakMemoryRotaryEmbedding(sym_ns::Device, const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryRotaryEmbedding(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                 const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
 void ComputeShapeSimplifiedLayerNormalization(shapes_ns::ShapesContext &ctx,
@@ -243,9 +245,9 @@ void ComputeShapeSimplifiedLayerNormalization(shapes_ns::ShapesContext &ctx,
   }
 }
 
-int64_t ComputePeakMemorySimplifiedLayerNormalization(sym_ns::Device,
-                                                      const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate ComputePeakMemorySimplifiedLayerNormalization(
+    sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &, const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
 void RegisterExperimentalShapeAndMemoryFunctions() {

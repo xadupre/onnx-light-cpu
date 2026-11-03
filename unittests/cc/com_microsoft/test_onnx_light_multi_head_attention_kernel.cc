@@ -246,8 +246,10 @@ TEST(MultiHeadAttentionKernel, SymbolicShapesAndScratchMemory) {
   ASSERT_EQ(schemas.size(), 1U);
   EXPECT_EQ(schemas.front().max_output(), 3);
   EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMultiHeadAttention(
-                sym::Device::kCPU, {{sym::SymDim(2), sym::SymDim(4), sym::SymDim(8)},
-                                    {sym::SymDim(2), sym::SymDim(5), sym::SymDim(8)}}),
+                sym::Device::kCPU, node,
+                {{sym::SymDim(2), sym::SymDim(4), sym::SymDim(8)},
+                 {sym::SymDim(2), sym::SymDim(5), sym::SymDim(8)}})
+                .worst_case.AsInt(),
             0);
 }
 
