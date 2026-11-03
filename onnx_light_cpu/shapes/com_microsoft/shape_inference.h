@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/shapes/shapes_context.h"
 
 #include <cstdint>
@@ -65,54 +66,67 @@ void ComputeShapeQMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                       const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
-int64_t ComputePeakMemoryCDist(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryCDist(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero scratch memory for the streaming causal convolution.
-int64_t ComputePeakMemoryCausalConvWithState(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryCausalConvWithState(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::BiasGelu``.
-int64_t ComputePeakMemoryBiasGelu(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryBiasGelu(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the zero scratch-memory requirement for
 /// ``com.microsoft::SkipLayerNormalization``.
-int64_t ComputePeakMemorySkipLayerNormalization(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemorySkipLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the zero scratch-memory requirement for
 /// ``com.microsoft::SkipSimplifiedLayerNormalization``.
-int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate
+ComputePeakMemorySkipSimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::GroupQueryAttention``.
-int64_t ComputePeakMemoryGroupQueryAttention(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryGroupQueryAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
-int64_t ComputePeakMemoryMultiHeadAttention(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMultiHeadAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::LinearAttention``.
-int64_t ComputePeakMemoryLinearAttention(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryLinearAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero scratch memory for the streaming quantized gather.
-int64_t ComputePeakMemoryGatherBlockQuantized(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryGatherBlockQuantized(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero heap scratch; bounded INT4 panels use 6144 bytes of stack per callback.
-int64_t ComputePeakMemoryMatMulNBits(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns a conservative whole-operator routing and expert scratch bound for
 /// ``com.microsoft::MoE``.
-int64_t ComputePeakMemoryMoE(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the conservative quantized expert and routing scratch bound.
-int64_t ComputePeakMemoryQMoE(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryQMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 
 /// Registers the custom shape-inference and peak-memory functions.

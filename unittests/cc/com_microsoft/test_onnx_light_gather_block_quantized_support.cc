@@ -274,11 +274,13 @@ TEST(GatherBlockQuantizedSupport, ExposesInferenceOnlyInventoryAndZeroScratchMem
   EXPECT_TRUE(found->fusion_patterns.empty());
   EXPECT_EQ(found->shape_inference_function, "onnx_light_cpu::ComputeShapeGatherBlockQuantized");
   EXPECT_EQ(found->peak_memory_function, "onnx_light_cpu::ComputePeakMemoryGatherBlockQuantized");
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryGatherBlockQuantized(sym_ns::Device::kCPU, {}), 0);
+  EXPECT_EQ(
+      onnx_light_cpu::ComputePeakMemoryGatherBlockQuantized(sym_ns::Device::kCPU, MakeGather(), {}),
+      shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_EQ(shapes_ns::ComputePeakMemory("com.microsoft", "GatherBlockQuantized",
                                          sym_ns::Device::kCPU, {}),
-            0);
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 }
 
 } // namespace

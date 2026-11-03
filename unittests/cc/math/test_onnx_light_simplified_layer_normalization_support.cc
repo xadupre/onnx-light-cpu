@@ -203,7 +203,7 @@ TEST(SimplifiedLayerNormalizationSupport, RegistersAliasesAndZeroScratchWithoutT
     EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
     EXPECT_EQ(shapes_ns::ComputePeakMemory(domain, node.op_type(), sym_ns::Device::kCPU,
                                            {ctx.Get("X").Shape(), ctx.Get("Scale").Shape()}),
-              0);
+              shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
   }
   const auto records = onnx_light_cpu::CollectOperatorSupport();
   const auto record = std::find_if(records.begin(), records.end(), [](const auto &entry) {

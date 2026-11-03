@@ -19,8 +19,8 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
-Current development version: **0.2.3**. See the [changelog](CHANGELOGS.md)
-for changes. CI validates the runtime integration against **onnx-light 0.2.3**.
+Current development version: **0.2.5**. See the [changelog](CHANGELOGS.md)
+for changes. CI validates the runtime integration against **onnx-light 0.2.5**.
 
 ## Installation
 
@@ -31,6 +31,24 @@ pip install onnx-light-cpu
 ```
 
 To build the current development version, use the source instructions below.
+
+Development version 0.2.5 requires platform-specific **onnx-light 0.2.5** wheels
+hosted on GitHub. These direct-URL dependencies prevent uploading its distributions
+to PyPI; use source builds or GitHub release wheels instead. Installation requires
+the matching upstream wheel to be published, with no fallback to an older version.
+
+### Recover missing macOS release wheels
+
+Maintainers can run **Build Release Wheels** from the Actions tab with
+`tag=0.2.4` and `macos_only=true` to attach the missing wheels to the existing
+release without rebuilding Linux or Windows. Select the workflow branch containing
+this recovery option; the `tag` input selects the source to build.
+
+The macOS job builds universal2 wheels for CPython 3.12, 3.13, and 3.14.
+Before uploading, cibuildwheel installs each repaired wheel alongside
+**onnx-light 0.2.4.1**, runs the native session-registration inference smoke test,
+and calls `register_kernels()` on the macOS ARM64 runner. Recovery is complete
+only after this job succeeds and the three macOS wheels appear in the release assets.
 
 ## Build from source
 

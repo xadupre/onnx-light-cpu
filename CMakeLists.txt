@@ -9,7 +9,7 @@ if(NOT _is_multi_config AND NOT CMAKE_BUILD_TYPE)
       "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
-project(onnx_light_cpu VERSION 0.2.3 LANGUAGES CXX)
+project(onnx_light_cpu VERSION 0.2.5 LANGUAGES CXX)
 
 # CMake 4.1 introduced CMP0178, which stops silently discarding empty test
 # launcher / crosscompiling-emulator arguments. With the NEW behaviour,
@@ -412,7 +412,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       endif()
     endif()
   else()
-    find_package(onnx_light CONFIG REQUIRED)
+    find_package(onnx_light 0.2.5 CONFIG REQUIRED)
   endif()
   if(NOT TARGET onnx_light::lib_onnx_kernels)
     message(FATAL_ERROR

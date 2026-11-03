@@ -194,7 +194,8 @@ TEST(OnnxLightRotaryEmbeddingKernel, BothDomainsDispatchAndInferSymbolicShape) {
     shapes.Set("s", sym_ns::SymTensor(nullptr, sym_ns::TensorType::kFloat, sym_ns::SymShape{3, 1}));
     onnx_light_cpu::ComputeShapeRotaryEmbedding(shapes, node);
     EXPECT_EQ(shapes.Get("y").Shape().ToString(), shapes.Get("x").Shape().ToString());
-    EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryRotaryEmbedding(sym_ns::Device::kCPU, {}), 0);
+    EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryRotaryEmbedding(sym_ns::Device::kCPU, node, {}),
+              ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate::Exact(int64_t{0}));
 
     rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::OpsetId(domain, microsoft ? 1 : 23)));
     runtime.Set("x", rt_ns::Tensor::FromFloat("x", {1, 2, 2}, {1, 2, 3, 4}));

@@ -1578,25 +1578,43 @@ void ComputeShapeCausalConvWithState(ShapesContext &ctx,
   ctx.Set(node.output(1), SymTensor(nullptr, dtype, std::move(state)));
 }
 
-int64_t ComputePeakMemoryCausalConvWithState(sym_ns::Device, const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryCausalConvWithState(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                     const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
-
-int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
-
-int64_t ComputePeakMemoryGatherBlockQuantized(sym_ns::Device, const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryCDist(sym_ns::Device,
+                                                     const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                     const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryBiasGelu(sym_ns::Device,
+                                                        const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                        const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+}
 
-int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryGatherBlockQuantized(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                      const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+}
+
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryMatMulNBits(sym_ns::Device,
+                                                           const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                           const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+}
+
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryMoE(sym_ns::Device,
+                                                   const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                   const std::vector<SymShape> &shapes) {
   const std::size_t fc2_index = shapes.size() > 4 && shapes[4].Rank() == 3 ? 4 : 3;
   if (shapes.size() <= fc2_index || (shapes[0].Rank() != 2 && shapes[0].Rank() != 3) ||
       shapes[1].Rank() != 2 || shapes[2].Rank() != 3 || shapes[fc2_index].Rank() != 3) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MoE");
   }
   const auto &batch = shapes[0][0];
   const auto &sequence = shapes[0].Rank() == 3 ? shapes[0][1] : sym_ns::SymDim(1);
@@ -1606,7 +1624,7 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
   const auto &intermediate = shapes[fc2_index][2];
   if (!batch.IsInt() || !sequence.IsInt() || !experts.IsInt() || !hidden.IsInt() ||
       !width.IsInt() || !intermediate.IsInt()) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MoE");
   }
   const std::size_t tokens = ml_cpu_compute::CheckedMultiply(
       ml_cpu_compute::CheckedDimension(batch.AsInt(), "MoE", "batch"),
@@ -1622,15 +1640,17 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
   return static_cast<std::int64_t>(bytes);
 }
 
-int64_t ComputePeakMemoryQMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryQMoE(sym_ns::Device,
+                                                    const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                    const std::vector<SymShape> &shapes) {
   if (shapes.size() < 4 || (shapes[0].Rank() != 2 && shapes[0].Rank() != 3) ||
       shapes[1].Rank() != 2) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "QMoE");
   }
   for (const auto &shape : shapes) {
     for (std::size_t index = 0; index < shape.Rank(); ++index) {
       if (!shape[index].IsInt()) {
-        return 0;
+        return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "QMoE");
       }
       ml_cpu_compute::CheckedDimension(shape[index].AsInt(), "QMoE", "scratch dimension");
     }
@@ -1645,7 +1665,7 @@ int64_t ComputePeakMemoryQMoE(sym_ns::Device, const std::vector<SymShape> &shape
         "tokens");
   }
   if (tokens == 0) {
-    return 0;
+    return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
   }
   std::size_t values =
       ml_cpu_compute::CheckedProduct({tokens, hidden, 2}, "QMoE", "activation scratch");
@@ -1697,25 +1717,28 @@ int64_t ComputePeakMemoryQMoE(sym_ns::Device, const std::vector<SymShape> &shape
   return static_cast<int64_t>(bytes);
 }
 
-int64_t ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                        const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(sym_ns::Device,
-                                                          const std::vector<SymShape> &) {
-  return 0;
+shapes_ns::PeakMemoryEstimate ComputePeakMemorySkipSimplifiedLayerNormalization(
+    sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &, const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
-                                             const std::vector<SymShape> &input_shapes) {
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                     const std::vector<SymShape> &input_shapes) {
   if (input_shapes.empty() || input_shapes[0].Rank() != 3) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "GroupQueryAttention");
   }
 
   const bool has_key = input_shapes.size() > 1 && input_shapes[1].Rank() == 3;
   const bool has_value = input_shapes.size() > 2 && input_shapes[2].Rank() == 3;
   if (has_key != has_value) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "GroupQueryAttention");
   }
   constexpr int64_t kConservativeElementBytes = sizeof(float);
   bool known = true;
@@ -1758,7 +1781,7 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
     }
   }
   if (!known) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "GroupQueryAttention");
   }
 
   // The shared hook must cover the NAIVE implementation. Its longest-lived
@@ -1796,18 +1819,20 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
                                               "scratch-memory byte size");
 }
 
-int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<SymShape> &shapes) {
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                    const std::vector<SymShape> &shapes) {
   if (shapes.size() < 2 || shapes[0].Rank() != 3 ||
       (shapes[1].Rank() != 3 && shapes[1].Rank() != 4))
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MultiHeadAttention");
   const auto &b = shapes[0][0], &s = shapes[0][1];
   const auto &l = shapes[1][shapes[1].Rank() == 4 ? 2 : 1];
   if (!b.IsInt() || !s.IsInt() || !l.IsInt())
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MultiHeadAttention");
   int64_t p = 0;
   if (shapes.size() > 6 && shapes[6].Rank() == 4) {
     if (!shapes[6][2].IsInt())
-      return 0;
+      return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MultiHeadAttention");
     p = shapes[6][2].AsInt();
   }
   const auto total =
@@ -1817,7 +1842,7 @@ int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<Sy
   // Every query head may own a score row concurrently. The query's hidden
   // dimension is at least the head count, providing a conservative bound.
   if (!shapes[0][2].IsInt())
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MultiHeadAttention");
   return ml_cpu_compute::CheckedIndexMultiply(
       ml_cpu_compute::CheckedIndexMultiply(rows, shapes[0][2].AsInt(), "MultiHeadAttention",
                                            "score rows"),
@@ -1825,11 +1850,12 @@ int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<Sy
       "MultiHeadAttention", "score scratch");
 }
 
-int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
-                                         const std::vector<SymShape> &input_shapes) {
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryLinearAttention(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                 const std::vector<SymShape> &input_shapes) {
   constexpr int64_t kAccumulatorElementBytes = sizeof(float);
   if (input_shapes.size() < 3 || input_shapes[2].Rank() != 3) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "LinearAttention");
   }
 
   // ExecuteRanges may process every (batch, KV head) task concurrently. Each
@@ -1838,7 +1864,7 @@ int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
   const auto &batch = input_shapes[2][0];
   const auto &packed_value_width = input_shapes[2][2];
   if (!batch.IsInt() || !packed_value_width.IsInt()) {
-    return 0;
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "LinearAttention");
   }
   if (batch.AsInt() < 0 || packed_value_width.AsInt() < 0) {
     throw std::invalid_argument(

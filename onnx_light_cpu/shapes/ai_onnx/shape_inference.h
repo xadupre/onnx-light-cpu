@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/shapes/shapes_context.h"
 
 #include <cstdint>
@@ -19,13 +20,16 @@ void ComputeShapeSimplifiedLayerNormalization(
 void ComputeShapeRotaryEmbedding(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
-int64_t ComputePeakMemoryRotaryEmbedding(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryRotaryEmbedding(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 
 /// Returns CPU scratch memory, excluding input and output tensors.
-int64_t ComputePeakMemorySimplifiedLayerNormalization(
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate
+ComputePeakMemorySimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 
 /// Registers experimental ai.onnx shape-inference and CPU peak-memory functions.

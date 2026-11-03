@@ -73,7 +73,7 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
 
 
 def test_documentation_does_not_replace_onnx_light_release():
-    assert "git clone --depth 1 --branch 0.2.3" in _DOCS_WORKFLOW
+    assert "git clone --depth 1 --branch 0.2.5" in _DOCS_WORKFLOW
     assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
@@ -90,7 +90,7 @@ def test_standalone_source_build_allows_time_for_both_projects():
 
 def test_standalone_source_build_uses_onnx_light_release():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
-    assert "git clone --depth 1 --branch 0.2.3" in standalone_job
+    assert "git clone --depth 1 --branch 0.2.5" in standalone_job
     assert "git clone --depth 1 --branch main" not in standalone_job
 
 
@@ -170,11 +170,13 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
         assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF" in body
-        assert (
-            "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
-            in body
-        )
+        smoke_test = "python {project}/unittests/python/wheel_registration_smoke.py"
         if job == "build_wheels_macos":
+            assert (
+                f"CIBW_TEST_COMMAND: >-\n            {smoke_test} &&\n"
+                '            python -c "from onnx_light_cpu import register_kernels; '
+                'register_kernels()"'
+            ) in body
             assert (
                 "CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-\n"
                 "            DYLD_LIBRARY_PATH=\"$(python -c 'from onnx_light import "
@@ -184,8 +186,31 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
                 "            --require-archs x86_64,arm64 -w {dest_dir} {wheel}"
             ) in body
         else:
+            assert f"CIBW_TEST_COMMAND: {smoke_test}" in body
             assert "CIBW_REPAIR_WHEEL_COMMAND_MACOS" not in body
         assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
+
+
+def test_macos_release_can_be_recovered_without_rebuilding_other_platforms():
+    inputs = _RELEASE_WORKFLOW.split("  workflow_dispatch:\n", 1)[1].split("  push:\n", 1)[0]
+    assert "      macos_only:\n" in inputs
+    assert "        type: boolean\n        default: false" in inputs
+    linux_job = _RELEASE_WORKFLOW.split("  build_wheels_linux:", 1)[1].split(
+        "  build_wheels_windows:", 1
+    )[0]
+    assert "    if: ${{ !inputs.macos_only }}" in linux_job
+    windows_job, macos_job = _RELEASE_WORKFLOW.split("  build_wheels_windows:", 1)[1].split(
+        "  build_wheels_macos:", 1
+    )
+    assert "    needs: build_wheels_linux" in windows_job
+    assert "    needs:" not in macos_job
+    assert "    runs-on: macos-latest" in macos_job
+    assert "ref: ${{ inputs.tag || github.ref }}" in macos_job
+    assert 'CIBW_BUILD: "cp312-* cp313-* cp314-*"' in macos_job
+    assert "CIBW_ARCHS: universal2" in macos_job
+    assert "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install" in macos_job
+    assert "if: github.ref_type == 'tag' || inputs.tag != ''" in macos_job
+    assert "gh release upload" in macos_job
 
 
 def test_windows_release_repair_keeps_onnx_light_dlls_external():
@@ -250,8 +275,8 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "name: onnx-light 0.2.3 (" in source_job
-    assert "git clone --depth 1 --branch 0.2.3" in source_job
+    assert "name: onnx-light 0.2.5 (" in source_job
+    assert "git clone --depth 1 --branch 0.2.5" in source_job
     assert "git clone --depth 1 --branch main" not in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
@@ -323,11 +348,12 @@ def test_dependabot_updates_actions_and_python_dependencies():
         ) in _DEPENDABOT_CONFIG
 
 
-def test_native_kernel_tests_are_version_gated_in_standalone():
+def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standalone():
     standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
     assert 'installed = version("onnx-light")' in standalone_job
-    assert ">= (0, 1, 31)" in standalone_job
+    assert "== (0, 2, 5)" in standalone_job
+    assert 'find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None' in standalone_job
     assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
         "test_api_doc.py",

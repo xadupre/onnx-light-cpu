@@ -1,6 +1,9 @@
+import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from tools.onnx_light_release import (
     ONNX_LIGHT_VERSION,
@@ -15,12 +18,89 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_onnx_light_release_version():
-    assert ONNX_LIGHT_VERSION == "0.2.3"
+    assert ONNX_LIGHT_VERSION == "0.2.5"
+
+
+@pytest.mark.parametrize("python_version", [(3, 12), (3, 13), (3, 14)])
+@pytest.mark.parametrize(
+    ("system", "machine", "sys_platform"),
+    [
+        ("Linux", "x86_64", "linux"),
+        ("Linux", "aarch64", "linux"),
+        ("Windows", "AMD64", "win32"),
+        ("Windows", "ARM64", "win32"),
+        ("Darwin", "x86_64", "darwin"),
+        ("Darwin", "arm64", "darwin"),
+    ],
+)
+def test_project_selects_matching_github_runtime_wheel(
+    system, machine, sys_platform, python_version
+):
+    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    environment = {
+        "python_version": ".".join(map(str, python_version)),
+        "sys_platform": sys_platform,
+        "platform_machine": machine,
+    }
+    requirements = [Requirement(dependency) for dependency in metadata["project"]["dependencies"]]
+    selected = [
+        requirement
+        for requirement in requirements
+        if requirement.name == "onnx-light"
+        and (requirement.marker is None or requirement.marker.evaluate(environment))
+    ]
+    assert len(selected) == 1, (environment, selected)
+    assert selected[0].url == wheel_url(system, machine, python_version)
 
 
 def test_avx2_parity_uses_release_version():
     workflow = (_ROOT / ".github" / "workflows" / "avx2_parity.yml").read_text(encoding="utf-8")
-    assert f'"onnx-light=={ONNX_LIGHT_VERSION}"' in workflow
+    assert 'onnx_light_source=$(mktemp -d "${RUNNER_TEMP}/onnx-light.XXXXXX")' in workflow
+    assert 'python tools/onnx_light_release.py clone "${onnx_light_source}"' in workflow
+    assert 'python -m pip install -C wheel.py-api=cp312 "${onnx_light_source}"' in workflow
+    assert (
+        'echo "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=${onnx_light_source}" >> "${GITHUB_ENV}"'
+        in workflow
+    )
+    assert "../onnx-light" not in workflow
+
+
+@pytest.mark.parametrize("dependency_version", ["0.2.4.1", "0.2.5"])
+def test_installed_cmake_package_requires_compatible_onnx_light(tmp_path, dependency_version):
+    template = (_ROOT / "cmake" / "onnx_light_cpuConfig.cmake.in").as_posix()
+    (tmp_path / "CMakeLists.txt").write_text(
+        f"""
+cmake_minimum_required(VERSION 3.15)
+project(CheckInstalledDependency LANGUAGES CXX)
+include(CMakePackageConfigHelpers)
+set(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT ON)
+configure_package_config_file("{template}"
+  "${{CMAKE_BINARY_DIR}}/onnx_light_cpuConfig.cmake" INSTALL_DESTINATION lib/cmake)
+file(WRITE "${{CMAKE_BINARY_DIR}}/onnx_light_cpuTargets.cmake"
+  "add_library(onnx_light_cpu::ml_cpu_compute INTERFACE IMPORTED)\\n")
+file(WRITE "${{CMAKE_BINARY_DIR}}/dependency/onnx_lightConfig.cmake" "")
+write_basic_package_version_file(
+  "${{CMAKE_BINARY_DIR}}/dependency/onnx_lightConfigVersion.cmake"
+  VERSION {dependency_version} COMPATIBILITY SameMajorVersion)
+set(onnx_light_DIR "${{CMAKE_BINARY_DIR}}/dependency")
+set(onnx_light_cpu_DIR "${{CMAKE_BINARY_DIR}}")
+find_package(onnx_light_cpu CONFIG REQUIRED)
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "build")],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if dependency_version == "0.2.5":
+        assert result.returncode == 0, result.stdout
+    else:
+        assert result.returncode != 0, result.stdout
+        assert "onnx_light" in result.stdout
+        assert "0.2.5" in result.stdout
 
 
 def test_source_workflows_use_release_version():
@@ -34,21 +114,28 @@ def test_getting_started_uses_release_version():
     assert f"Release builds target onnx-light {ONNX_LIGHT_VERSION}" in guide
 
 
+def test_current_documentation_uses_release_version():
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"**onnx-light {ONNX_LIGHT_VERSION}**" in readme
+    cli_guide = (_ROOT / "docs" / "command_line.rst").read_text(encoding="utf-8")
+    assert f"``onnx-light {ONNX_LIGHT_VERSION}`` job" in cli_guide
+
+
 def test_release_wheel_names():
     assert wheel_name("Linux", "x86_64", (3, 12)) == (
-        "onnx_light-0.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+        "onnx_light-0.2.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
     )
     assert wheel_name("Linux", "aarch64", (3, 13)) == (
-        "onnx_light-0.2.3-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+        "onnx_light-0.2.5-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
     )
     assert wheel_name("Darwin", "arm64", (3, 14)) == (
-        "onnx_light-0.2.3-cp314-cp314-macosx_13_0_universal2.whl"
+        "onnx_light-0.2.5-cp314-cp314-macosx_13_0_universal2.whl"
     )
     assert wheel_name("Windows", "AMD64", (3, 12)) == (
-        "onnx_light-0.2.3-cp312-cp312-win_amd64.whl"
+        "onnx_light-0.2.5-cp312-cp312-win_amd64.whl"
     )
     assert wheel_url("Windows", "ARM64", (3, 13)).endswith(
-        "/0.2.3/onnx_light-0.2.3-cp313-cp313-win_arm64.whl"
+        "/0.2.5/onnx_light-0.2.5-cp313-cp313-win_arm64.whl"
     )
 
 
