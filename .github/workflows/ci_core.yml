@@ -52,13 +52,33 @@ jobs:
       # This matrix validates the standalone CPU kernels. The separate
       # setup_onnx_light_source job owns integration with the onnx-light release on
       # every OS, avoiding a second integration path through a released wheel.
+      - name: Install standalone test dependencies
+        shell: bash
+        run: |
+          python - <<'PY' > "${RUNNER_TEMP}/standalone-requirements.txt"
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          requirements = [
+              requirement
+              for requirement in [
+                  *project["dependencies"],
+                  *project["optional-dependencies"]["dev"],
+              ]
+              if not requirement.startswith("onnx-light>=")
+          ]
+          print("\n".join(requirements))
+          PY
+          python -m pip install -r "${RUNNER_TEMP}/standalone-requirements.txt"
+
       - name: Build and install package (Unix)
         if: runner.os != 'Windows'
         env:
           SCCACHE_GHA_ENABLED: "true"
         run: |
           for attempt in 1 2 3; do
-            if pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v; then
+            if pip install --no-deps -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -72,7 +92,7 @@ jobs:
         env:
           CMAKE_GENERATOR: Ninja
           SCCACHE_GHA_ENABLED: "true"
-        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
+        run: pip install --no-deps -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
 
       - name: pip freeze
         run: pip freeze

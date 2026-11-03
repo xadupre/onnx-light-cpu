@@ -7,6 +7,9 @@
 import ast
 import re
 import shlex
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -114,11 +117,51 @@ def test_core_workflow_installs_cmake_outside_build_isolation():
         0
     ]
     install = core_job.index('python -m pip install "cmake>=4"')
-    build = core_job.index("pip install -C build-dir=build")
+    build = core_job.index("pip install --no-deps -C build-dir=build")
     reconfigure = core_job.index("cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF")
     test = core_job.index("ctest --test-dir build")
     assert install < build
     assert build < reconfigure < test
+
+
+def test_standalone_installs_metadata_dependencies_without_onnx_light(tmp_path):
+    core_job = _CORE_WORKFLOW.split("  core_tests:", 1)[1].split("  setup_onnx_light_source:", 1)[
+        0
+    ]
+    dependency_step = core_job.split("      - name: Install standalone test dependencies\n", 1)[
+        1
+    ].split("      - name:", 1)[0]
+    script = textwrap.dedent(
+        dependency_step.split("python - <<'PY'", 1)[1]
+        .split("\n", 1)[1]
+        .split("\n          PY", 1)[0]
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["numpy>=2", "onnx-light>=9.8.7", "other-runtime>=1"]\n'
+        '[project.optional-dependencies]\ndev = ["pytest>=8", "another-tool>=3"]\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == [
+        "numpy>=2",
+        "other-runtime>=1",
+        "pytest>=8",
+        "another-tool>=3",
+    ]
+    assert 'python -m pip install -r "${RUNNER_TEMP}/standalone-requirements.txt"' in (
+        dependency_step
+    )
+    for platform in ("Unix", "Windows"):
+        build_step = core_job.split(f"      - name: Build and install package ({platform})", 1)[
+            1
+        ].split("      - name:", 1)[0]
+        assert "--no-deps" in build_step
 
 
 def test_source_integration_uses_matching_nanobind_abi():
