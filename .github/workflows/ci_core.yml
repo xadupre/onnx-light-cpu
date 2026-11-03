@@ -99,7 +99,7 @@ jobs:
           match = re.match(r"^(\d+)\.(\d+)\.(\d+)", installed or "")
           compatible = (
               match is not None
-              and tuple(map(int, match.groups())) >= (0, 2, 5)
+              and tuple(map(int, match.groups())) == (0, 2, 5)
               and find_spec("onnx_light_cpu._cpuregister") is not None
           )
           ignored = [
