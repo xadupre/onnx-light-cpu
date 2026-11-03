@@ -360,6 +360,46 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   }
 }
 
+float SoftmaxExpSumFloat32_AVX2_FMA(float *scores, std::size_t count, float maximum) {
+  const __m256 offset = _mm256_set1_ps(maximum);
+  const __m256 negative_infinity = _mm256_set1_ps(-std::numeric_limits<float>::infinity());
+  const __m256 zero = _mm256_setzero_ps();
+  const auto exponential = [&](const __m256 score) {
+    const __m256 masked = _mm256_cmp_ps(score, negative_infinity, _CMP_EQ_OQ);
+    const __m256 shifted = Select(masked, zero, _mm256_sub_ps(score, offset));
+    const __m256 value = ExpNegativePs256Fma(shifted);
+    return Select(masked, zero, value);
+  };
+  __m256 sum0 = zero;
+  __m256 sum1 = zero;
+  std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    const __m256 value0 = exponential(_mm256_loadu_ps(scores + index));
+    _mm256_storeu_ps(scores + index, value0);
+    sum0 = _mm256_add_ps(sum0, value0);
+    const __m256 value1 = exponential(_mm256_loadu_ps(scores + index + 8));
+    _mm256_storeu_ps(scores + index + 8, value1);
+    sum1 = _mm256_add_ps(sum1, value1);
+  }
+  __m256 sum = _mm256_add_ps(sum0, sum1);
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = exponential(_mm256_loadu_ps(scores + index));
+    _mm256_storeu_ps(scores + index, value);
+    sum = _mm256_add_ps(sum, value);
+  }
+  float total = HorizontalSum(sum);
+  if (index < count) {
+    const __m256i mask = TailMask(count - index);
+    const __m256 tail = Select(_mm256_castsi256_ps(mask), _mm256_maskload_ps(scores + index, mask),
+                               negative_infinity);
+    _mm256_maskstore_ps(scores + index, mask, exponential(tail));
+    for (; index < count; ++index) {
+      total += scores[index];
+    }
+  }
+  return total;
+}
+
 void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   std::size_t index = 0;
   for (; count - index >= 8; index += 8) {

@@ -121,6 +121,10 @@ void ExpFloat32_AVX512(const float *input, float *output, std::size_t count);
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
 void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+
+/// Subtract maximum and exponentiate scores in place, zero -infinity masks, and return their sum.
+/// maximum must be at least every finite score.
+float SoftmaxExpSumFloat32_AVX2_FMA(float *scores, std::size_t count, float maximum);
 void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
 #ifdef ML_CPU_COMPUTE_HAVE_F16C
 void SigmoidFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std::size_t count);

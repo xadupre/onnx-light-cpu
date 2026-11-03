@@ -9,7 +9,7 @@ if(NOT _is_multi_config AND NOT CMAKE_BUILD_TYPE)
       "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
-project(onnx_light_cpu VERSION 0.2.5 LANGUAGES CXX)
+project(onnx_light_cpu VERSION 0.2.6 LANGUAGES CXX)
 
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" _onnx_light_requirement
     REGEX "^[ \t]*\"onnx-light>=[0-9.]+\"")

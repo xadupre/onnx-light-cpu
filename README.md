@@ -19,7 +19,7 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
-Current development version: **0.2.5**. See the [changelog](CHANGELOGS.md)
+Current development version: **0.2.6**. See the [changelog](CHANGELOGS.md)
 for changes. CI validates the runtime integration against the
 minimum **onnx-light** version declared in `pyproject.toml`.
 
