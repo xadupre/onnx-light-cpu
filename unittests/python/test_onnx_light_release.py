@@ -32,6 +32,7 @@ def test_onnx_light_release_version():
 def test_release_version_follows_dependency_metadata(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
+    (tools / "__init__.py").touch()
     (tools / "onnx_light_release.py").write_text(
         (_ROOT / "tools" / "onnx_light_release.py").read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -52,7 +53,7 @@ def test_release_version_follows_dependency_metadata(tmp_path):
         capture_output=True,
         text=True,
         check=True,
-        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(tmp_path), str(_ROOT)))},
     )
     assert result.stdout.splitlines() == [
         "1.2.3",
