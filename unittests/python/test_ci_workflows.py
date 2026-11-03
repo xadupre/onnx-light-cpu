@@ -170,11 +170,13 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
         assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF" in body
-        assert (
-            "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
-            in body
-        )
+        smoke_test = "python {project}/unittests/python/wheel_registration_smoke.py"
         if job == "build_wheels_macos":
+            assert (
+                f"CIBW_TEST_COMMAND: >-\n            {smoke_test} &&\n"
+                '            python -c "from onnx_light_cpu import register_kernels; '
+                'register_kernels()"'
+            ) in body
             assert (
                 "CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-\n"
                 "            DYLD_LIBRARY_PATH=\"$(python -c 'from onnx_light import "
@@ -184,8 +186,31 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
                 "            --require-archs x86_64,arm64 -w {dest_dir} {wheel}"
             ) in body
         else:
+            assert f"CIBW_TEST_COMMAND: {smoke_test}" in body
             assert "CIBW_REPAIR_WHEEL_COMMAND_MACOS" not in body
         assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
+
+
+def test_macos_release_can_be_recovered_without_rebuilding_other_platforms():
+    inputs = _RELEASE_WORKFLOW.split("  workflow_dispatch:\n", 1)[1].split("  push:\n", 1)[0]
+    assert "      macos_only:\n" in inputs
+    assert "        type: boolean\n        default: false" in inputs
+    linux_job = _RELEASE_WORKFLOW.split("  build_wheels_linux:", 1)[1].split(
+        "  build_wheels_windows:", 1
+    )[0]
+    assert "    if: ${{ !inputs.macos_only }}" in linux_job
+    windows_job, macos_job = _RELEASE_WORKFLOW.split("  build_wheels_windows:", 1)[1].split(
+        "  build_wheels_macos:", 1
+    )
+    assert "    needs: build_wheels_linux" in windows_job
+    assert "    needs:" not in macos_job
+    assert "    runs-on: macos-latest" in macos_job
+    assert "ref: ${{ inputs.tag || github.ref }}" in macos_job
+    assert 'CIBW_BUILD: "cp312-* cp313-* cp314-*"' in macos_job
+    assert "CIBW_ARCHS: universal2" in macos_job
+    assert "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install" in macos_job
+    assert "if: github.ref_type == 'tag' || inputs.tag != ''" in macos_job
+    assert "gh release upload" in macos_job
 
 
 def test_windows_release_repair_keeps_onnx_light_dlls_external():
