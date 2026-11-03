@@ -355,6 +355,109 @@ TEST(AttentionExp, DenseUnnormalizedRowsMatchOnlineSoftmax) {
 #endif
 }
 
+TEST(AttentionExp, FusedExponentialSumHandlesMasksRangesAndUnalignedTails) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA kernels are unavailable";
+  }
+  const float negative_infinity = -std::numeric_limits<float>::infinity();
+  const std::array<float, 10> offsets{0.0f,   -1.0f,   -10.0f,  -87.0f,  -87.5f,
+                                      -90.0f, -103.0f, -104.0f, -200.0f, negative_infinity};
+  for (const std::size_t count : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 127, 128, 255, 256, 257}) {
+    for (const float maximum : {-10.0f, 0.0f, 100.0f}) {
+      SCOPED_TRACE(::testing::Message() << "count=" << count << " maximum=" << maximum);
+      std::vector<float> scores(count + 2, 1234.0f), expected(count);
+      double expected_sum = 0.0;
+      for (std::size_t index = 0; index < count; ++index) {
+        scores[index + 1] = maximum + offsets[index % offsets.size()];
+        expected[index] = std::exp(scores[index + 1] - maximum);
+        expected_sum += expected[index];
+      }
+      const float total =
+          ml_cpu_compute::SoftmaxExpSumFloat32_AVX2_FMA(scores.data() + 1, count, maximum);
+      EXPECT_EQ(scores.front(), 1234.0f);
+      EXPECT_EQ(scores.back(), 1234.0f);
+      for (std::size_t index = 0; index < count; ++index) {
+        EXPECT_NEAR(scores[index + 1], expected[index],
+                    std::max(8 * std::numeric_limits<float>::denorm_min(), 2e-6f * expected[index]))
+            << "index=" << index;
+      }
+      EXPECT_NEAR(total, expected_sum, 2e-6 * expected_sum);
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(AttentionExp, OnlineBlockRetainsHistoryAcrossMaskedTails) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA kernels are unavailable";
+  }
+  const float negative_infinity = -std::numeric_limits<float>::infinity();
+  for (const std::size_t count : {1, 7, 8, 9, 15, 16, 17, 255, 256, 257}) {
+    for (const float previous : {negative_infinity, -10.0f, 5.0f, 100.0f}) {
+      SCOPED_TRACE(::testing::Message() << "count=" << count << " previous=" << previous);
+      std::vector<float> scores(count);
+      float maximum = previous;
+      for (std::size_t index = 0; index < count; ++index) {
+        scores[index] = index % 3 == 2 ? negative_infinity : 5.0f - index % 17;
+        maximum = std::max(maximum, scores[index]);
+      }
+      auto expected = scores;
+      const float correction = previous == negative_infinity ? 0.0f : std::exp(previous - maximum);
+      double expected_sum = 3.25 * correction;
+      for (float &value : expected) {
+        value = std::exp(value - maximum);
+        expected_sum += value;
+      }
+      float denominator = 3.25f;
+      const auto result = ml_cpu_compute::AttentionSoftmaxBlockFloat32_AVX2_FMA(
+          scores.data(), count, previous, denominator);
+      EXPECT_EQ(result.maximum, maximum);
+      EXPECT_FLOAT_EQ(result.correction, correction);
+      EXPECT_NEAR(denominator, expected_sum, 2e-6 * expected_sum);
+      ExpectClose(scores, expected, 2e-6f);
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
+TEST(AttentionExp, FusedExponentialSumPreservesNonfiniteScoresAndMasks) {
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX2 ||
+      !ml_cpu_compute::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA kernels are unavailable";
+  }
+  const float infinity = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (const float maximum : {0.0f, infinity, nan}) {
+    for (const std::size_t nan_index : {1, 7, 8}) {
+      std::vector<float> scores(9, -infinity);
+      scores[0] = maximum == infinity ? infinity : 0.0f;
+      scores[nan_index] = nan;
+      const float total =
+          ml_cpu_compute::SoftmaxExpSumFloat32_AVX2_FMA(scores.data(), scores.size(), maximum);
+      EXPECT_TRUE(std::isnan(total));
+      for (std::size_t index = 0; index < scores.size(); ++index) {
+        if (index == nan_index || (index == 0 && maximum != 0.0f)) {
+          EXPECT_TRUE(std::isnan(scores[index])) << "index=" << index;
+        } else {
+          EXPECT_EQ(scores[index], index == 0 ? 1.0f : 0.0f) << "index=" << index;
+        }
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "AVX2/FMA kernels were not built";
+#endif
+}
+
 TEST(AttentionDescriptor, ValidatesOpsetRange) {
   ml_cpu_compute::AttentionDescriptor descriptor;
   descriptor.opset = 22;
