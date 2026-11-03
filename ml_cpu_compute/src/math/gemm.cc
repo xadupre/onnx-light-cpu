@@ -1852,22 +1852,74 @@ bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
 
 namespace detail {
 
+namespace {
+
+std::size_t WideWeightElementCount(std::size_t n, std::size_t k, const float *b) {
+  if (n % 16 != 0) {
+    throw std::invalid_argument("PackGemmWideB: N must be a multiple of 16.");
+  }
+  const std::size_t elements = CheckedMultiply(n, k, "PackGemmWideB", "weight elements");
+  CheckedByteSize(elements, sizeof(float), "PackGemmWideB", "weight storage");
+  if (elements != 0 && b == nullptr) {
+    throw std::invalid_argument("PackGemmWideB: nonempty source must not be null.");
+  }
+  return elements;
+}
+
+} // namespace
+
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
+  std::vector<float> packed(WideWeightElementCount(n, k, b));
+  PackGemmWideB(n, k, b, packed.data());
+  return packed;
+}
+
+void PackGemmWideB(std::size_t n, std::size_t k, const float *b, float *packed) {
+  if (WideWeightElementCount(n, k, b) == 0) {
+    return;
+  }
+  if (packed == nullptr) {
+    throw std::invalid_argument("PackGemmWideB: nonempty destination must not be null.");
+  }
   constexpr std::size_t width = 16;
-  std::vector<float> packed(n * k);
   for (std::size_t col = 0; col < n; col += width) {
-    float *panel = packed.data() + col * k;
+    float *panel = packed + col * k;
     for (std::size_t depth = 0; depth < k; ++depth) {
       std::copy_n(b + depth * n + col, width, panel + depth * width);
     }
   }
-  return packed;
 }
 
 void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
                        const float *packed_b, float beta, const float *c, float *y,
                        std::size_t mr) {
   constexpr std::size_t width = 16;
+  if (n % width != 0 || mr == 0) {
+    throw std::invalid_argument("GemmWidePreparedB: N must be a multiple of 16 and MR positive.");
+  }
+  if (m == 0 || n == 0) {
+    return;
+  }
+  const std::size_t elements = CheckedMultiply(m, n, "GemmWidePreparedB", "output elements");
+  CheckedByteSize(elements, sizeof(float), "GemmWidePreparedB", "output storage");
+  CheckedByteSize(CheckedMultiply(m, k, "GemmWidePreparedB", "A elements"), sizeof(float),
+                  "GemmWidePreparedB", "A storage");
+  CheckedByteSize(CheckedMultiply(n, k, "GemmWidePreparedB", "B elements"), sizeof(float),
+                  "GemmWidePreparedB", "B storage");
+  if (y == nullptr || (k != 0 && (a == nullptr || packed_b == nullptr))) {
+    throw std::invalid_argument("GemmWidePreparedB: nonempty buffers must not be null.");
+  }
+  if (k == 0) {
+    for (std::size_t index = 0; index < elements; ++index) {
+      float value = alpha * 0.0f;
+      if (c != nullptr && beta != 0.0f) {
+        value += beta * c[index];
+      }
+      y[index] = value;
+    }
+    return;
+  }
+  static const GemmImplementation kind = SelectGemmImplementation<float>();
   const GemmAccumMode mode =
       c != nullptr && beta != 0.0f ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
   ExecuteRanges(static_cast<std::int64_t>(n / width),
@@ -1879,9 +1931,9 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
                     const float *b = packed_b + col * k;
                     for (std::size_t row = 0; row < m; row += mr) {
                       const std::size_t rows = std::min(mr, m - row);
-                      GemmTileF32(GemmImplementation::kAVX2FMA, rows, width, k, alpha, beta, b,
-                                  width, c == nullptr ? nullptr : c + row * n + col, n,
-                                  y + row * n + col, n, 0, mode, a + row * k);
+                      GemmTileF32(kind, rows, width, k, alpha, beta, b, width,
+                                  c == nullptr ? nullptr : c + row * n + col, n, y + row * n + col,
+                                  n, 0, mode, a + row * k);
                     }
                   }
                 });

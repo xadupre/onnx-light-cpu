@@ -75,8 +75,14 @@ std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has
 
 std::size_t SelectGemmRegisterRows(SimdLevel level, bool has_fma);
 
-/// Constant-B AVX2 FP32 projection: panels have K rows of 16 contiguous columns.
+/// Constant-B FP32 projection: N must be a multiple of 16. Panels have K rows
+/// of 16 contiguous columns and use the runtime-selected SIMD micro-tile.
+/// Packing rejects misaligned N, overflowing sizes, and null nonempty buffers
+/// with std::invalid_argument. Empty matrices do not access either buffer.
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b);
+void PackGemmWideB(std::size_t n, std::size_t k, const float *b, float *packed);
+/// Execution also rejects zero mr and invalid sizes/buffers. Empty outputs access no buffers;
+/// zero K requires only Y (and optional C) and computes alpha * 0 + beta * C.
 void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
                        const float *packed_b, float beta, const float *c, float *y, std::size_t mr);
 
