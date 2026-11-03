@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -145,6 +146,56 @@ TEST(GemmFloat32, WidePackingAllowsEmptyMatricesWithoutBuffers) {
   EXPECT_TRUE(ml_cpu_compute::detail::PackGemmWideB(16, 0, nullptr).empty());
   EXPECT_NO_THROW(ml_cpu_compute::detail::PackGemmWideB(0, 512, nullptr, nullptr));
   EXPECT_NO_THROW(ml_cpu_compute::detail::PackGemmWideB(16, 0, nullptr, nullptr));
+}
+
+TEST(GemmFloat32, PreparedWidePanelsRejectInvalidInputsBeforeAccessingBuffers) {
+  const float source = 1;
+  float destination = -1;
+  const auto run = [&](std::size_t m, std::size_t n, std::size_t k, const float *a, const float *b,
+                       float *y, std::size_t mr) {
+    ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 1, a, b, 0, nullptr, y, mr);
+  };
+  for (std::size_t n : {1U, 15U, 17U, 31U}) {
+    EXPECT_THROW(run(1, n, 1, &source, &source, &destination, 1), std::invalid_argument);
+  }
+  EXPECT_THROW(run(1, 16, 1, &source, &source, &destination, 0), std::invalid_argument);
+  EXPECT_THROW(run(1, 16, 1, nullptr, &source, &destination, 1), std::invalid_argument);
+  EXPECT_THROW(run(1, 16, 1, &source, nullptr, &destination, 1), std::invalid_argument);
+  EXPECT_THROW(run(1, 16, 1, &source, &source, nullptr, 1), std::invalid_argument);
+  for (const std::size_t dimension :
+       {std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max() / 16}) {
+    EXPECT_THROW(run(dimension, 16, 1, &source, &source, &destination, 1), std::invalid_argument);
+    EXPECT_THROW(run(1, 16, dimension, &source, &source, &destination, 1), std::invalid_argument);
+  }
+  EXPECT_THROW(
+      run(16, 16, std::numeric_limits<std::size_t>::max() / 32, &source, &source, &destination, 1),
+      std::invalid_argument);
+  EXPECT_FLOAT_EQ(destination, -1);
+}
+
+TEST(GemmFloat32, PreparedWidePanelsHandleEmptyOutputsAndZeroDepth) {
+  for (const auto shape : {std::array<std::size_t, 3>{0, 16, 1}, {1, 0, 1}}) {
+    EXPECT_NO_THROW(ml_cpu_compute::detail::GemmWidePreparedB(
+        shape[0], shape[1], shape[2], 1, nullptr, nullptr, 0, nullptr, nullptr, 1));
+  }
+  for (const float alpha : {1.0f, std::numeric_limits<float>::infinity()}) {
+    std::vector<float> output(32, 3);
+    const std::vector<float> empty;
+    const auto expected = ReferenceGemm(false, false, 2, 16, 0, alpha, empty, empty, 2.0f, &output);
+    ml_cpu_compute::detail::GemmWidePreparedB(2, 16, 0, alpha, nullptr, nullptr, 2, output.data(),
+                                              output.data(), 3);
+    for (std::size_t index = 0; index < output.size(); ++index) {
+      if (std::isnan(expected[index])) {
+        EXPECT_TRUE(std::isnan(output[index]));
+      } else {
+        EXPECT_FLOAT_EQ(output[index], expected[index]);
+      }
+    }
+  }
+  std::vector<float> output(16, -1);
+  ml_cpu_compute::detail::GemmWidePreparedB(1, 16, 0, 1, nullptr, nullptr, 0, nullptr,
+                                            output.data(), 1);
+  EXPECT_EQ(output, std::vector<float>(16, 0));
 }
 
 TEST(GemmFloat32, PreparedWidePanelsMatchReferenceWithRowTailsAndBiasAliasing) {

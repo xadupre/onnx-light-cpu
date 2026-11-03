@@ -1894,6 +1894,31 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
                        const float *packed_b, float beta, const float *c, float *y,
                        std::size_t mr) {
   constexpr std::size_t width = 16;
+  if (n % width != 0 || mr == 0) {
+    throw std::invalid_argument("GemmWidePreparedB: N must be a multiple of 16 and MR positive.");
+  }
+  if (m == 0 || n == 0) {
+    return;
+  }
+  const std::size_t elements = CheckedMultiply(m, n, "GemmWidePreparedB", "output elements");
+  CheckedByteSize(elements, sizeof(float), "GemmWidePreparedB", "output storage");
+  CheckedByteSize(CheckedMultiply(m, k, "GemmWidePreparedB", "A elements"), sizeof(float),
+                  "GemmWidePreparedB", "A storage");
+  CheckedByteSize(CheckedMultiply(n, k, "GemmWidePreparedB", "B elements"), sizeof(float),
+                  "GemmWidePreparedB", "B storage");
+  if (y == nullptr || (k != 0 && (a == nullptr || packed_b == nullptr))) {
+    throw std::invalid_argument("GemmWidePreparedB: nonempty buffers must not be null.");
+  }
+  if (k == 0) {
+    for (std::size_t index = 0; index < elements; ++index) {
+      float value = alpha * 0.0f;
+      if (c != nullptr && beta != 0.0f) {
+        value += beta * c[index];
+      }
+      y[index] = value;
+    }
+    return;
+  }
   static const GemmImplementation kind = SelectGemmImplementation<float>();
   const GemmAccumMode mode =
       c != nullptr && beta != 0.0f ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
