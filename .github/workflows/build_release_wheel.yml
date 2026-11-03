@@ -7,6 +7,11 @@ on:
         description: "Git tag or ref to build (defaults to the branch the workflow is run from)."
         required: false
         type: string
+      macos_only:
+        description: "Build only macOS wheels (use tag to repair an existing release)."
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - "*"
@@ -18,6 +23,7 @@ concurrency:
 jobs:
   build_wheels_linux:
     name: wheels (linux, ${{ matrix.arch }})
+    if: ${{ !inputs.macos_only }}
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: write
@@ -166,7 +172,6 @@ jobs:
 
   build_wheels_macos:
     name: wheels (macos, universal2)
-    needs: build_wheels_linux
     runs-on: macos-latest
     permissions:
       contents: write
@@ -198,7 +203,9 @@ jobs:
             python -m pip install "cmake>=4" scikit-build-core nanobind==3.1.0 &&
             python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
-          CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
+          CIBW_TEST_COMMAND: >-
+            python {project}/unittests/python/wheel_registration_smoke.py &&
+            python -c "from onnx_light_cpu import register_kernels; register_kernels()"
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
             DYLD_LIBRARY_PATH="$(python -c 'from onnx_light import get_cpp_build_info as i;
             print(i()["library_dir"])')" delocate-wheel --exclude liblib_onnx_
