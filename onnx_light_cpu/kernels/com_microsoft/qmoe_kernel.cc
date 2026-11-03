@@ -111,6 +111,9 @@ bool Fits(const Tensor &weights, const Tensor &scales, std::size_t experts, std:
 QMoEKernel::QMoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::KernelContext &ctx)
     : KernelBase(ctx) {
   set_node(node);
+  if (rt_ns::GetAttributeStringOrDefault(node, "quant_type", "int") != "int") {
+    throw std::invalid_argument("QMoE: CPU execution supports only integer quantization.");
+  }
   const auto k = rt_ns::GetAttributeIntOrDefault(node, "k", 1);
   const auto bits = rt_ns::GetAttributeIntOrDefault(node, "expert_weight_bits", 4);
   const auto block = rt_ns::GetAttributeIntOrDefault(node, "block_size", 0);

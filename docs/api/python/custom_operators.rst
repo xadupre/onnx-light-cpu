@@ -219,6 +219,14 @@ FLOAT. It does not interpret CPU weights as CUDA's MatMulNBits block packing
 or TensorRT's shuffled prepacked format. Quantized weights are inference-only;
 no QMoE gradient or graph-fusion rule is registered.
 
+Shape inference additionally accepts ``quant_type="fp4"`` with 17 positional
+input slots, including empty optional slots. MXFP4 requires 4-bit ``UINT8``
+weights, ``FLOAT8E8M0`` block scales (block size 32, also the default for FP4),
+and ``FLOAT`` per-expert global scales ``[E]`` at slots 15 and 16.
+Both N-packed ``[E,K,N/2]`` and K-packed ``[E,N,K/2]`` weights use logical
+block scales ``[E,N,K/32]``; hidden and intermediate sizes must be block-aligned.
+This is metadata-only support: the CPU execution kernel rejects FP4.
+
 The cited builder's legacy ``qmoe_block_size=0`` fallback selects
 `TensorRT-LLM's preprocessed quantizer output
 <https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/thop/weightOnlyQuantOp.cpp>`_,

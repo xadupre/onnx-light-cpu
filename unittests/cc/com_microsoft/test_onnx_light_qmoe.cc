@@ -200,6 +200,12 @@ TEST(QMoERuntime, RejectsInvalidQuantizationAndRoutingAttributes) {
   }
 }
 
+TEST(QMoERuntime, RejectsFP4ExecutionEvenWhenShapeInferenceSupportsIt) {
+  NodeProto node = MakeNode();
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "quant_type", std::string("fp4"));
+  EXPECT_THROW(QMoEKernel(node, Context()), std::invalid_argument);
+}
+
 TEST(QMoERuntime, RejectsInvalidActivationParameters) {
   for (const auto &entry : std::vector<std::pair<std::string, float>>{
            {"activation_alpha", std::numeric_limits<float>::quiet_NaN()},
