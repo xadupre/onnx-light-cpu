@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file. The format is b
 ### Improvements
 
 - Bumped the project version to 0.2.5 ([#1083](https://github.com/xadupre/onnx-light-cpu/issues/1083)).
+- Migrated all 14 peak-memory callbacks to onnx-light 0.2.5's node-aware `PeakMemoryEstimate` interface, preserving concrete scratch bounds and distinguishing exact zero workspace from unresolved symbolic estimates ([#1087](https://github.com/xadupre/onnx-light-cpu/pull/1087)).
+- Added mandatory onnx-light 0.2.5 GitHub wheel dependencies selected by Python 3.12–3.14, operating system, and architecture. These direct URLs prevent PyPI publication and require the matching upstream wheel to be available, with no older-version fallback ([#1087](https://github.com/xadupre/onnx-light-cpu/pull/1087)).
+
+### Documentation & CI
+
+- Aligned CI and release tooling with onnx-light 0.2.5, enforced its minimum version in source and exported CMake configurations, isolated AVX2 benchmark source checkouts on persistent runners, and corrected native registration-extension detection ([#1087](https://github.com/xadupre/onnx-light-cpu/pull/1087)).
+- Added a macOS-only release-wheel recovery workflow for existing tags, with universal2 builds for Python 3.12–3.14 and native session-registration smoke checks before uploading ([#1086](https://github.com/xadupre/onnx-light-cpu/pull/1086)).
 
 ## [0.2.4] – Unreleased
 
