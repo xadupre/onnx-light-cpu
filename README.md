@@ -19,7 +19,7 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
-Current development version: **0.2.5**. See the [changelog](CHANGELOGS.md)
+Current development version: **0.2.6**. See the [changelog](CHANGELOGS.md)
 for changes. CI validates the runtime integration against **onnx-light 0.2.5**.
 
 ## Installation
@@ -32,7 +32,7 @@ pip install onnx-light-cpu
 
 To build the current development version, use the source instructions below.
 
-Development version 0.2.5 requires platform-specific **onnx-light 0.2.5** wheels
+Development version 0.2.6 requires platform-specific **onnx-light 0.2.5** wheels
 hosted on GitHub. These direct-URL dependencies prevent uploading its distributions
 to PyPI; use source builds or GitHub release wheels instead. Installation requires
 the matching upstream wheel to be published, with no fallback to an older version.
