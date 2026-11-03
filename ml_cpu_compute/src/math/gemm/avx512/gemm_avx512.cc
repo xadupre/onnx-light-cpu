@@ -147,8 +147,17 @@ void GemmMicroTile_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, fl
   // Scalar tail (< 16 lanes): reuse the shared scalar micro-tiles from
   // gemm.cc instead of duplicating the mode-driven combine logic.
   if (n < nb) {
-    GemmMicroTile_Scalar_F32(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
-                             Ystride, n0 + n, mode, Apack);
+    if (AStride == K) {
+      GemmMicroTile_Scalar_F32(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                               Ystride, n0 + n, mode, Apack);
+    } else {
+      for (std::size_t row = 0; row < MR; ++row) {
+        GemmMicroTile_Scalar_F32(1, nb - n, K, alpha, beta, Bmat, N,
+                                 Crow_base == nullptr ? nullptr : Crow_base + row * Cstride,
+                                 Cstride, Yrow_base + row * Ystride, Ystride, n0 + n, mode,
+                                 Apack + row * AStride);
+      }
+    }
   }
 }
 
@@ -262,6 +271,15 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
                                    std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
                                    std::size_t n0, GemmAccumMode mode, const float *Apack,
                                    std::size_t AStride) {
+  // Keep wide products on the named-accumulator kernel instead of spilling the generic arrays.
+  if (nb > 32) {
+    for (std::size_t column = 0; column < nb; column += 32) {
+      GemmMicroTile_AVX512_F32_MR12(std::min<std::size_t>(32, nb - column), K, alpha, beta, Bmat, N,
+                                    Crow_base, Cstride, Yrow_base, Ystride, n0 + column, mode,
+                                    Apack, AStride);
+    }
+    return;
+  }
   if (nb != 32) {
     return GemmMicroTile_AVX512_F32Impl<12>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                             Yrow_base, Ystride, n0, mode, Apack, AStride);

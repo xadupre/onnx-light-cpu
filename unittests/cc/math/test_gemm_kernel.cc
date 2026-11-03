@@ -737,6 +737,138 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
     EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "i=" << i;
   }
 }
+
+namespace {
+
+void CheckAvx512RegisterTiles(std::size_t M, std::size_t N, std::size_t K, bool strided_a,
+                              bool alias_bias) {
+  using ml_cpu_compute::GemmAccumMode;
+  SCOPED_TRACE(::testing::Message() << "M=" << M << " N=" << N << " K=" << K
+                                    << " strided_a=" << strided_a << " alias_bias=" << alias_bias);
+  const std::size_t a_stride = K + (strided_a ? 5 : 0);
+  const std::size_t b_stride = N + 5;
+  const std::size_t y_stride = N + 7;
+  const std::size_t c_stride = alias_bias ? y_stride : N + 9;
+  const auto a_storage = RandomVector(M * a_stride + 1, 401);
+  const auto b_storage = RandomVector(K * b_stride + 1, 402);
+  const auto c_storage = RandomVector(M * c_stride + 1, 403);
+  std::vector<float> a(M * K), b(K * N);
+  for (std::size_t row = 0; row < M; ++row) {
+    std::copy_n(a_storage.data() + 1 + row * a_stride, K, a.data() + row * K);
+  }
+  for (std::size_t row = 0; row < K; ++row) {
+    std::copy_n(b_storage.data() + 2 + row * b_stride, N, b.data() + row * N);
+  }
+  for (const auto mode : {GemmAccumMode::kInitZero, GemmAccumMode::kInitBias,
+                          GemmAccumMode::kInitColumnBias, GemmAccumMode::kAccumulate}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    auto output = RandomVector(M * y_stride + 2, 404);
+    const auto initial = output;
+    const float *c = alias_bias ? output.data() + 1 : c_storage.data() + 1;
+    std::vector<float> bias(M * N);
+    for (std::size_t row = 0; row < M; ++row) {
+      for (std::size_t column = 0; column < N; ++column) {
+        bias[row * N + column] =
+            mode == GemmAccumMode::kAccumulate
+                ? initial[1 + row * y_stride + 1 + column]
+                : c[row * c_stride + (mode == GemmAccumMode::kInitColumnBias ? 0 : 1 + column)];
+      }
+    }
+    const auto expected = ReferenceGemm(false, false, M, N, K, 0.75f, a, b,
+                                        mode == GemmAccumMode::kInitZero     ? 0.0f
+                                        : mode == GemmAccumMode::kAccumulate ? 1.0f
+                                                                             : -0.5f,
+                                        &bias);
+    if (strided_a) {
+      ml_cpu_compute::GemmMicroTile_AVX512_F32_StridedA(
+          M, N, K, 0.75f, -0.5f, b_storage.data() + 1, b_stride, c, c_stride, output.data() + 1,
+          y_stride, 1, mode, a_storage.data() + 1, a_stride);
+    } else {
+      ml_cpu_compute::GemmMicroTile_AVX512_F32(M, N, K, 0.75f, -0.5f, b_storage.data() + 1,
+                                               b_stride, c, c_stride, output.data() + 1, y_stride,
+                                               1, mode, a_storage.data() + 1);
+    }
+    EXPECT_EQ(output.front(), initial.front());
+    EXPECT_EQ(output.back(), initial.back());
+    for (std::size_t row = 0; row < M; ++row) {
+      for (std::size_t column = 0; column < y_stride; ++column) {
+        const auto index = 1 + row * y_stride + column;
+        if (column >= 1 && column < N + 1) {
+          EXPECT_NEAR(output[index], expected[row * N + column - 1], 5e-4f)
+              << "row=" << row << " column=" << column;
+        } else {
+          EXPECT_EQ(output[index], initial[index]) << "row=" << row << " column=" << column;
+        }
+      }
+    }
+  }
+}
+
+} // namespace
+
+TEST(GemmFloat32, Avx512RegisterTilesPreserveModesAndColumnTails) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is required";
+  }
+  for (const std::size_t N : {31, 32, 33, 47, 63, 64, 65, 95, 96, 97, 127, 128, 129}) {
+    for (const std::size_t K : {0, 1, 7, 128, 129}) {
+      for (const bool strided_a : {false, true}) {
+        CheckAvx512RegisterTiles(12, N, K, strided_a, false);
+      }
+    }
+  }
+}
+
+TEST(GemmFloat32, Avx512RegisterTilesPreserveAliasingAndRowTails) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is required";
+  }
+  for (const std::size_t M : {13, 23}) {
+    for (const std::size_t N : {33, 65, 129}) {
+      for (const bool strided_a : {false, true}) {
+        CheckAvx512RegisterTiles(M, N, 17, strided_a, true);
+      }
+    }
+  }
+}
+
+TEST(GemmFloat32, Avx512RegisterTilesPreserveNonfiniteValues) {
+  if (ml_cpu_compute::DetectSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is required";
+  }
+  using ml_cpu_compute::GemmAccumMode;
+  constexpr std::size_t M = 12, N = 65;
+  const std::array<float, 7> values{std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity(),
+                                    std::numeric_limits<float>::denorm_min(),
+                                    0.0f,
+                                    -0.0f,
+                                    1.25f};
+  const std::vector<float> a(M, 1.0f), bias(M * N, 1.0f);
+  std::vector<float> b(N);
+  for (std::size_t column = 0; column < N; ++column) {
+    b[column] = values[column % values.size()];
+  }
+  for (const auto mode : {GemmAccumMode::kInitZero, GemmAccumMode::kInitBias,
+                          GemmAccumMode::kInitColumnBias, GemmAccumMode::kAccumulate}) {
+    const auto expected = ReferenceGemm(false, false, M, N, 1, 0.75f, a, b,
+                                        mode == GemmAccumMode::kInitZero     ? 0.0f
+                                        : mode == GemmAccumMode::kAccumulate ? 1.0f
+                                                                             : -0.5f,
+                                        &bias);
+    std::vector<float> output(M * N, 1.0f);
+    ml_cpu_compute::GemmMicroTile_AVX512_F32(M, N, 1, 0.75f, -0.5f, b.data(), N, bias.data(), N,
+                                             output.data(), N, 0, mode, a.data());
+    for (std::size_t index = 0; index < output.size(); ++index) {
+      if (std::isnan(expected[index])) {
+        EXPECT_TRUE(std::isnan(output[index])) << "index=" << index;
+      } else {
+        EXPECT_FLOAT_EQ(output[index], expected[index]) << "index=" << index;
+      }
+    }
+  }
+}
 #endif
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
