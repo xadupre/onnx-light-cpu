@@ -51,7 +51,7 @@ jobs:
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.3.4
+        uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-musllinux_*"
@@ -128,7 +128,7 @@ jobs:
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.3.4
+        uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: ${{ matrix.arch }}
@@ -193,7 +193,7 @@ jobs:
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.3.4
+        uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: universal2
