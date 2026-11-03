@@ -1,7 +1,9 @@
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from tools.onnx_light_release import (
     ONNX_LIGHT_VERSION,
@@ -17,6 +19,38 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 def test_onnx_light_release_version():
     assert ONNX_LIGHT_VERSION == "0.2.5"
+
+
+@pytest.mark.parametrize("python_version", [(3, 12), (3, 13), (3, 14)])
+@pytest.mark.parametrize(
+    ("system", "machine", "sys_platform"),
+    [
+        ("Linux", "x86_64", "linux"),
+        ("Linux", "aarch64", "linux"),
+        ("Windows", "AMD64", "win32"),
+        ("Windows", "ARM64", "win32"),
+        ("Darwin", "x86_64", "darwin"),
+        ("Darwin", "arm64", "darwin"),
+    ],
+)
+def test_project_selects_matching_github_runtime_wheel(
+    system, machine, sys_platform, python_version
+):
+    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    environment = {
+        "python_version": ".".join(map(str, python_version)),
+        "sys_platform": sys_platform,
+        "platform_machine": machine,
+    }
+    requirements = [Requirement(dependency) for dependency in metadata["project"]["dependencies"]]
+    selected = [
+        requirement
+        for requirement in requirements
+        if requirement.name == "onnx-light"
+        and (requirement.marker is None or requirement.marker.evaluate(environment))
+    ]
+    assert len(selected) == 1, (environment, selected)
+    assert selected[0].url == wheel_url(system, machine, python_version)
 
 
 def test_avx2_parity_uses_release_version():

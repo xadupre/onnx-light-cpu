@@ -323,11 +323,12 @@ def test_dependabot_updates_actions_and_python_dependencies():
         ) in _DEPENDABOT_CONFIG
 
 
-def test_native_kernel_tests_are_version_gated_in_standalone():
+def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standalone():
     standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
     assert 'installed = version("onnx-light")' in standalone_job
     assert ">= (0, 2, 5)" in standalone_job
+    assert 'find_spec("onnx_light_cpu._cpuregister") is not None' in standalone_job
     assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
         "test_api_doc.py",
