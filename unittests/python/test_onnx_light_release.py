@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,52 @@ def test_onnx_light_release_version():
 
 def test_avx2_parity_uses_release_version():
     workflow = (_ROOT / ".github" / "workflows" / "avx2_parity.yml").read_text(encoding="utf-8")
-    assert "python tools/onnx_light_release.py clone ../onnx-light" in workflow
-    assert "python -m pip install -C wheel.py-api=cp312 ../onnx-light" in workflow
+    assert 'onnx_light_source=$(mktemp -d "${RUNNER_TEMP}/onnx-light.XXXXXX")' in workflow
+    assert 'python tools/onnx_light_release.py clone "${onnx_light_source}"' in workflow
+    assert 'python -m pip install -C wheel.py-api=cp312 "${onnx_light_source}"' in workflow
+    assert (
+        'echo "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=${onnx_light_source}" >> "${GITHUB_ENV}"'
+        in workflow
+    )
+    assert "../onnx-light" not in workflow
+
+
+@pytest.mark.parametrize("dependency_version", ["0.2.4.1", "0.2.5"])
+def test_installed_cmake_package_requires_compatible_onnx_light(tmp_path, dependency_version):
+    template = (_ROOT / "cmake" / "onnx_light_cpuConfig.cmake.in").as_posix()
+    (tmp_path / "CMakeLists.txt").write_text(
+        f"""
+cmake_minimum_required(VERSION 3.15)
+project(CheckInstalledDependency LANGUAGES CXX)
+include(CMakePackageConfigHelpers)
+set(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT ON)
+configure_package_config_file("{template}"
+  "${{CMAKE_BINARY_DIR}}/onnx_light_cpuConfig.cmake" INSTALL_DESTINATION lib/cmake)
+file(WRITE "${{CMAKE_BINARY_DIR}}/onnx_light_cpuTargets.cmake"
+  "add_library(onnx_light_cpu::ml_cpu_compute INTERFACE IMPORTED)\\n")
+file(WRITE "${{CMAKE_BINARY_DIR}}/dependency/onnx_lightConfig.cmake" "")
+write_basic_package_version_file(
+  "${{CMAKE_BINARY_DIR}}/dependency/onnx_lightConfigVersion.cmake"
+  VERSION {dependency_version} COMPATIBILITY SameMajorVersion)
+set(onnx_light_DIR "${{CMAKE_BINARY_DIR}}/dependency")
+set(onnx_light_cpu_DIR "${{CMAKE_BINARY_DIR}}")
+find_package(onnx_light_cpu CONFIG REQUIRED)
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "build")],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if dependency_version == "0.2.5":
+        assert result.returncode == 0, result.stdout
+    else:
+        assert result.returncode != 0, result.stdout
+        assert "onnx_light" in result.stdout
+        assert "0.2.5" in result.stdout
 
 
 def test_source_workflows_use_release_version():

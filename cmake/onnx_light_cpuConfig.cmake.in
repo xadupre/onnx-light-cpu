@@ -3,7 +3,7 @@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
 if(@ONNX_LIGHT_CPU_WITH_ONNX_LIGHT@)
-  find_dependency(onnx_light CONFIG)
+  find_dependency(onnx_light 0.2.5 CONFIG)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/onnx_light_cpuTargets.cmake")
