@@ -7,7 +7,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-ONNX_LIGHT_VERSION = "0.2.5"
+
+def minimum_version():
+    """Read the requirement even in cibuildwheel's Python 3.9 before-all hook."""
+    metadata = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    match = re.search(
+        r'"onnx-light>=([0-9]+(?:\.[0-9]+)*)"', metadata.read_text(encoding="utf-8")
+    )
+    if match:
+        return match.group(1)
+    raise ValueError("Missing onnx-light minimum version in pyproject.toml")
+
+
+ONNX_LIGHT_VERSION = minimum_version()
 
 
 def wheel_name(system, machine, python_version):

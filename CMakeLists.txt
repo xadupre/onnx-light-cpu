@@ -11,6 +11,14 @@ endif()
 
 project(onnx_light_cpu VERSION 0.2.5 LANGUAGES CXX)
 
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" _onnx_light_requirement
+    REGEX "^[ \t]*\"onnx-light>=[0-9.]+\"")
+string(REGEX MATCH "[0-9]+(\\.[0-9]+)*"
+    ONNX_LIGHT_CPU_ONNX_LIGHT_MIN_VERSION "${_onnx_light_requirement}")
+if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_MIN_VERSION)
+  message(FATAL_ERROR "Missing onnx-light minimum version in pyproject.toml")
+endif()
+
 # CMake 4.1 introduced CMP0178, which stops silently discarding empty test
 # launcher / crosscompiling-emulator arguments. With the NEW behaviour,
 # gtest_discover_tests passes an empty executor (``-- ""``) to its discovery
@@ -412,7 +420,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       endif()
     endif()
   else()
-    find_package(onnx_light 0.2.5 CONFIG REQUIRED)
+    find_package(onnx_light ${ONNX_LIGHT_CPU_ONNX_LIGHT_MIN_VERSION} CONFIG REQUIRED)
   endif()
   if(NOT TARGET onnx_light::lib_onnx_kernels)
     message(FATAL_ERROR

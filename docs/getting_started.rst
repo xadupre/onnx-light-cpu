@@ -70,7 +70,8 @@ the extension is located through the selected source package, and linking uses
 the resolved runtime-library paths.
 
 Python builds that exchange nanobind-bound C++ objects must also use the same
-effective ABI mode. Release builds target onnx-light 0.2.5; its wheels must be
+effective ABI mode. Release builds target the
+minimum onnx-light version declared in ``pyproject.toml``; its wheels must be
 published before the matching onnx-light-cpu release can be built. The release
 configuration uses nanobind's
 native ABI even though ``ONNX_LIGHT_PYTHON_STABLE_ABI`` defaults to ``ON``:
@@ -83,7 +84,7 @@ such as ``RuntimeContext`` cannot cross the module boundary. A downstream build
 must match the effective ABI reported by onnx-light rather than infer it from a
 CMake option or wheel tag.
 
-With onnx-light 0.2.5 source checkouts, the standalone proto headers are under
+With onnx-light source checkouts, the standalone proto headers are under
 ``onnx_proto/include`` and their helpers under ``onnx_proto/helpers/include``.
 ``--onnx-light-source`` uses those paths while still linking the exact core
 and proto shared libraries loaded by Python. Source checkouts with the

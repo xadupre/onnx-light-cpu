@@ -20,7 +20,8 @@ to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
 Current development version: **0.2.5**. See the [changelog](CHANGELOGS.md)
-for changes. CI validates the runtime integration against **onnx-light 0.2.5**.
+for changes. CI validates the runtime integration against the
+minimum **onnx-light** version declared in `pyproject.toml`.
 
 ## Installation
 
@@ -32,10 +33,9 @@ pip install onnx-light-cpu
 
 To build the current development version, use the source instructions below.
 
-Development version 0.2.5 requires platform-specific **onnx-light 0.2.5** wheels
-hosted on GitHub. These direct-URL dependencies prevent uploading its distributions
-to PyPI; use source builds or GitHub release wheels instead. Installation requires
-the matching upstream wheel to be published, with no fallback to an older version.
+The minimum onnx-light version is declared once in the project dependencies in
+`pyproject.toml`. CI source builds and GitHub release wheel downloads derive their
+version from that requirement; package installations accept that version or newer.
 
 ### Recover missing macOS release wheels
 

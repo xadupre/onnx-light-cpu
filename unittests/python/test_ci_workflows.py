@@ -73,7 +73,7 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
 
 
 def test_documentation_does_not_replace_onnx_light_release():
-    assert "git clone --depth 1 --branch 0.2.5" in _DOCS_WORKFLOW
+    assert "python tools/onnx_light_release.py clone /tmp/onnx-light" in _DOCS_WORKFLOW
     assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
@@ -90,15 +90,17 @@ def test_standalone_source_build_allows_time_for_both_projects():
 
 def test_standalone_source_build_uses_onnx_light_release():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
-    assert "git clone --depth 1 --branch 0.2.5" in standalone_job
+    assert (
+        'python tools/onnx_light_release.py clone "${RUNNER_TEMP}/onnx-light"' in standalone_job
+    )
     assert "git clone --depth 1 --branch main" not in standalone_job
 
 
 def test_onnx_light_build_workflows_install_cmake_four_or_newer():
     for name, build_command in (
-        ("ci_core.yml", "git clone --depth 1 --branch"),
-        ("docs.yml", "git clone --depth 1 --branch"),
-        ("cpp_standalone.yml", "git clone --depth 1 --branch"),
+        ("ci_core.yml", "python tools/onnx_light_release.py clone"),
+        ("docs.yml", "python tools/onnx_light_release.py clone"),
+        ("cpp_standalone.yml", "python tools/onnx_light_release.py clone"),
         ("avx2_parity.yml", "python setup.py"),
     ):
         workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
@@ -275,8 +277,8 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "name: onnx-light 0.2.5 (" in source_job
-    assert "git clone --depth 1 --branch 0.2.5" in source_job
+    assert "name: onnx-light release (" in source_job
+    assert 'python tools/onnx_light_release.py clone "${onnx_light_source}"' in source_job
     assert "git clone --depth 1 --branch main" not in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
