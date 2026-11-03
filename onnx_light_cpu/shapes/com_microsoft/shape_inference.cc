@@ -661,9 +661,15 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
       const auto &s = ctx.Get(node.input(si));
       const auto leading = major ? out : in;
       const auto last = major ? in : out;
-      if (fp4 && ((in.IsInt() && (in.AsInt() <= 0 || in.AsInt() % block != 0)) ||
-                  (out.IsInt() && (out.AsInt() <= 0 || out.AsInt() % 2 != 0)))) {
-        return false;
+      if (fp4) {
+        const auto &stored_reduction = w.Shape()[major ? 2 : 1];
+        const auto stored_block = major ? block / (8 / bits) : block;
+        if ((in.IsInt() && (in.AsInt() <= 0 || in.AsInt() % block != 0)) ||
+            (out.IsInt() && (out.AsInt() <= 0 || out.AsInt() % 2 != 0)) ||
+            (stored_reduction.IsInt() &&
+             (stored_reduction.AsInt() <= 0 || stored_reduction.AsInt() % stored_block != 0))) {
+          return false;
+        }
       }
       return w.Shape().Rank() == 3 && s.Shape().Rank() == (block == 0 ? 2 : 3) &&
              compatible(experts, w.Shape()[0]) && compatible(leading, w.Shape()[1]) &&
