@@ -32,6 +32,11 @@ pip install onnx-light-cpu
 
 To build the current development version, use the source instructions below.
 
+Development version 0.2.5 requires platform-specific **onnx-light 0.2.5** wheels
+hosted on GitHub. These direct-URL dependencies prevent uploading its distributions
+to PyPI; use source builds or GitHub release wheels instead. Installation requires
+the matching upstream wheel to be published, with no fallback to an older version.
+
 ## Build from source
 
 ### Prerequisites

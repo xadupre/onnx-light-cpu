@@ -328,7 +328,7 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
     assert 'installed = version("onnx-light")' in standalone_job
     assert "== (0, 2, 5)" in standalone_job
-    assert 'find_spec("onnx_light_cpu._cpuregister") is not None' in standalone_job
+    assert 'find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None' in standalone_job
     assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
         "test_api_doc.py",

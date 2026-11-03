@@ -100,7 +100,7 @@ jobs:
           compatible = (
               match is not None
               and tuple(map(int, match.groups())) == (0, 2, 5)
-              and find_spec("onnx_light_cpu._cpuregister") is not None
+              and find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None
           )
           ignored = [
               "test_api_doc.py",
