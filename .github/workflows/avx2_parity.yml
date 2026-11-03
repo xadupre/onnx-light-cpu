@@ -55,7 +55,9 @@ jobs:
       - name: Install benchmark dependencies
         run: |
           python -m pip install "cmake>=4" nanobind scikit-build-core setuptools numpy ml_dtypes \
-            onnxruntime openpyxl "onnx-light==0.2.4.1"
+            onnxruntime openpyxl
+          python tools/onnx_light_release.py clone ../onnx-light
+          python -m pip install -C wheel.py-api=cp312 ../onnx-light
           python - <<'PY'
           import os
           from onnx_light import get_cpp_build_info

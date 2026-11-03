@@ -147,14 +147,16 @@ TEST(CustomOperatorSupport, QMoESymbolicShapeAndInvalidContracts) {
                                                        {},
                                                        {SymDim(3), SymDim(8), SymDim(3)},
                                                        {SymDim(3), SymDim(8), SymDim(1)}};
-  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, memory_shapes),
+  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, node, memory_shapes)
+                .worst_case.AsInt(),
             (3 * 10 * 8 + 3 * 8 * 5) * static_cast<int64_t>(sizeof(float)));
   auto empty_shapes = memory_shapes;
   empty_shapes[0] = sym_ns::SymShape{SymDim(int64_t{0}), SymDim(8)};
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, empty_shapes), 0);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, node, empty_shapes),
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
   EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryQMoE(
-                sym_ns::Device::kCPU, {ctx.Get("X").Shape(), ctx.Get("router").Shape()}),
-            0);
+                sym_ns::Device::kCPU, node, {ctx.Get("X").Shape(), ctx.Get("router").Shape()}),
+            shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "QMoE"));
   ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(2)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
   ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(1)}));
@@ -464,8 +466,8 @@ TEST(CustomOperatorSupport, InfersCausalConvSymbolicStateAndConstraints) {
   EXPECT_EQ(ctx.Constraints().size(), 5U);
   EXPECT_EQ(ctx.Constraints().count({"(K-1)*2", "P"}), 1U);
   EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryCausalConvWithState(
-                sym_ns::Device::kCPU, {ctx.Get("X").Shape(), ctx.Get("W").Shape()}),
-            0);
+                sym_ns::Device::kCPU, node, {ctx.Get("X").Shape(), ctx.Get("W").Shape()}),
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 }
 
 TEST(CustomOperatorSupport, InfersHigherRankChannelsLastCausalConvWithSchema) {
@@ -534,16 +536,18 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
   EXPECT_EQ(ctx.Get("output").Shape(), ctx.Get("input").Shape());
   EXPECT_EQ(ctx.Get("output").Dtype(), TensorType::kFloat16);
   EXPECT_EQ(ctx.Constraints().size(), 1U);
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, {ctx.Get("input").Shape(),
-                                                                        ctx.Get("router").Shape(),
-                                                                        ctx.Get("fc1").Shape(),
-                                                                        {},
-                                                                        ctx.Get("fc2").Shape()}),
-            0);
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(
-                sym_ns::Device::kCPU, {ctx.Get("input").Shape(), ctx.Get("router").Shape(),
-                                       ctx.Get("fc1").Shape(), ctx.Get("fc2").Shape()}),
-            0);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, node,
+                                                 {ctx.Get("input").Shape(),
+                                                  ctx.Get("router").Shape(),
+                                                  ctx.Get("fc1").Shape(),
+                                                  {},
+                                                  ctx.Get("fc2").Shape()}),
+            shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "MoE"));
+  EXPECT_EQ(
+      onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, node,
+                                           {ctx.Get("input").Shape(), ctx.Get("router").Shape(),
+                                            ctx.Get("fc1").Shape(), ctx.Get("fc2").Shape()}),
+      shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "MoE"));
   const sym_ns::SymShape router_shape{SymDim(8), SymDim(3)};
   const sym_ns::SymShape fc1_shape{SymDim(3), SymDim(10), SymDim(8)};
   const sym_ns::SymShape fc2_shape{SymDim(3), SymDim(8), SymDim(5)};
@@ -551,23 +555,23 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
       8 * 3 * static_cast<std::int64_t>(sizeof(ml_cpu_compute::MoERoute)) +
       8 * (3 + 10 + 5 + 2 * 8) * static_cast<std::int64_t>(sizeof(float));
   EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(
-                sym_ns::Device::kCPU,
+                sym_ns::Device::kCPU, node,
                 {sym_ns::SymShape{SymDim(8), SymDim(8)}, router_shape, fc1_shape, {}, fc2_shape}),
-            expected_scratch);
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU,
+            shapes_ns::PeakMemoryEstimate(expected_scratch));
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, node,
                                                  {sym_ns::SymShape{SymDim(2), SymDim(4), SymDim(8)},
                                                   router_shape,
                                                   fc1_shape,
                                                   {},
                                                   fc2_shape}),
-            expected_scratch);
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU,
+            shapes_ns::PeakMemoryEstimate(expected_scratch));
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, node,
                                                  {sym_ns::SymShape{SymDim(int64_t{0}), SymDim(8)},
                                                   sym_ns::SymShape{SymDim(int64_t{0}), SymDim(3)},
                                                   fc1_shape,
                                                   {},
                                                   fc2_shape}),
-            0);
+            shapes_ns::PeakMemoryEstimate(int64_t{0}));
 
   shapes_ns::ShapesContext qwen35;
   qwen35.Set("input", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(1), SymDim(2048)}));
@@ -753,9 +757,9 @@ TEST(CustomOperatorSupport, InfersSkipLayerNormalizationOutputsAndConstraints) {
   EXPECT_EQ(ctx.Get("mean").Dtype(), TensorType::kFloat);
   EXPECT_EQ(ctx.Get("inverse").Dtype(), TensorType::kFloat);
   EXPECT_EQ(ctx.Get("mean").Shape()[2], SymDim(1));
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemorySkipLayerNormalization(sym_ns::Device::kCPU,
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemorySkipLayerNormalization(sym_ns::Device::kCPU, node,
                                                                     {ctx.Get("input").Shape()}),
-            0);
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 
   shapes_ns::ShapesContext invalid;
   invalid.Set("input", SymTensor(nullptr, TensorType::kFloat16,
@@ -1195,38 +1199,76 @@ TEST(CustomOperatorSupport, RegisteredLinearAttentionPreservesFloatingTypes) {
   }
 }
 
+TEST(CustomOperatorSupport, MissingAndSymbolicScratchBoundsRemainUnresolved) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  using sym_ns::SymShape;
+  const std::vector<std::pair<std::string, std::vector<SymShape>>> cases = {
+      {"MoE",
+       {{SymDim("B"), SymDim(8)},
+        {SymDim("B"), SymDim(3)},
+        {SymDim(3), SymDim(10), SymDim(8)},
+        {SymDim(3), SymDim(8), SymDim(5)}}},
+      {"QMoE",
+       {{SymDim("B"), SymDim(8)},
+        {SymDim("B"), SymDim(3)},
+        {SymDim(3), SymDim(10), SymDim(4)},
+        {SymDim(3), SymDim(10), SymDim(1)}}},
+      {"GroupQueryAttention", {{SymDim("B"), SymDim(3), SymDim(16)}, {}, {}}},
+      {"MultiHeadAttention",
+       {{SymDim("B"), SymDim(3), SymDim(8)}, {SymDim(2), SymDim(5), SymDim(8)}}},
+      {"LinearAttention",
+       {{SymDim(2), SymDim(3), SymDim(8)},
+        {SymDim(2), SymDim(3), SymDim(8)},
+        {SymDim("B"), SymDim(3), SymDim(12)}}},
+  };
+  for (const auto &[op_type, input_shapes] : cases) {
+    SCOPED_TRACE(op_type);
+    NodeProto node;
+    node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+    node.set_op_type(op_type);
+    for (const auto &shapes : {std::vector<SymShape>{}, input_shapes}) {
+      const auto estimate = shapes_ns::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes);
+      EXPECT_TRUE(estimate.worst_case.IsExpr());
+      EXPECT_FALSE(estimate.worst_case.AsExpr().empty());
+      EXPECT_FALSE(estimate.average_case.has_value());
+      EXPECT_EQ(estimate, shapes_ns::ComputePeakMemory(node.domain(), node.op_type(),
+                                                       sym_ns::Device::kCPU, shapes));
+    }
+  }
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),
             shapes_ns::DispatchTable().end());
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "BiasGelu",
                                          sym_ns::Device::kCPU, {}),
-            0);
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
                                          sym_ns::Device::kCPU, {}),
-            0);
+            shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention"));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(
                 onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention", sym_ns::Device::kCPU,
                 {sym_ns::SymShape({2, 3, 16}), sym_ns::SymShape(), sym_ns::SymShape()}),
-            1164);
+            shapes_ns::PeakMemoryEstimate(1164));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
                                          sym_ns::Device::kCPU,
                                          {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 4}),
                                           sym_ns::SymShape({2, 3, 4})}),
-            492);
+            shapes_ns::PeakMemoryEstimate(492));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(
                 onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention", sym_ns::Device::kCPU,
                 {sym_ns::SymShape({2, 3, 16}), sym_ns::SymShape(), sym_ns::SymShape(),
                  sym_ns::SymShape({2, 1, 5, 4}), sym_ns::SymShape({2, 1, 5, 4})}),
-            1504);
+            shapes_ns::PeakMemoryEstimate(1504));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "LinearAttention",
                                          sym_ns::Device::kCPU,
                                          {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 8}),
                                           sym_ns::SymShape({2, 3, 12})}),
-            96);
+            shapes_ns::PeakMemoryEstimate(96));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "MatMulNBits",
                                          sym_ns::Device::kCPU, {}),
-            0);
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 
   grad_ns::GradRegistry gradients;
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);

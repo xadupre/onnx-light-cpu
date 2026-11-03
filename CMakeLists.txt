@@ -412,7 +412,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       endif()
     endif()
   else()
-    find_package(onnx_light CONFIG REQUIRED)
+    find_package(onnx_light 0.2.5 CONFIG REQUIRED)
   endif()
   if(NOT TARGET onnx_light::lib_onnx_kernels)
     message(FATAL_ERROR

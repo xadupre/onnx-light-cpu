@@ -107,10 +107,10 @@ TEST(SkipSimplifiedLayerNormalizationSupport, RegistersGlobalShapeAndZeroScratch
   EXPECT_FALSE(ctx.Has(""));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, kOp,
                                          sym_ns::Device::kCPU, {ctx.Get("input").Shape()}),
-            0);
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
   EXPECT_EQ(onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization(
-                sym_ns::Device::kCPU, {{SymDim("B"), SymDim("S"), SymDim("H")}}),
-            0);
+                sym_ns::Device::kCPU, MakeNode(), {{SymDim("B"), SymDim("S"), SymDim("H")}}),
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 }
 
 TEST(SkipSimplifiedLayerNormalizationSupport, SupportedTypesBroadcastsAndOptionalSlots) {
