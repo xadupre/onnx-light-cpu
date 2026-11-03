@@ -46,7 +46,7 @@ dev = [
     "pyrefly==1.4.0",
     "pytest>=7",
     "pytest-cov",
-    "ruff==0.17.2",
+    "ruff==0.17.3",
     "tqdm",
 ]
 docs = [
