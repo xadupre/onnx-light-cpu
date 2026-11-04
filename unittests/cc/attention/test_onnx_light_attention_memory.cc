@@ -137,12 +137,13 @@ TEST(AttentionMemory, HeadSinkByteArithmeticIsChecked) {
   node.ref_input()[5] = "";
   node.add_input("");
   node.add_input("");
-  std::vector<SymShape> shapes = {SymShape({1, 1, 0, 1}), SymShape({1, 1, 0, 1}),
-                                  SymShape({1, 1, 0, 1})};
+  std::vector<SymShape> shapes = {SymShape({1, 1, std::int64_t{0}, 1}),
+                                  SymShape({1, 1, std::int64_t{0}, 1}),
+                                  SymShape({1, 1, std::int64_t{0}, 1})};
   shapes.resize(8, SymShape({}));
   const auto size_limit = std::numeric_limits<std::size_t>::max() / sizeof(float);
   const auto check = [&](std::int64_t heads, bool mask) {
-    shapes[0] = SymShape({1, heads, 0, 1});
+    shapes[0] = SymShape({1, heads, std::int64_t{0}, 1});
     shapes[7] = SymShape({heads});
     node.ref_input()[3] = mask ? "mask" : "";
     shapes[3] = mask ? SymShape({1}) : SymShape({});
