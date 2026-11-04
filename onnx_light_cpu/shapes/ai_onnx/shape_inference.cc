@@ -4,10 +4,13 @@
 
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/shapes/shape_broadcast.h"
+#include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -65,6 +68,58 @@ void CheckScaleBroadcast(shapes_ns::ShapesContext &ctx, const SymShape &x, const
 }
 
 } // namespace
+
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryAttention(sym_ns::Device device, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                           const std::vector<SymShape> &input_shapes) {
+  const auto unknown = [] { return shapes_ns::UnknownPeakMemory("ai.onnx", "Attention"); };
+  if ((device != sym_ns::Device::kCPU && device != sym_ns::Device::kUndefined) ||
+      node.input_size() < 3 || input_shapes.size() < 3 || node.output_size() == 0) {
+    return unknown();
+  }
+  std::vector<std::vector<std::int64_t>> shapes(6);
+  std::size_t mask_elements = 0;
+  for (std::size_t index = 0; index < shapes.size(); ++index) {
+    if (index >= static_cast<std::size_t>(node.input_size()) || node.input(index).empty()) {
+      if (index < 3) {
+        return unknown();
+      }
+      continue;
+    }
+    if (index >= input_shapes.size() || input_shapes[index].Rank() == 0) {
+      return unknown();
+    }
+    for (const auto &dimension : input_shapes[index].Dims()) {
+      if (!dimension.IsInt()) {
+        return unknown();
+      }
+      ml_cpu_compute::CheckedDimension(dimension.AsInt(), "Attention", "input dimension");
+      shapes[index].push_back(dimension.AsInt());
+    }
+    if (index == 3) {
+      mask_elements = static_cast<std::size_t>(ml_cpu_compute::CheckedShapeIndexProduct(
+          shapes[index], "Attention", "mask element count"));
+    }
+  }
+  const auto descriptor = BuildAttentionDescriptor(node);
+  const ml_cpu_compute::AttentionPlan plan(
+      descriptor,
+      shapes[0].size() == 3 ? ml_cpu_compute::AttentionLayout::kRank3
+                            : ml_cpu_compute::AttentionLayout::kRank4,
+      shapes[0], shapes[1], shapes[2], shapes[3],
+      descriptor.has_attn_mask ? ml_cpu_compute::AttentionMaskKind::kAdditive
+                               : ml_cpu_compute::AttentionMaskKind::kNone,
+      shapes[4], shapes[5]);
+  // The hook has no dtype metadata: cover half-mask conversion even for BOOL/FLOAT masks.
+  const std::size_t bytes = ml_cpu_compute::CheckedAdd(
+      ml_cpu_compute::AttentionScratchBytes(plan),
+      ml_cpu_compute::CheckedByteSize(mask_elements, sizeof(float), "Attention", "mask conversion"),
+      "Attention", "scratch bytes");
+  if (bytes > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument("Attention: scratch bytes overflow int64_t.");
+  }
+  return static_cast<std::int64_t>(bytes);
+}
 
 void ComputeShapeRotaryEmbedding(shapes_ns::ShapesContext &ctx,
                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
@@ -253,6 +308,8 @@ shapes_ns::PeakMemoryEstimate ComputePeakMemorySimplifiedLayerNormalization(
 void RegisterExperimentalShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
+    shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "Attention", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryAttention);
     shapes_ns::RegisterComputeShapeFn("ai.onnx", "RotaryEmbedding", ComputeShapeRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "RotaryEmbedding", sym_ns::Device::kCPU,
                                            ComputePeakMemoryRotaryEmbedding);

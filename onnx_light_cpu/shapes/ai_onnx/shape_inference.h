@@ -12,6 +12,12 @@
 
 namespace onnx_light_cpu {
 
+/// Conservative CPU Attention scratch bound; unresolved dimensions remain unknown.
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryAttention(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+
 /// Infers experimental SimplifiedLayerNormalization outputs using runtime-compatible shapes.
 void ComputeShapeSimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
