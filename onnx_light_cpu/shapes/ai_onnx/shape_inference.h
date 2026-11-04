@@ -49,4 +49,7 @@ ComputePeakMemorySimplifiedLayerNormalization(
 /// Registers experimental ai.onnx shape-inference and CPU peak-memory functions.
 void RegisterExperimentalShapeAndMemoryFunctions();
 
+/// Installs the CPU MatMul estimator after its global kernel is selected.
+void RegisterMatMulMemoryFunction();
+
 } // namespace onnx_light_cpu

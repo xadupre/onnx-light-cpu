@@ -65,6 +65,9 @@ struct KernelFactoryRegistration {
 
 namespace detail {
 
+/// Installs a global factory and its matching memory estimator only on success.
+bool InstallKernel(KernelFactoryRegistration entry, bool replace);
+
 /// Adapts a factory to a session-owned callback with shared, synchronized
 /// prepared kernels. Callback copies retain the same cache.
 ONNX_LIGHT_NAMESPACE::core::runtime::ContextualCustomKernelFn

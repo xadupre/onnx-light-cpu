@@ -49,7 +49,6 @@
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
-#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_proto/onnx_helper.h"
 
@@ -237,17 +236,13 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
 bool RegisterKernelGlobal(const std::string &domain, const std::string &op_type, bool replace,
                           MicrosoftKernelImplementation implementation) {
   KernelFactoryRegistration entry = FindFactory(domain, op_type, implementation);
-  return rt_ns::RegisterKernelFn(entry.info.domain, entry.info.op_type, entry.info.device,
-                                 std::move(entry.factory), replace);
+  return detail::InstallKernel(std::move(entry), replace);
 }
 
 std::size_t RegisterAllKernelsGlobal(bool replace, MicrosoftKernelImplementation implementation) {
   std::size_t count = 0;
   for (KernelFactoryRegistration &entry : UniqueFactories(implementation)) {
-    count += rt_ns::RegisterKernelFn(entry.info.domain, entry.info.op_type, entry.info.device,
-                                     std::move(entry.factory), replace)
-                 ? 1
-                 : 0;
+    count += detail::InstallKernel(std::move(entry), replace) ? 1 : 0;
   }
   return count;
 }

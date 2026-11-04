@@ -355,8 +355,6 @@ void RegisterExperimentalShapeAndMemoryFunctions() {
 #if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
     ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
 #endif
-    shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
-                                           ComputePeakMemoryMatMul);
     shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "Attention", sym_ns::Device::kCPU,
                                            ComputePeakMemoryAttention);
     shapes_ns::RegisterComputeShapeFn("ai.onnx", "RotaryEmbedding", ComputeShapeRotaryEmbedding);
@@ -368,6 +366,14 @@ void RegisterExperimentalShapeAndMemoryFunctions() {
                                            sym_ns::Device::kCPU,
                                            ComputePeakMemorySimplifiedLayerNormalization);
   });
+}
+
+void RegisterMatMulMemoryFunction() {
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+  ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+#endif
+  shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
+                                         ComputePeakMemoryMatMul);
 }
 
 } // namespace onnx_light_cpu
