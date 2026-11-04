@@ -40,7 +40,9 @@ std::vector<std::int64_t> ShapeAsInt64(const Shape &shape) {
   return std::vector<std::int64_t>(shape.begin(), shape.end());
 }
 
-ml_cpu_compute::AttentionDescriptor BuildDescriptor(const NodeProto &node) {
+} // namespace
+
+ml_cpu_compute::AttentionDescriptor BuildAttentionDescriptor(const NodeProto &node) {
   ml_cpu_compute::AttentionDescriptor descriptor;
   // The kernel does not have direct access to the node's opset from here;
   // `nonpad_kv_seqlen` (opset >= 24 only) is only wired when a 7th input is
@@ -88,6 +90,8 @@ ml_cpu_compute::AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   descriptor.ValidateSupportedByMaterializedPath();
   return descriptor;
 }
+
+namespace {
 
 void ComputeHalfAttentionMaterialized(const ml_cpu_compute::AttentionPlan &plan, DataType data_type,
                                       const std::uint16_t *q, const std::uint16_t *k,
@@ -474,7 +478,7 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
                                    const Tensor *past_k, const Tensor *past_v,
                                    const Tensor *nonpad_kv_seqlen, const Tensor *head_sink) const {
   const RuntimeExecutionScope execution_scope;
-  const ml_cpu_compute::AttentionDescriptor descriptor = BuildDescriptor(node);
+  const ml_cpu_compute::AttentionDescriptor descriptor = BuildAttentionDescriptor(node);
   Tensor qk_output, present_key, present_value;
   return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output,
                  &present_key, &present_value, head_sink);
@@ -484,7 +488,7 @@ void AttentionKernel::Run(RuntimeContext &rt) {
   const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
-  const ml_cpu_compute::AttentionDescriptor descriptor = BuildDescriptor(node);
+  const ml_cpu_compute::AttentionDescriptor descriptor = BuildAttentionDescriptor(node);
   const Tensor &q = rt_ns::GetInput(node, 0, rt.tensors());
   const Tensor &k = rt_ns::GetInput(node, 1, rt.tensors());
   const Tensor &v = rt_ns::GetInput(node, 2, rt.tensors());

@@ -13,6 +13,7 @@
 #include "ml_cpu_compute/math/gemm/avx2/gemm_avx2_fma.h"
 #endif
 #include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/gemm/gemm_common.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "ml_cpu_compute/math/math.h"
 
@@ -29,6 +30,9 @@
 namespace ml_cpu_compute {
 
 namespace {
+
+constexpr std::size_t kMaximumAttentionParticipants = 24;
+constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
 
 [[noreturn]] void Fail(const char *message) { throw std::invalid_argument(message); }
 
@@ -1522,7 +1526,6 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       plan.layout == AttentionLayout::kRank4 && plan.mask_kind == AttentionMaskKind::kNone &&
       !plan.causal && plan.softcap == 0.0f && plan.left_window_size < 0 &&
       plan.right_window_size < 0 && nonpad_kv_seqlen == nullptr && UseAvx2DenseRank4Gemm();
-  constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
   const std::size_t kv_heads = plan.batch * plan.kv_num_heads;
   const std::size_t shared_k_elements = CheckedProduct(
       {kv_heads, plan.kv_length, plan.head_dim}, "Attention", "shared packed key element count");
@@ -1624,7 +1627,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       participants =
           std::max(participants, std::min({total_tasks, half_participants, kMaximumParticipants}));
     } else if (total_fmas >= 100'000'000) {
-      participants = std::max(participants, std::min<std::size_t>(total_tasks, 24));
+      participants = std::max(participants, std::min(total_tasks, kMaximumAttentionParticipants));
     }
   }
   if constexpr (std::is_same_v<Codec, Float32Codec>) {
@@ -2045,6 +2048,71 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 }
 
 } // namespace
+
+std::size_t AttentionPeakMemoryBytes(const AttentionPlan &plan) {
+  const auto add = [](std::size_t a, std::size_t b) {
+    return CheckedAdd(a, b, "AttentionPeakMemoryBytes", "peak memory size");
+  };
+  const auto mul = [](std::size_t a, std::size_t b) {
+    return CheckedMultiply(a, b, "AttentionPeakMemoryBytes", "peak memory size");
+  };
+  const auto tensor = [&](std::size_t heads, std::size_t length, std::size_t width) {
+    return mul(mul(mul(plan.batch, heads), length), width);
+  };
+  const std::size_t row_bytes =
+      mul(plan.total_kv_length, sizeof(float) * (plan.has_qk_matmul_output ? 2 : 1) +
+                                    (plan.softmax_fp64 ? sizeof(double) : 0));
+  if (plan.has_qk_matmul_output || plan.softmax_fp64) {
+    const std::size_t scores = tensor(plan.q_num_heads, plan.q_length, plan.total_kv_length);
+    std::size_t elements = add(tensor(plan.q_num_heads, plan.q_length, plan.head_dim),
+                               tensor(plan.q_num_heads, plan.q_length, plan.v_head_dim));
+    elements = add(elements, tensor(plan.kv_num_heads, plan.total_kv_length,
+                                    add(plan.head_dim, plan.v_head_dim)));
+    // The half adapter materializes FP32 Q/K/V/Y/cache and QK conversion buffers.
+    elements = add(elements, scores);
+    if (!plan.has_qk_matmul_output) {
+      // FP64 softmax creates an internal QK tensor even without a declared output.
+      elements = add(elements, scores);
+    }
+    return add(mul(elements, sizeof(float)), row_bytes);
+  }
+  if (plan.batch == 0 || plan.q_length == 0 || plan.v_head_dim == 0 || plan.total_kv_length == 0) {
+    return plan.has_present_output ? row_bytes : 0;
+  }
+
+  // Metadata-only plans do not establish head-sink absence for one-key inputs.
+  const std::size_t br = AttentionQueryBlock(plan);
+  const std::size_t bc = AttentionKvBlock(plan);
+  const std::size_t conversion = AttentionConversionKvBlock(plan);
+  const std::size_t widths = add(plan.head_dim, plan.v_head_dim);
+  // Cover row-streaming conversions and tiled packing/output buffers together:
+  // dispatch can depend on ISA and tensor values, neither available to profiling.
+  std::size_t elements = add(mul(br, bc), mul(conversion, widths));
+  elements = add(elements, mul(br, add(plan.head_dim, mul(3, plan.v_head_dim))));
+  elements = add(elements, add(mul(bc, widths), add(plan.head_dim, plan.v_head_dim)));
+  elements = add(elements, mul(2, br));
+
+  // Nested GEMMs are serial but retain packed A/B and a padded column micro-panel.
+  // Use the GEMM blocking selector rather than assuming a particular CPU's padding.
+  std::size_t padding = 0;
+  for (std::size_t lanes : {std::size_t{1}, std::size_t{4}, std::size_t{8}, std::size_t{16}}) {
+    const auto blocking = detail::SelectGemmBlocking(sizeof(float), lanes, 16);
+    padding = std::max(padding, blocking.nc);
+  }
+  elements = add(elements, mul(add(add(br, bc), padding), plan.head_dim));
+  elements = add(elements, mul(add(add(br, plan.v_head_dim), padding), bc));
+  const std::size_t per_worker = add(mul(elements, sizeof(float)), br);
+  const std::size_t rows = tensor(plan.q_num_heads, plan.q_length, 1);
+  std::size_t bytes = mul(std::min(rows, kMaximumAttentionParticipants), per_worker);
+  const std::size_t shared_k = tensor(plan.kv_num_heads, plan.kv_length, plan.head_dim);
+  const std::size_t shared_v = tensor(plan.kv_num_heads, plan.kv_length, plan.v_head_dim);
+  if (plan.group_size > 1 && shared_k <= kMaximumSharedKvElements &&
+      shared_v <= kMaximumSharedKvElements) {
+    bytes = add(bytes, add(mul(shared_k, sizeof(std::uint16_t)), mul(shared_v, sizeof(float))));
+  }
+  // FLOAT with present outputs uses the serial materialized row implementation.
+  return std::max(bytes, plan.has_present_output ? row_bytes : 0);
+}
 
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
                                       const float *v, const void *mask, float *y,

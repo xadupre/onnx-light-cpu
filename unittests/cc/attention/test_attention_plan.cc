@@ -28,6 +28,69 @@
 
 namespace {
 
+TEST(AttentionPeakMemory, MetadataOnlyLongPrefillAndMaterialization) {
+  ml_cpu_compute::AttentionDescriptor descriptor;
+  descriptor.q_num_heads = 16;
+  descriptor.kv_num_heads = 4;
+  descriptor.is_causal = true;
+  descriptor.has_present_key = true;
+  descriptor.has_present_value = true;
+  const std::vector<std::int64_t> q{1, 32000, 2048}, kv{1, 32000, 512};
+  const auto plan = [&](const ml_cpu_compute::AttentionDescriptor &options) {
+    return ml_cpu_compute::AttentionPlan(options, ml_cpu_compute::AttentionLayout::kRank3, q, kv,
+                                         kv, {}, ml_cpu_compute::AttentionMaskKind::kNone);
+  };
+  const auto streaming = ml_cpu_compute::AttentionPeakMemoryBytes(plan(descriptor));
+  EXPECT_GT(streaming, 0);
+  EXPECT_LT(streaming, 256'000'000);
+  descriptor.has_qk_matmul_output = true;
+  EXPECT_GE(ml_cpu_compute::AttentionPeakMemoryBytes(plan(descriptor)), 65'536'000'000ULL);
+  descriptor.has_qk_matmul_output = false;
+  descriptor.softmax_precision = 11;
+  EXPECT_GE(ml_cpu_compute::AttentionPeakMemoryBytes(plan(descriptor)), 131'072'000'000ULL);
+}
+
+TEST(AttentionPeakMemory, ConcurrentRowsAndCacheAreCovered) {
+  ml_cpu_compute::AttentionDescriptor descriptor;
+  const auto bytes = [&](std::int64_t heads) {
+    const std::vector<std::int64_t> q{1, heads, 1, 128}, kv{1, heads, 4096, 128};
+    const ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank4, q,
+                                             kv, kv, {}, ml_cpu_compute::AttentionMaskKind::kNone);
+    return ml_cpu_compute::AttentionPeakMemoryBytes(plan);
+  };
+  EXPECT_GT(bytes(1), 0);
+  EXPECT_EQ(bytes(16), 16 * bytes(1));
+  EXPECT_EQ(bytes(32), 24 * bytes(1));
+
+  descriptor.has_past_key = true;
+  descriptor.has_past_value = true;
+  const std::vector<std::int64_t> q{1, 4, 1, 128}, kv{1, 4, 1, 128}, past{1, 4, 4096, 128};
+  const ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank4, q,
+                                           kv, kv, {}, ml_cpu_compute::AttentionMaskKind::kNone,
+                                           past, past);
+  EXPECT_GE(ml_cpu_compute::AttentionPeakMemoryBytes(plan), 4 * 512 * 256 * sizeof(float));
+}
+
+TEST(AttentionPeakMemory, SingleKeyCoversUnknownAndPresentHeadSink) {
+  const ml_cpu_compute::AttentionDescriptor descriptor;
+  const std::int64_t shape[] = {1, 1, 1, 128};
+  ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank4, shape,
+                                     shape, shape, {}, ml_cpu_compute::AttentionMaskKind::kNone);
+  const auto metadata_peak = ml_cpu_compute::AttentionPeakMemoryBytes(plan);
+  EXPECT_GT(metadata_peak, 0);
+
+  const float sink[] = {0.0f};
+  plan.head_sink = sink;
+  EXPECT_EQ(ml_cpu_compute::AttentionPeakMemoryBytes(plan), metadata_peak);
+  const std::vector<float> q(128, 0.0f), k(128, 0.0f), v(128, 4.0f);
+  std::vector<float> y(128);
+  ml_cpu_compute::AttentionExecutionInfo info;
+  ml_cpu_compute::ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr,
+                                                   y.data(), nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  EXPECT_FLOAT_EQ(y.front(), 2.0f);
+}
+
 struct InlineExecutor {
   std::int64_t maximum_blocks = 0;
   std::int64_t dispatches = 0;

@@ -248,6 +248,11 @@ struct AttentionPlan {
   std::vector<std::int64_t> qk_matmul_output_shape() const;
 };
 
+/// Conservative invocation-local peak memory bound for FLOAT/FP16/BF16 adapters.
+/// Excludes declared outputs and mask conversion; includes concurrent workers,
+/// GEMM packing, and full half conversions on QK-output/FP64 paths.
+std::size_t AttentionPeakMemoryBytes(const AttentionPlan &plan);
+
 /// Executes the stateless-or-cached FP32 materialized baseline:
 /// ``S = scale * Q @ transpose(K)``; applies ``softcap`` when configured;
 /// composes causal and ``attn_mask`` biases additively (bottom-right,

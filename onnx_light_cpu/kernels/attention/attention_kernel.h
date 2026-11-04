@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ml_cpu_compute/attention/attention_plan.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -17,6 +18,10 @@ class NodeProto;
 } // namespace ONNX_LIGHT_NAMESPACE
 
 namespace onnx_light_cpu {
+
+/// Shared attribute/output selection for execution and metadata-only memory profiling.
+ml_cpu_compute::AttentionDescriptor
+BuildAttentionDescriptor(const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// CPU kernel for the ``ai.onnx::Attention`` operator (opset 23 through 25).
 ///
