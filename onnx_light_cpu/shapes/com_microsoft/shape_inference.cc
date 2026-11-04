@@ -580,9 +580,16 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
 
 void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   using ONNX_LIGHT_NAMESPACE::core::schema::TensorType;
-  if (node.input_size() < 7 || node.input_size() > 14 || node.output_size() != 1 ||
-      node.output(0).empty()) {
-    throw std::invalid_argument("ComputeShapeQMoE: expected seven to fourteen input slots.");
+  if (node.input_size() < 7 || node.input_size() > 17) {
+    throw std::invalid_argument("ComputeShapeQMoE: expected seven to seventeen input slots, got " +
+                                std::to_string(node.input_size()) + ".");
+  }
+  if (node.output_size() != 1) {
+    throw std::invalid_argument("ComputeShapeQMoE: expected one output slot, got " +
+                                std::to_string(node.output_size()) + ".");
+  }
+  if (node.output(0).empty()) {
+    throw std::invalid_argument("ComputeShapeQMoE: expected a non-empty output.");
   }
   for (int index : {0, 1, 2, 3, 5, 6}) {
     if (!HasInput(node, index) || !ctx.Has(node.input(index))) {
@@ -599,7 +606,9 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     throw std::invalid_argument("ComputeShapeQMoE: invalid activation/router types or ranks.");
   }
   const auto bits = GetGqaIntAttribute(node, "expert_weight_bits", 4);
-  const auto block = GetGqaIntAttribute(node, "block_size", 0);
+  const auto quant_type = GetStringAttribute(node, "quant_type", "int");
+  const bool fp4 = quant_type == "fp4";
+  const auto block = GetGqaIntAttribute(node, "block_size", fp4 ? 32 : 0);
   const auto k = GetGqaIntAttribute(node, "k", 1);
   const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
   const auto activation = GetStringAttribute(node, "activation_type", "relu");
@@ -612,16 +621,18 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
       throw std::invalid_argument("ComputeShapeQMoE: invalid activation parameters.");
     }
   }
-  if ((bits != 4 && bits != 8) || block < 0 ||
+  if ((quant_type != "int" && !fp4) || (fp4 && (bits != 4 || block != 32 || third)) ||
+      (bits != 4 && bits != 8) || block < 0 ||
       (block != 0 && (block < 16 || (block & (block - 1)) != 0)) || k < 1 ||
       (normalize != 0 && normalize != 1) ||
       (activation != "relu" && activation != "gelu" && activation != "silu" &&
        activation != "identity" && activation != "swiglu") ||
       (activation == "swiglu" ? fusion != 1 : fusion != 0) || (third && fusion != 0) ||
       HasInput(node, 9) != third || (!third && HasInput(node, 10)) || HasInput(node, 11) ||
-      HasInput(node, 12) || HasInput(node, 13) ||
+      HasInput(node, 12) || HasInput(node, 13) || HasInput(node, 14) ||
+      (!fp4 && (HasInput(node, 15) || HasInput(node, 16))) ||
       GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0 ||
-      GetGqaIntAttribute(node, "weights_prepacked", 0) != 0) {
+      (!fp4 && GetGqaIntAttribute(node, "weights_prepacked", 0) != 0)) {
     throw std::invalid_argument("ComputeShapeQMoE: unsupported quantization or attributes.");
   }
   const auto &shape = input.Shape();
@@ -630,6 +641,19 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
   if ((hidden.IsInt() && hidden.AsInt() <= 0) ||
       (experts.IsInt() && (experts.AsInt() <= 0 || k > experts.AsInt()))) {
     throw std::invalid_argument("ComputeShapeQMoE: invalid hidden or expert count.");
+  }
+  if (fp4) {
+    for (int index : {15, 16}) {
+      if (!HasInput(node, index) || !ctx.Has(node.input(index))) {
+        throw std::invalid_argument("ComputeShapeQMoE: FP4 requires FC1/FC2 global scales.");
+      }
+      const auto &scale = ctx.Get(node.input(index));
+      if (scale.Dtype() != TensorType::kFloat || scale.Shape().Rank() != 1) {
+        throw std::invalid_argument("ComputeShapeQMoE: invalid FP4 global scale type or rank.");
+      }
+      ConstrainEqual(ctx, experts, scale.Shape()[0],
+                     "ComputeShapeQMoE: global scale experts mismatch.");
+    }
   }
   const auto &fc2 = ctx.Get(node.input(5));
   if (fc2.Shape().Rank() != 3 || ctx.Get(node.input(2)).Shape().Rank() != 3) {
@@ -673,12 +697,31 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
       const auto &s = ctx.Get(node.input(si));
       const auto leading = major ? out : in;
       const auto last = major ? in : out;
-      return w.Shape().Rank() == 3 && s.Shape().Rank() == (block == 0 ? 2 : 3) &&
-             compatible(experts, w.Shape()[0]) && compatible(leading, w.Shape()[1]) &&
+      if (w.Shape().Rank() != 3 || s.Shape().Rank() != (block == 0 ? 2 : 3)) {
+        return false;
+      }
+      if (fp4) {
+        const auto &stored_reduction = w.Shape()[major ? 2 : 1];
+        const auto stored_block = major ? block / (8 / bits) : block;
+        const auto &logical_outputs = s.Shape()[1];
+        const auto output_block = wi == 2 && fused ? 2 * block : block;
+        if ((in.IsInt() && (in.AsInt() <= 0 || in.AsInt() % block != 0)) ||
+            (out.IsInt() && (out.AsInt() <= 0 || out.AsInt() % 2 != 0)) ||
+            (logical_outputs.IsInt() &&
+             (logical_outputs.AsInt() <= 0 || logical_outputs.AsInt() % output_block != 0)) ||
+            (stored_reduction.IsInt() &&
+             (stored_reduction.AsInt() <= 0 || stored_reduction.AsInt() % stored_block != 0))) {
+          return false;
+        }
+      }
+      return compatible(experts, w.Shape()[0]) && compatible(leading, w.Shape()[1]) &&
              compatible(divide_up(last, 8 / bits), w.Shape()[2]) &&
              compatible(experts, s.Shape()[0]) &&
-             compatible(block == 0 && !row_scales ? last : leading, s.Shape()[1]) &&
-             (block == 0 || compatible(divide_up(last, block), s.Shape()[2]));
+             compatible(fp4                         ? out
+                        : block == 0 && !row_scales ? last
+                                                    : leading,
+                        s.Shape()[1]) &&
+             (block == 0 || compatible(divide_up(fp4 ? in : last, block), s.Shape()[2]));
     };
     if (!match_projection(2, 3, candidate_width, hidden) ||
         !match_projection(5, 6, hidden, candidate) ||
@@ -699,6 +742,7 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     }
     return Layout{major, row_scales, candidate_width, candidate};
   };
+  // FP4 scales use logical output rows even for input-major packed weights.
   // Tensor quantization uses raw CPU output-major, per-row scales only.
   const auto output_layout = fits(true, block == 0);
   const std::optional<Layout> input_layout = block == 0 ? std::nullopt : fits(false, false);
@@ -728,8 +772,9 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     const auto leading = output_major ? outputs : inputs;
     const auto last = output_major ? inputs : outputs;
     if (weight.Dtype() != TensorType::kUint8 || weight.Shape().Rank() != 3 ||
-        (scales.Dtype() != TensorType::kFloat && scales.Dtype() != TensorType::kFloat16 &&
-         scales.Dtype() != TensorType::kBfloat16) ||
+        (fp4 ? scales.Dtype() != TensorType::kFloat8e8m0
+             : (scales.Dtype() != TensorType::kFloat && scales.Dtype() != TensorType::kFloat16 &&
+                scales.Dtype() != TensorType::kBfloat16)) ||
         scales.Shape().Rank() != (block == 0 ? 2 : 3)) {
       throw std::invalid_argument("ComputeShapeQMoE: invalid projection types or ranks.");
     }
@@ -748,10 +793,13 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     ConstrainEqual(ctx, leading, weight.Shape()[1], "ComputeShapeQMoE: weight rows mismatch.");
     ConstrainEqual(ctx, divide_up(last, 8 / bits), weight.Shape()[2],
                    "ComputeShapeQMoE: packed width mismatch.");
-    ConstrainEqual(ctx, block == 0 && !rowwise ? last : leading, scales.Shape()[1],
-                   "ComputeShapeQMoE: scale rows mismatch.");
+    ConstrainEqual(ctx,
+                   fp4                      ? outputs
+                   : block == 0 && !rowwise ? last
+                                            : leading,
+                   scales.Shape()[1], "ComputeShapeQMoE: scale rows mismatch.");
     if (block != 0) {
-      ConstrainEqual(ctx, divide_up(last, block), scales.Shape()[2],
+      ConstrainEqual(ctx, divide_up(fp4 ? inputs : last, block), scales.Shape()[2],
                      "ComputeShapeQMoE: scale blocks mismatch.");
     }
     if (HasInput(node, bias_index)) {

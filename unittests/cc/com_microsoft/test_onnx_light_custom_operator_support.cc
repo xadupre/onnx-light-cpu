@@ -252,6 +252,199 @@ TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
   EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
 }
 
+NodeProto MakeFP4QMoENode() {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("QMoE");
+  for (const char *name : {"X", "router", "W1", "S1", "B1", "W2", "S2", "B2", "", "", "", "", "",
+                           "", "", "G1", "G2"}) {
+    node.add_input(name);
+  }
+  node.add_output("Y");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "quant_type", std::string("fp4"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("swiglu"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_alpha", 1.702f);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_beta", 1.0f);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_limit", 7.0f);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "k", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "normalize_routing_weights", int64_t{1});
+  return node;
+}
+
+void PopulateFP4QMoE(shapes_ns::ShapesContext &ctx) {
+  ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(1), SymDim("T"), SymDim(2880)}));
+  ctx.Set("router", SymTensor(nullptr, TensorType::kBfloat16, {SymDim("T"), SymDim(32)}));
+  ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(32), SymDim(2880), SymDim(2880)}));
+  ctx.Set("S1",
+          SymTensor(nullptr, TensorType::kFloat8e8m0, {SymDim(32), SymDim(5760), SymDim(90)}));
+  ctx.Set("B1", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(32), SymDim(5760)}));
+  ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(32), SymDim(2880), SymDim(1440)}));
+  ctx.Set("S2",
+          SymTensor(nullptr, TensorType::kFloat8e8m0, {SymDim(32), SymDim(2880), SymDim(90)}));
+  ctx.Set("B2", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(32), SymDim(2880)}));
+  ctx.Set("G1", SymTensor(nullptr, TensorType::kFloat, {SymDim(32)}));
+  ctx.Set("G2", SymTensor(nullptr, TensorType::kFloat, {SymDim(32)}));
+}
+
+TEST(CustomOperatorSupport, QMoEFP4MetadataWithOptionalHolesAndGlobalScales) {
+  auto node = MakeFP4QMoENode();
+  ASSERT_EQ(node.input_size(), 17);
+  for (int i = 8; i < 15; ++i) {
+    ASSERT_TRUE(node.input(i).empty());
+  }
+  shapes_ns::ShapesContext ctx;
+  PopulateFP4QMoE(ctx);
+  onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kBfloat16);
+
+  // The canonical K-packed layout has the same logical block-scale shapes.
+  ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(32), SymDim(5760), SymDim(1440)}));
+  ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16, {SymDim("T"), SymDim(2880)}));
+  node.ref_input()[4] = "";
+  node.ref_input()[7] = "";
+  auto &attributes = node.ref_attribute();
+  attributes.erase(std::remove_if(attributes.begin(), attributes.end(),
+                                  [](const auto &a) { return a.name() == "block_size"; }),
+                   attributes.end());
+  onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+}
+
+TEST(CustomOperatorSupport, QMoEFP4ValidatesAlignmentWithSymbolicHidden) {
+  for (const bool output_major : {false, true}) {
+    for (const int64_t hidden : {2880, 2878, 2879}) {
+      SCOPED_TRACE(output_major);
+      SCOPED_TRACE(hidden);
+      shapes_ns::ShapesContext ctx;
+      PopulateFP4QMoE(ctx);
+      ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16, {SymDim("T"), SymDim("H")}));
+      ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8,
+                              {SymDim(32), SymDim(output_major ? 5760 : hidden),
+                               SymDim(output_major ? (hidden + 1) / 2 : 2880)}));
+      ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8,
+                              {SymDim(32), SymDim(output_major ? hidden : 2880),
+                               SymDim(output_major ? 1440 : (hidden + 1) / 2)}));
+      ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat8e8m0,
+                              {SymDim(32), SymDim(hidden), SymDim(90)}));
+      ctx.Set("B2", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(32), SymDim(hidden)}));
+      if (hidden == 2880) {
+        EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, MakeFP4QMoENode()));
+        EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+      } else {
+        EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, MakeFP4QMoENode()),
+                     std::invalid_argument);
+      }
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, QMoEFP4RejectsMalformedContracts) {
+  const auto reject_tensor = [](const char *name, TensorType type, sym_ns::SymShape shape) {
+    SCOPED_TRACE(name);
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    ctx.Set(name, SymTensor(nullptr, type, shape));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, MakeFP4QMoENode()), std::invalid_argument);
+  };
+  for (const char *name : {"G1", "G2"}) {
+    reject_tensor(name, TensorType::kBfloat16, {SymDim(32)});
+    reject_tensor(name, TensorType::kFloat, {});
+    reject_tensor(name, TensorType::kFloat, {SymDim(32), SymDim(1)});
+    reject_tensor(name, TensorType::kFloat, {SymDim(31)});
+  }
+  reject_tensor("S1", TensorType::kFloat, {SymDim(32), SymDim(5760), SymDim(90)});
+  reject_tensor("S2", TensorType::kFloat16, {SymDim(32), SymDim(2880), SymDim(90)});
+  reject_tensor("S1", TensorType::kFloat8e8m0, {SymDim(32), SymDim(2880), SymDim(180)});
+  reject_tensor("S2", TensorType::kFloat8e8m0, {SymDim(32), SymDim(2880), SymDim(89)});
+  reject_tensor("S1", TensorType::kFloat8e8m0, {SymDim(31), SymDim(5760), SymDim(90)});
+  reject_tensor("W1", TensorType::kUint8, {SymDim(32), SymDim(2880), SymDim(2879)});
+  reject_tensor("W2", TensorType::kUint8, {SymDim(32), SymDim(2880), SymDim(1439)});
+  reject_tensor("W1", TensorType::kFloat, {SymDim(32), SymDim(2880), SymDim(2880)});
+  reject_tensor("B1", TensorType::kBfloat16, {SymDim(32), SymDim(2880)});
+  reject_tensor("X", TensorType::kBfloat16, {SymDim("T"), SymDim(2879)});
+  // All packing dimensions fit, but the intermediate size is not block-aligned.
+  {
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(32), SymDim(2880), SymDim(2878)}));
+    ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(32), SymDim(2878), SymDim(1440)}));
+    ctx.Set("S1",
+            SymTensor(nullptr, TensorType::kFloat8e8m0, {SymDim(32), SymDim(5756), SymDim(90)}));
+    ctx.Set("B1", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(32), SymDim(5756)}));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, MakeFP4QMoENode()), std::invalid_argument);
+  }
+  for (int slot : {3, 6, 15, 16}) {
+    auto node = MakeFP4QMoENode();
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    node.ref_input()[slot] = "";
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+    node.ref_input()[slot] = "unknown";
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+  }
+  for (const std::string quant_type : {"int", "nvfp4", "unknown"}) {
+    auto node = MakeFP4QMoENode();
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    for (auto &attribute : node.ref_attribute()) {
+      if (attribute.name() == "quant_type") {
+        attribute.set_s(quant_type);
+      }
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+  }
+  for (const auto &[name, value] :
+       std::vector<std::pair<std::string, int64_t>>{{"expert_weight_bits", 8},
+                                                    {"block_size", 16},
+                                                    {"block_size", 0},
+                                                    {"swiglu_fusion", 0}}) {
+    auto node = MakeFP4QMoENode();
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    for (auto &attribute : node.ref_attribute()) {
+      if (attribute.name() == name) {
+        attribute.set_i(value);
+      }
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+  }
+}
+
+TEST(CustomOperatorSupport, QMoEArityDiagnosticsReportActualCounts) {
+  for (int scenario = 0; scenario < 5; ++scenario) {
+    auto node = MakeFP4QMoENode();
+    shapes_ns::ShapesContext ctx;
+    PopulateFP4QMoE(ctx);
+    std::string expected;
+    if (scenario == 0) {
+      node.ref_input().resize(6);
+      expected = "input slots, got 6";
+    } else if (scenario == 1) {
+      node.add_input("");
+      expected = "input slots, got 18";
+    } else if (scenario == 2) {
+      node.ref_output().clear();
+      expected = "output slot, got 0";
+    } else if (scenario == 3) {
+      node.add_output("Z");
+      expected = "output slot, got 2";
+    } else {
+      node.ref_output()[0] = "";
+      expected = "non-empty output";
+    }
+    try {
+      onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+      FAIL() << "Expected invalid QMoE arity";
+    } catch (const std::invalid_argument &error) {
+      EXPECT_NE(std::string(error.what()).find(expected), std::string::npos) << error.what();
+    }
+  }
+}
+
 FunctionProto MakeMatMulNBitsGradient(const NodeProto &node) {
   grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
@@ -368,7 +561,10 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   EXPECT_EQ(schemas[10].name(), "RotaryEmbedding");
   EXPECT_EQ(schemas[11].name(), "SkipLayerNormalization");
   EXPECT_EQ(schemas[12].name(), "SkipSimplifiedLayerNormalization");
-  EXPECT_EQ(schemas[9].inputs().size(), 14U);
+  ASSERT_EQ(schemas[9].inputs().size(), 17U);
+  EXPECT_EQ(schemas[9].inputs()[14].name, "router_weights");
+  EXPECT_EQ(schemas[9].inputs()[15].name, "fc1_global_scale");
+  EXPECT_EQ(schemas[9].inputs()[16].name, "fc2_global_scale");
   EXPECT_EQ(schemas[2].inputs().size(), 4U);
   EXPECT_EQ(schemas[2].outputs().size(), 2U);
   EXPECT_EQ(schemas[7].inputs().size(), 8U);

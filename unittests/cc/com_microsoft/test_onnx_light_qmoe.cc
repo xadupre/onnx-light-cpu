@@ -161,6 +161,17 @@ TEST(QMoERuntime, DispatchesThroughRunWithOptionalInputHoles) {
   EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], 1.25f);
 }
 
+TEST(QMoERuntime, DispatchesIntegerNodesWithEmptyExtendedSlots) {
+  for (std::size_t slots : {15U, 16U, 17U}) {
+    auto node = MakeNode();
+    node.ref_input().resize(slots);
+    const auto outputs = RunGraph(node);
+    ASSERT_EQ(outputs.size(), 1U);
+    EXPECT_FLOAT_EQ(outputs[0].AsFloat()[0], 0.875f);
+    EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], 1.25f);
+  }
+}
+
 TEST(QMoERuntime, EmptyTokensPreserveShapeAndType) {
   for (const int64_t block : {16, 32, 64}) {
     Inputs inputs;
@@ -200,6 +211,12 @@ TEST(QMoERuntime, RejectsInvalidQuantizationAndRoutingAttributes) {
   }
 }
 
+TEST(QMoERuntime, RejectsFP4ExecutionEvenWhenShapeInferenceSupportsIt) {
+  NodeProto node = MakeNode();
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "quant_type", std::string("fp4"));
+  EXPECT_THROW(QMoEKernel(node, Context()), std::invalid_argument);
+}
+
 TEST(QMoERuntime, RejectsInvalidActivationParameters) {
   for (const auto &entry : std::vector<std::pair<std::string, float>>{
            {"activation_alpha", std::numeric_limits<float>::quiet_NaN()},
@@ -219,8 +236,9 @@ TEST(QMoERuntime, RejectsUnsupportedActivationAndExplicitZeroPoints) {
     }
   }
   EXPECT_THROW(QMoEKernel(node, Context()), std::invalid_argument);
-  for (int slot : {11, 12, 13}) {
+  for (int slot : {11, 12, 13, 14, 15, 16}) {
     node = MakeNode();
+    node.ref_input().resize(17);
     node.ref_input()[slot] = "zero_points";
     try {
       RunGraph(node);

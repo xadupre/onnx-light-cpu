@@ -111,6 +111,9 @@ bool Fits(const Tensor &weights, const Tensor &scales, std::size_t experts, std:
 QMoEKernel::QMoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::KernelContext &ctx)
     : KernelBase(ctx) {
   set_node(node);
+  if (rt_ns::GetAttributeStringOrDefault(node, "quant_type", "int") != "int") {
+    throw std::invalid_argument("QMoE: CPU execution supports only integer quantization.");
+  }
   const auto k = rt_ns::GetAttributeIntOrDefault(node, "k", 1);
   const auto bits = rt_ns::GetAttributeIntOrDefault(node, "expert_weight_bits", 4);
   const auto block = rt_ns::GetAttributeIntOrDefault(node, "block_size", 0);
@@ -279,12 +282,15 @@ void QMoEKernel::Run(rt_ns::RuntimeContext &rt) {
   const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
-  if (node.input_size() < 7 || node.input_size() > 14) {
-    throw std::invalid_argument("QMoE: expected seven to fourteen input slots.");
+  if (node.input_size() < 7 || node.input_size() > 17) {
+    throw std::invalid_argument("QMoE: expected seven to seventeen input slots, got " +
+                                std::to_string(node.input_size()) + ".");
   }
   for (int index = 11; index < node.input_size(); ++index) {
     if (!node.input(index).empty()) {
-      throw std::invalid_argument("QMoE: zero points are not supported by the CPU contract.");
+      throw std::invalid_argument(
+          "QMoE: zero points, auxiliary inputs, and global scales are not supported by the CPU "
+          "contract.");
     }
   }
   rt_ns::RequireOutputCount(node, 1);
