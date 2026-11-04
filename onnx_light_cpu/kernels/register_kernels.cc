@@ -194,7 +194,6 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
 void RegisterAllKernels() { RegisterAllKernels(MicrosoftKernelImplementation::OPTIMIZED); }
 
 void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
-  RegisterExperimentalShapeAndMemoryFunctions();
   // Opens a fresh duplicate-registration check for this call, unless one is
   // already active (``CollectRegisteredKernels`` opens one first so this
   // pass collects metadata instead of installing kernels; see

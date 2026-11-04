@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
+
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_proto/onnx_helper.h"
@@ -99,6 +101,10 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
   }
 
   if (scope->installed_.insert(dispatch_key).second) {
+    if (info.domain == "ai.onnx" && info.op_type == "MatMul" &&
+        info.device == sym_ns::Device::kCPU) {
+      RegisterExperimentalShapeAndMemoryFunctions();
+    }
     rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(fn));
   }
 }

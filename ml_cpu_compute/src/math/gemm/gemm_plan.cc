@@ -856,11 +856,23 @@ std::size_t MatMulPlan<T>::ScratchBytes(std::size_t maximum_participants) const 
 template <typename T>
 std::size_t MatMulPlan<T>::HalfScratchBytes(bool is_bfloat16,
                                             std::size_t maximum_participants) const {
+  const GemmHalfPlan half_plan({is_bfloat16, gemm_plan_.trans_a(), gemm_plan_.trans_b(),
+                                gemm_plan_.m(), gemm_plan_.n(), gemm_plan_.k()});
+  return HalfScratchBytes(half_plan, maximum_participants);
+}
+
+template <typename T>
+std::size_t MatMulPlan<T>::HalfScratchBytes(const GemmHalfPlan &half_plan,
+                                            std::size_t maximum_participants) const {
+  if (half_plan.m() != gemm_plan_.m() || half_plan.n() != gemm_plan_.n() ||
+      half_plan.k() != gemm_plan_.k() || half_plan.trans_a() != gemm_plan_.trans_a() ||
+      half_plan.trans_b() != gemm_plan_.trans_b()) {
+    throw std::invalid_argument(
+        "ml_cpu_compute::MatMulPlan: half GEMM plan dimensions do not match.");
+  }
   if (batch_count_ == 0 || output_matrix_elements_ == 0) {
     return 0;
   }
-  const GemmHalfPlan half_plan({is_bfloat16, gemm_plan_.trans_a(), gemm_plan_.trans_b(),
-                                gemm_plan_.m(), gemm_plan_.n(), gemm_plan_.k()});
   const std::size_t concurrent_batches =
       std::min(batch_count_, ConfiguredParticipantLimit(maximum_participants));
   const std::size_t packing = std::max(

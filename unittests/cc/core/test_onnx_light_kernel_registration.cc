@@ -6,6 +6,7 @@
 
 #include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 
@@ -605,6 +606,25 @@ TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   EXPECT_EQ(factory->second(node, runtime, runtime.kernel_ctx()), nullptr);
+}
+
+TEST(KernelRegistration, CollectionDoesNotRegisterMatMulMemoryEstimator) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  const std::vector<sym_ns::SymShape> shapes{sym_ns::SymShape({128, 512}),
+                                             sym_ns::SymShape({512, 4096})};
+  const auto before =
+      ONNX_LIGHT_NAMESPACE::core::shapes::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes);
+
+  onnx_light_cpu::CollectRegisteredKernels();
+  onnx_light_cpu::CollectKernelFactories(onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED);
+
+  EXPECT_EQ(
+      ONNX_LIGHT_NAMESPACE::core::shapes::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes),
+      before);
 }
 
 // A repeated ``(domain, op_type, device)`` registration within a single pass

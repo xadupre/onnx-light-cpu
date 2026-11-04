@@ -1741,12 +1741,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
         return;
       }
       if (trans_a && !trans_b && K <= 128) {
-        constexpr std::size_t kMaxRetainedPackedAElements = 1024 * 1024;
-        thread_local AlignedVector<T> retained_packed_a;
-        AlignedVector<T> oversized_packed_a;
-        AlignedVector<T> &packed_a =
-            M <= kMaxRetainedPackedAElements / K ? retained_packed_a : oversized_packed_a;
-        packed_a.resize(M * K);
+        AlignedVector<T> packed_a(detail::GemmPackedAElements(M, K));
         PackAPanel(true, A, M, K, 0, M, 0, K, packed_a.data());
         GemmDirect(M, N, K, alpha, packed_a.data(), B, beta, C, Y, kind, tile, runtime_blocking,
                    bias_stride, bias_mode);

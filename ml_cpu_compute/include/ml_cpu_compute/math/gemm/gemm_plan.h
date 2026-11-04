@@ -202,6 +202,9 @@ public:
   std::size_t ScratchBytes(std::size_t maximum_participants = 0) const;
   /// As above for compact inputs, including the full caller-owned FP32 output workspace.
   std::size_t HalfScratchBytes(bool is_bfloat16, std::size_t maximum_participants = 0) const;
+  /// As above, using the exact half-precision plan passed to ExecuteHalf.
+  std::size_t HalfScratchBytes(const GemmHalfPlan &half_plan,
+                               std::size_t maximum_participants = 0) const;
 
 private:
   MatMulPlan(detail::MatMulDimensions dimensions, bool trans_a, bool trans_b,

@@ -167,6 +167,23 @@ TEST(GemmScratchAllocations, ConcurrentBroadcastProductsFitPlanBounds) {
   EXPECT_LE(packing + workspace.size() * sizeof(float), plan.HalfScratchBytes(false, 4));
 }
 
+TEST(GemmScratchAllocations, ChangingTransposedAShapeDoesNotRetainPackedCapacity) {
+  constexpr std::size_t n = 65, k = 128;
+  const ml_cpu_compute::GemmPlan<float> large(
+      ml_cpu_compute::GemmPlanOptions<float>{true, false, 4096, n, k});
+  const ml_cpu_compute::GemmPlan<float> small(
+      ml_cpu_compute::GemmPlanOptions<float>{true, false, 64, n, k});
+  const std::vector<float> large_a(4096 * k, 0.25f), small_a(64 * k, 0.25f);
+  const std::vector<float> b(k * n, 0.5f);
+  std::vector<float> large_y(4096 * n), small_y(64 * n);
+  ml_cpu_compute::ExecutionExecutorScope serial(nullptr);
+
+  large.Execute(large_a.data(), b.data(), nullptr, large_y.data());
+  EXPECT_EQ(small.ScratchBytes(1), 64U * k * sizeof(float));
+  EXPECT_EQ(PackingPeak([&] { small.Execute(small_a.data(), b.data(), nullptr, small_y.data()); }),
+            small.ScratchBytes(1));
+}
+
 TEST(GemmScratchAllocations, CustomAvx512ColumnOverrideFitsPlanBound) {
   if (ml_cpu_compute::EffectiveGemmSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "Requires AVX-512 to select the 16-column FP32 packing override.";
@@ -184,6 +201,30 @@ TEST(GemmScratchAllocations, CustomAvx512ColumnOverrideFitsPlanBound) {
   ml_cpu_compute::ExecutionExecutorScope serial(nullptr);
   EXPECT_EQ(plan.ScratchBytes(1), 147456U);
   EXPECT_EQ(PackingPeak([&] { plan.Execute(a.data(), b.data(), nullptr, y.data()); }), 147456U);
+}
+
+TEST(GemmScratchAllocations, CustomHalfBlockingFitsMatMulPlanEstimate) {
+  constexpr std::size_t m = 128, n = 4096, k = 512;
+  const ml_cpu_compute::MatMulPlan<float> matmul(m, n, k, false, true);
+  ml_cpu_compute::GemmHalfPlanOptions options{true, false, true, m, n, k};
+  options.blocking = {128, 4096, 512};
+  options.maximum_participants = 1;
+  const ml_cpu_compute::GemmHalfPlan half(options);
+  const std::vector<std::uint16_t> a(m * k, 0x3e80), b(n * k, 0x3f00);
+  std::vector<float> workspace(m * n);
+  std::vector<std::uint16_t> output(m * n);
+  ml_cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kBFloat16;
+  epilogue.converted_output = output.data();
+  ml_cpu_compute::ExecutionExecutorScope serial(nullptr);
+  const std::size_t workspace_bytes = workspace.size() * sizeof(float);
+  ASSERT_GE(half.ScratchBytes(1), 8U * 1024 * 1024);
+  const std::size_t packing = PackingPeak(
+      [&] { matmul.ExecuteHalf(half, a.data(), b.data(), epilogue, workspace.data()); });
+  EXPECT_LE(packing + workspace_bytes, matmul.HalfScratchBytes(half, 1));
+  EXPECT_THROW(
+      matmul.HalfScratchBytes(ml_cpu_compute::GemmHalfPlan({true, false, false, m, n, k}), 1),
+      std::invalid_argument);
 }
 
 } // namespace
