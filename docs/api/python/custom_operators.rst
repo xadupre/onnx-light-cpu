@@ -140,6 +140,15 @@ Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
 tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
 weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
 supported by the CPU kernel. The output retains the input shape.
+Native shape inference validates the operator contract independently of these
+execution restrictions. It also accepts separate SwiGLU (``swiglu_fusion=0``,
+FC3 ``[E,I,H]`` at slot 6, optional bias ``[E,I]`` at slot 7),
+concatenated SwiGLU (``swiglu_fusion=2``), ``relu2``, and fused ``geglu``
+(``swiglu_fusion=1`` or ``2``, without FC3). Fused gated FC1 weights have
+shape ``[E,2*I,H]``; separate projections have shape ``[E,I,H]``.
+Optional empty input slots retain their positions. Sparse mixer metadata
+requires ``k=2``. Successful shape inference does not imply CPU execution
+support for these configurations.
 See `ONNX Runtime's MoE CPU implementation
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
 for the upstream compatibility contract.

@@ -453,19 +453,20 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
 }
 
 void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
-  if (node.input_size() < 5 || node.input_size() > 8 || node.output_size() != 1 ||
-      node.output(0).empty()) {
-    throw std::invalid_argument(
-        "ComputeShapeMoE: expected five to eight input slots and one output.");
+  if (node.input_size() < 5 || node.input_size() > 8) {
+    throw std::invalid_argument("ComputeShapeMoE: expected five to eight input slots, got " +
+                                std::to_string(node.input_size()) + ".");
+  }
+  if (node.output_size() != 1) {
+    throw std::invalid_argument("ComputeShapeMoE: expected one output, got " +
+                                std::to_string(node.output_size()) + ".");
+  }
+  if (node.output(0).empty()) {
+    throw std::invalid_argument("ComputeShapeMoE: output name must not be empty.");
   }
   for (int index : {0, 1, 2, 4}) {
     if (node.input(index).empty() || !ctx.Has(node.input(index))) {
       throw std::invalid_argument("ComputeShapeMoE: missing required input.");
-    }
-  }
-  for (int index : {6, 7}) {
-    if (HasInput(node, index)) {
-      throw std::invalid_argument("ComputeShapeMoE: FC3 is not supported by the CPU kernel.");
     }
   }
   const auto &input = ctx.Get(node.input(0));
@@ -485,18 +486,40 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   const auto &hidden = shape[shape.Rank() - 1];
   const auto &experts = router.Shape()[1];
   const auto &intermediate = fc2.Shape()[2];
+  for (const auto &attribute : node.attribute()) {
+    const std::string name = attribute.name();
+    using AttributeType = ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType;
+    if (((name == "k" || name == "swiglu_fusion" || name == "normalize_routing_weights" ||
+          name == "use_sparse_mixer" || name == "topk_tie_break_low" ||
+          name == "router_probs_are_logits") &&
+         attribute.type() != AttributeType::INT) ||
+        (name == "activation_type" && attribute.type() != AttributeType::STRING) ||
+        ((name == "activation_alpha" || name == "activation_beta" || name == "swiglu_limit") &&
+         attribute.type() != AttributeType::FLOAT)) {
+      throw std::invalid_argument("ComputeShapeMoE: invalid attribute type for " + name + ".");
+    }
+  }
   const auto k = GetGqaIntAttribute(node, "k", 1);
   const auto tie_break_low = GetGqaIntAttribute(node, "topk_tie_break_low", 0);
   const auto router_logits = GetGqaIntAttribute(node, "router_probs_are_logits", 1);
   const auto activation = GetStringAttribute(node, "activation_type", "relu");
   const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
+  const auto normalize = GetGqaIntAttribute(node, "normalize_routing_weights", 0);
+  const auto sparse = GetGqaIntAttribute(node, "use_sparse_mixer", 0);
+  const bool gated = activation == "swiglu" || activation == "geglu";
+  const bool fused = gated && fusion != 0;
+  const bool has_fc3 = HasInput(node, 6);
   if (k < 1 || (experts.IsInt() && k > experts.AsInt()) ||
       (tie_break_low != 0 && tie_break_low != 1) || (router_logits != 0 && router_logits != 1) ||
-      (activation == "swiglu" && fusion != 1) || (activation != "swiglu" && fusion != 0) ||
+      (normalize != 0 && normalize != 1) || (sparse != 0 && sparse != 1) ||
+      (sparse == 1 && k != 2) || fusion < 0 || fusion > 2 || (!gated && fusion != 0) ||
+      (activation == "geglu" && fusion == 0) ||
+      (activation == "swiglu" && fusion == 0 && !has_fc3) || (fused && has_fc3) ||
+      (HasInput(node, 7) && !has_fc3) ||
       (activation != "relu" && activation != "gelu" && activation != "silu" &&
-       activation != "identity" && activation != "swiglu") ||
-      GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0) {
-    throw std::invalid_argument("ComputeShapeMoE: unsupported attributes or expert count.");
+       activation != "identity" && activation != "swiglu" && activation != "relu2" &&
+       activation != "geglu")) {
+    throw std::invalid_argument("ComputeShapeMoE: invalid attributes, FC3 layout or expert count.");
   }
   for (const auto &dim : {hidden, experts, intermediate}) {
     if (dim.IsInt() && dim.AsInt() <= 0) {
@@ -520,13 +543,26 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   ConstrainEqual(ctx, experts, fc2.Shape()[0], "ComputeShapeMoE: FC2 experts mismatch.");
   ConstrainEqual(ctx, hidden, fc1.Shape()[2], "ComputeShapeMoE: FC1 hidden mismatch.");
   ConstrainEqual(ctx, hidden, fc2.Shape()[1], "ComputeShapeMoE: FC2 hidden mismatch.");
-  const sym_ns::SymDim width = activation != "swiglu" ? intermediate
+  const sym_ns::SymDim width = !fused ? intermediate
                                : intermediate.IsInt()
                                    ? sym_ns::SymDim(ml_cpu_compute::CheckedIndexMultiply(
                                          intermediate.AsInt(), 2, "MoE", "FC1 width"))
                                    : sym_ns::SymDim("2*(" + intermediate.ToString() + ")");
   ConstrainEqual(ctx, width, fc1.Shape()[1], "ComputeShapeMoE: FC1 width mismatch.");
-  for (const auto [index, second] : {std::pair{3, width}, std::pair{5, hidden}}) {
+  if (has_fc3) {
+    if (!ctx.Has(node.input(6))) {
+      throw std::invalid_argument("ComputeShapeMoE: missing FC3 weights.");
+    }
+    const auto &fc3 = ctx.Get(node.input(6));
+    if (fc3.Dtype() != type || fc3.Shape().Rank() != 3) {
+      throw std::invalid_argument("ComputeShapeMoE: invalid FC3 type or rank.");
+    }
+    ConstrainEqual(ctx, experts, fc3.Shape()[0], "ComputeShapeMoE: FC3 experts mismatch.");
+    ConstrainEqual(ctx, intermediate, fc3.Shape()[1], "ComputeShapeMoE: FC3 width mismatch.");
+    ConstrainEqual(ctx, hidden, fc3.Shape()[2], "ComputeShapeMoE: FC3 hidden mismatch.");
+  }
+  for (const auto [index, second] :
+       {std::pair{3, width}, std::pair{5, hidden}, std::pair{7, intermediate}}) {
     if (HasInput(node, index)) {
       if (!ctx.Has(node.input(index))) {
         throw std::invalid_argument("ComputeShapeMoE: missing bias.");

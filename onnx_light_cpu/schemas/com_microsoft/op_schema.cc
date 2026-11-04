@@ -489,8 +489,10 @@ LightOpSchema MakeMoESchema() {
        {"fc1_experts_bias", "Optional (experts, intermediate * fusion).", "T"},
        {"fc2_experts_weights", "(experts, hidden, intermediate).", "T"},
        {"fc2_experts_bias", "Optional (experts, hidden).", "T"},
-       {"fc3_experts_weights", "Unsupported optional FC3 slot.", "T"},
-       {"fc3_experts_bias", "Unsupported optional FC3 slot.", "T"}},
+       {"fc3_experts_weights",
+        "Optional (experts, intermediate, hidden). Not supported by CPU execution.", "T"},
+       {"fc3_experts_bias", "Optional (experts, intermediate). Not supported by CPU execution.",
+        "T"}},
       {{"output", "Same shape and type as input.", "T"}},
       {{"T",
         {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
@@ -504,10 +506,14 @@ LightOpSchema MakeMoESchema() {
                       "CPU extension: apply Softmax to router input when 1 (default); "
                       "consume supplied routing probabilities unchanged when 0.",
                       AttributeType::INT, false, int64_t{1}},
-       AttributeParam{"activation_type", "relu, gelu, silu, identity or swiglu.",
+       AttributeParam{"activation_type",
+                      "relu, gelu, silu, identity, swiglu, relu2 or geglu. "
+                      "CPU execution does not support relu2 or geglu.",
                       AttributeType::STRING, false, std::string("relu")},
-       AttributeParam{"swiglu_fusion", "Interleaved SwiGLU requires 1.", AttributeType::INT, false,
-                      int64_t{0}},
+       AttributeParam{"swiglu_fusion",
+                      "Gated layout: 0 separate (SwiGLU only), 1 interleaved, 2 concatenated. "
+                      "CPU execution supports only interleaved SwiGLU.",
+                      AttributeType::INT, false, int64_t{0}},
        AttributeParam{"swiglu_limit", "Optional SwiGLU clamp limit.", AttributeType::FLOAT, false},
        AttributeParam{"activation_alpha", "SwiGLU sigmoid scale.", AttributeType::FLOAT, false,
                       1.0f},
@@ -515,8 +521,9 @@ LightOpSchema MakeMoESchema() {
                       0.0f},
        AttributeParam{"normalize_routing_weights", "Renormalize selected softmax weights.",
                       AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"use_sparse_mixer", "Only zero is supported.", AttributeType::INT, false,
-                      int64_t{0}}},
+       AttributeParam{"use_sparse_mixer",
+                      "Sparse mixer requires k=2. CPU execution supports only zero.",
+                      AttributeType::INT, false, int64_t{0}}},
       false, true);
 }
 
