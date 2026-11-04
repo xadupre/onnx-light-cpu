@@ -12,7 +12,8 @@
 
 namespace onnx_light_cpu {
 
-/// Conservative CPU Attention scratch bound; unresolved dimensions remain unknown.
+/// Conservative CPU Attention peak memory bound, excluding declared outputs.
+/// Unresolved dimensions remain unknown.
 ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const ONNX_LIGHT_NAMESPACE::NodeProto &node,

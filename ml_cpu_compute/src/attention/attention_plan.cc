@@ -2049,12 +2049,12 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
 } // namespace
 
-std::size_t AttentionScratchBytes(const AttentionPlan &plan) {
+std::size_t AttentionPeakMemoryBytes(const AttentionPlan &plan) {
   const auto add = [](std::size_t a, std::size_t b) {
-    return CheckedAdd(a, b, "AttentionScratchBytes", "scratch size");
+    return CheckedAdd(a, b, "AttentionPeakMemoryBytes", "peak memory size");
   };
   const auto mul = [](std::size_t a, std::size_t b) {
-    return CheckedMultiply(a, b, "AttentionScratchBytes", "scratch size");
+    return CheckedMultiply(a, b, "AttentionPeakMemoryBytes", "peak memory size");
   };
   const auto tensor = [&](std::size_t heads, std::size_t length, std::size_t width) {
     return mul(mul(mul(plan.batch, heads), length), width);
@@ -2076,10 +2076,11 @@ std::size_t AttentionScratchBytes(const AttentionPlan &plan) {
     }
     return add(mul(elements, sizeof(float)), row_bytes);
   }
-  if (plan.batch == 0 || plan.q_length == 0 || plan.v_head_dim == 0 || plan.total_kv_length <= 1) {
+  if (plan.batch == 0 || plan.q_length == 0 || plan.v_head_dim == 0 || plan.total_kv_length == 0) {
     return plan.has_present_output ? row_bytes : 0;
   }
 
+  // Metadata-only plans do not establish head-sink absence for one-key inputs.
   const std::size_t br = AttentionQueryBlock(plan);
   const std::size_t bc = AttentionKvBlock(plan);
   const std::size_t conversion = AttentionConversionKvBlock(plan);
