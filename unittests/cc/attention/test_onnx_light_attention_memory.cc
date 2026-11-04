@@ -24,6 +24,7 @@ using sym_ns::SymShape;
 void IntAttribute(NodeProto &node, const char *name, std::int64_t value) {
   auto *attribute = node.add_attribute();
   attribute->set_name(name);
+  attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
   attribute->set_i(value);
 }
 
@@ -75,7 +76,7 @@ TEST(AttentionMemory, ExplicitMaskConversionIsNotErased) {
   auto node = AttentionNode();
   auto shapes = PrefillShapes();
   const auto unmasked = Scratch(node, shapes);
-  node.set_input(3, "mask");
+  node.ref_input()[3] = "mask";
   shapes[3] = SymShape({1, 1, 32000, 32000});
   // The original 2.048 GB FP16 mask remains an input, not scratch. Its FP32
   // conversion is additional scratch regardless of whether scores are streamed.
@@ -130,7 +131,7 @@ TEST(AttentionMemory, InvalidDimensionsAndOverflowDoNotBecomeZero) {
   shapes[0] = SymShape({1, -1, 2048});
   EXPECT_THROW(Scratch(AttentionNode(), shapes), std::invalid_argument);
   auto node = AttentionNode();
-  node.set_input(3, "mask");
+  node.ref_input()[3] = "mask";
   shapes = PrefillShapes();
   shapes[3] = SymShape({1, 1, std::numeric_limits<std::int64_t>::max(), 32000});
   EXPECT_THROW(Scratch(node, shapes), std::invalid_argument);
