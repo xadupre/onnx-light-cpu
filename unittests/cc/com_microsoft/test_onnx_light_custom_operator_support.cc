@@ -515,6 +515,283 @@ TEST(CustomOperatorSupport, RejectsIncompatibleCausalConvPastState) {
   }
 }
 
+struct MoEMetadata {
+  shapes_ns::ShapesContext shapes;
+  NodeProto node;
+
+  MoEMetadata(const std::string &activation = "swiglu", int64_t fusion = 0, bool bias = false,
+              TensorType dtype = TensorType::kFloat, sym_ns::SymShape input_shape = {6, 8},
+              bool symbolic = false) {
+    const SymDim experts = symbolic ? SymDim("E") : SymDim(2);
+    const SymDim hidden = input_shape[input_shape.Rank() - 1];
+    const SymDim intermediate = symbolic ? SymDim("I") : SymDim(4);
+    const bool fused = (activation == "swiglu" || activation == "geglu") && fusion != 0;
+    const SymDim width = fused ? (symbolic ? SymDim("2*(I)") : SymDim(8)) : intermediate;
+    shapes.Set("X", SymTensor(nullptr, dtype, input_shape));
+    shapes.Set("router", SymTensor(nullptr, dtype, {symbolic ? SymDim("T") : SymDim(6), experts}));
+    shapes.Set("fc1", SymTensor(nullptr, dtype, {experts, width, hidden}));
+    shapes.Set("fc2", SymTensor(nullptr, dtype, {experts, hidden, intermediate}));
+    shapes.Set("bias1", SymTensor(nullptr, dtype, {experts, width}));
+    shapes.Set("bias2", SymTensor(nullptr, dtype, {experts, hidden}));
+    shapes.Set("fc3", SymTensor(nullptr, dtype, {experts, intermediate, hidden}));
+    shapes.Set("bias3", SymTensor(nullptr, dtype, {experts, intermediate}));
+    node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+    node.set_op_type("MoE");
+    for (const char *name : {"X", "router", "fc1", bias ? "bias1" : "", "fc2"}) {
+      node.add_input(name);
+    }
+    if (activation == "swiglu" && fusion == 0) {
+      node.add_input(bias ? "bias2" : "");
+      node.add_input("fc3");
+      if (bias) {
+        node.add_input("bias3");
+      }
+    } else if (bias) {
+      node.add_input("bias2");
+    }
+    node.add_output("Y");
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", activation);
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", fusion);
+  }
+};
+
+TEST(CustomOperatorSupport, RegisteredMoEInfersGatedLayoutsWithoutOutputAnnotations) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  const auto &infer = shapes_ns::DispatchTable().at("com.microsoft:MoE");
+  for (const auto dtype : {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16}) {
+    for (const auto &activation :
+         {"relu", "gelu", "silu", "identity", "relu2", "swiglu", "geglu"}) {
+      for (const int64_t fusion : {0, 1, 2}) {
+        if ((std::string(activation) == "geglu" && fusion == 0) ||
+            (std::string(activation) != "swiglu" && std::string(activation) != "geglu" &&
+             fusion != 0)) {
+          continue;
+        }
+        for (const bool bias : {false, true}) {
+          for (const auto &input_shape :
+               {sym_ns::SymShape({6, 8}), sym_ns::SymShape({2, 3, 8}),
+                sym_ns::SymShape({SymDim("T"), SymDim("H")}),
+                sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim("H")})}) {
+            SCOPED_TRACE(::testing::Message()
+                         << activation << " fusion=" << fusion << " bias=" << bias
+                         << " dtype=" << static_cast<int>(dtype) << " rank=" << input_shape.Rank());
+            MoEMetadata test(activation, fusion, bias, dtype, input_shape, !input_shape[0].IsInt());
+            ASSERT_FALSE(test.shapes.Has("Y"));
+            infer(test.shapes, test.node);
+            EXPECT_EQ(test.shapes.Get("Y").Dtype(), dtype);
+            EXPECT_EQ(test.shapes.Get("Y").Shape(), input_shape);
+          }
+        }
+      }
+    }
+  }
+  for (const int slots : {7, 8}) {
+    MoEMetadata test;
+    test.node.ref_input().resize(slots);
+    infer(test.shapes, test.node);
+    EXPECT_EQ(test.shapes.Get("Y").Shape(), sym_ns::SymShape({6, 8}));
+  }
+  for (int biases = 0; biases < 8; ++biases) {
+    MoEMetadata test;
+    test.node.ref_input().resize(8);
+    test.node.ref_input()[3] = biases & 1 ? "bias1" : "";
+    test.node.ref_input()[5] = biases & 2 ? "bias2" : "";
+    test.node.ref_input()[7] = biases & 4 ? "bias3" : "";
+    infer(test.shapes, test.node);
+    EXPECT_EQ(test.shapes.Get("Y").Shape(), sym_ns::SymShape({6, 8}));
+  }
+  for (const int slots : {5, 6, 7, 8}) {
+    MoEMetadata test("relu");
+    test.node.ref_input().resize(slots);
+    infer(test.shapes, test.node);
+    EXPECT_EQ(test.shapes.Get("Y").Shape(), sym_ns::SymShape({6, 8}));
+  }
+  MoEMetadata mixtral("silu");
+  mixtral.node.add_input("");
+  mixtral.node.add_input("fc3");
+  infer(mixtral.shapes, mixtral.node);
+  EXPECT_EQ(mixtral.shapes.Get("Y").Shape(), sym_ns::SymShape({6, 8}));
+
+  MoEMetadata split;
+  builder_ns::GraphBuilder builder("split_moe", SchemaLookup());
+  builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+  for (const auto &name : split.node.input()) {
+    if (!name.empty()) {
+      builder.MakeInput(name, TensorType::kFloat, split.shapes.Get(name).Shape());
+    }
+  }
+  builder.MakeNode("MoE", {"X", "router", "fc1", "", "fc2", "", "fc3"}, {"Y"},
+                   onnx_light_cpu::kMicrosoftDomain, "split_moe", split.node.attribute());
+  EXPECT_EQ(builder.GetShape("Y").Dtype(), TensorType::kFloat);
+  EXPECT_EQ(builder.GetShape("Y").Shape(), sym_ns::SymShape({6, 8}));
+}
+
+TEST(CustomOperatorSupport, MoERejectsIncompatibleFC3AndBiasMetadata) {
+  for (const auto &shape : {sym_ns::SymShape({2, 4}), sym_ns::SymShape({3, 4, 8}),
+                            sym_ns::SymShape({2, 5, 8}), sym_ns::SymShape({2, 4, 9})}) {
+    MoEMetadata test;
+    test.shapes.Set("fc3", SymTensor(nullptr, TensorType::kFloat, shape));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+  for (const auto &shape :
+       {sym_ns::SymShape({4}), sym_ns::SymShape({3, 4}), sym_ns::SymShape({2, 5})}) {
+    MoEMetadata test("swiglu", 0, true);
+    test.shapes.Set("bias3", SymTensor(nullptr, TensorType::kFloat, shape));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+  for (const char *name : {"X", "router", "fc1", "fc2", "fc3", "bias1", "bias2", "bias3"}) {
+    MoEMetadata test("swiglu", 0, true);
+    const auto shape = test.shapes.Get(name).Shape();
+    test.shapes.Set(name, SymTensor(nullptr, TensorType::kFloat16, shape));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+  for (const int slot : {3, 5, 6, 7}) {
+    MoEMetadata test("swiglu", 0, true);
+    test.node.ref_input()[slot] = "missing";
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+  for (const int64_t fusion : {1, 2}) {
+    for (const char *name : {"fc1", "bias1"}) {
+      MoEMetadata test("swiglu", fusion, true);
+      test.shapes.Set(name, SymTensor(nullptr, TensorType::kFloat,
+                                      name == std::string("fc1") ? sym_ns::SymShape({2, 4, 8})
+                                                                 : sym_ns::SymShape({2, 4})));
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, MoEValidatesActivationFusionAndRoutingContracts) {
+  for (const auto &activation :
+       {"relu", "gelu", "silu", "identity", "relu2", "swiglu", "geglu", "unknown"}) {
+    for (const int64_t fusion : {-1, 0, 1, 2, 3}) {
+      for (const bool fc3 : {false, true}) {
+        for (const bool bias3 : {false, true}) {
+          MoEMetadata test(activation, fusion);
+          test.node.ref_input().resize(8);
+          test.node.ref_input()[6] = fc3 ? "fc3" : "";
+          test.node.ref_input()[7] = bias3 ? "bias3" : "";
+          const std::string name = activation;
+          const bool valid = fusion >= 0 && fusion <= 2 && name != "unknown" && (!bias3 || fc3) &&
+                             (name == "swiglu"  ? (fusion == 0 ? fc3 : !fc3)
+                              : name == "geglu" ? fusion != 0 && !fc3
+                                                : fusion == 0);
+          SCOPED_TRACE(::testing::Message() << activation << " fusion=" << fusion << " fc3=" << fc3
+                                            << " bias3=" << bias3);
+          if (valid) {
+            EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node));
+          } else {
+            EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node),
+                         std::invalid_argument);
+          }
+        }
+      }
+    }
+  }
+  for (const char *attribute : {"k", "normalize_routing_weights", "use_sparse_mixer",
+                                "topk_tie_break_low", "router_probs_are_logits"}) {
+    for (const int64_t value : {-1, 0, 1, 2, 3}) {
+      MoEMetadata test("relu");
+      ONNX_LIGHT_NAMESPACE::AddAttribute(test.node, attribute, value);
+      if ((std::string(attribute) == "k"                  ? value >= 1 && value <= 2
+           : std::string(attribute) == "use_sparse_mixer" ? value == 0
+                                                          : value == 0 || value == 1)) {
+        EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node));
+      } else {
+        EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node),
+                     std::invalid_argument);
+      }
+    }
+    MoEMetadata wrong_type("relu");
+    ONNX_LIGHT_NAMESPACE::AddAttribute(wrong_type.node, attribute, 1.0f);
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(wrong_type.shapes, wrong_type.node),
+                 std::invalid_argument);
+  }
+  MoEMetadata sparse("relu");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(sparse.node, "use_sparse_mixer", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(sparse.node, "k", int64_t{2});
+  EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(sparse.shapes, sparse.node));
+  for (const char *attribute : {"activation_type", "swiglu_fusion", "activation_alpha",
+                                "activation_beta", "swiglu_limit"}) {
+    MoEMetadata test;
+    test.node.ref_attribute().clear();
+    ONNX_LIGHT_NAMESPACE::AddAttribute(test.node, attribute, int64_t{1});
+    if (std::string(attribute) == "swiglu_fusion") {
+      test.node.ref_attribute().clear();
+      ONNX_LIGHT_NAMESPACE::AddAttribute(test.node, attribute, 1.0f);
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+  for (const auto &shape :
+       {sym_ns::SymShape({5, 2}), sym_ns::SymShape({6, int64_t{0}}), sym_ns::SymShape({6, 2, 1})}) {
+    MoEMetadata test;
+    test.shapes.Set("router", SymTensor(nullptr, TensorType::kFloat, shape));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+}
+
+TEST(CustomOperatorSupport, MoEReportsInputAndOutputAritySeparately) {
+  const auto expect_error = [](MoEMetadata &test, const std::string &message) {
+    try {
+      onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node);
+      FAIL() << "Expected invalid arity";
+    } catch (const std::invalid_argument &error) {
+      EXPECT_EQ(error.what(), message);
+    }
+  };
+  for (const int count : {0, 4, 9}) {
+    MoEMetadata test;
+    test.node.ref_input().resize(count);
+    expect_error(test, "ComputeShapeMoE: expected five to eight input slots, got " +
+                           std::to_string(count) + ".");
+  }
+  for (const int count : {0, 2}) {
+    MoEMetadata test;
+    test.node.ref_output().resize(count);
+    expect_error(test, "ComputeShapeMoE: expected one output, got " + std::to_string(count) + ".");
+  }
+  MoEMetadata empty_output;
+  empty_output.node.ref_output()[0].clear();
+  expect_error(empty_output, "ComputeShapeMoE: output name must not be empty.");
+  for (const int slot : {0, 1, 2, 4}) {
+    MoEMetadata test;
+    test.node.ref_input()[slot].clear();
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node), std::invalid_argument);
+  }
+}
+
+TEST(CustomOperatorSupport, MoEShapeSupportDoesNotEnableUnsupportedCPUExecution) {
+  const rt_ns::KernelContext context{rt_ns::OpsetId(onnx_light_cpu::kMicrosoftDomain, 1)};
+  for (const auto &activation : {"swiglu", "geglu", "relu2"}) {
+    for (const int64_t fusion : {0, 1, 2}) {
+      if ((std::string(activation) == "geglu" && fusion == 0) ||
+          (std::string(activation) == "relu2" && fusion != 0)) {
+        continue;
+      }
+      MoEMetadata test(activation, fusion);
+      EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(test.shapes, test.node));
+      if (std::string(activation) == "swiglu" && fusion == 1) {
+        EXPECT_NO_THROW(onnx_light_cpu::MoEKernel(test.node, context));
+      } else {
+        EXPECT_THROW(onnx_light_cpu::MoEKernel(test.node, context), std::invalid_argument);
+      }
+    }
+  }
+  MoEMetadata sparse("relu");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(sparse.node, "use_sparse_mixer", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(sparse.node, "k", int64_t{2});
+  EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(sparse.shapes, sparse.node));
+  EXPECT_THROW(onnx_light_cpu::MoEKernel(sparse.node, context), std::invalid_argument);
+
+  MoEMetadata split("silu");
+  split.node.add_input("");
+  split.node.add_input("fc3");
+  EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMoE(split.shapes, split.node));
+  onnx_light_cpu::MoEKernel kernel(split.node, context);
+  rt_ns::RuntimeContext runtime(context);
+  EXPECT_THROW(kernel.Run(runtime), std::invalid_argument);
+}
+
 TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
   shapes_ns::ShapesContext ctx;
   ctx.Set("input", SymTensor(nullptr, TensorType::kFloat16,
