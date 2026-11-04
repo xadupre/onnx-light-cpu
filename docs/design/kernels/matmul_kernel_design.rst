@@ -32,8 +32,8 @@ Shape and plan model
 
 The reusable ``MatMulPlan`` library API can own a constant ``B`` tensor, giving
 callers a stable lifetime independent of the source buffer. The registered
-ONNX adapter does not currently cache a plan or constant B: it constructs a
-fresh plan from both concrete input shapes on every invocation.
+ONNX adapter caches plans by dtype and concrete input shapes. Eligible immutable
+FP32 projection weights can be prepared separately in the runtime value store.
 
 Types and algorithm selection
 -----------------------------
@@ -45,9 +45,28 @@ types, and incompatible matrix or batch dimensions fail before compute.
 FLOAT and DOUBLE execute directly through ``MatMulPlan<T>``. FLOAT16 and
 BFLOAT16 use ``MatMulPlan<float>`` together with ``GemmHalfPlan`` for the
 native half-capable algorithms, with FP32 accumulation and final narrowing.
-For BF16 general and direct algorithms, the current fallback materializes
-complete FP32 copies of A and B plus the FP32 output before converting back to
-BF16; this path is not bounded to one panel.
+The adapter owns one FP32 output workspace across all broadcast batches.
+Native half routines pack compact panels; fallback routines widen only while
+packing or reducing, not by materializing complete FP32 copies of A and B.
+
+Peak-memory accounting
+---------------------
+
+The CPU ``MatMul`` peak-memory hook uses the same shape plans and checked
+packing-size formulas as execution. It excludes declared output ``Y``, inputs,
+and preparation-owned weights, and includes the FP32 half-output workspace,
+shared B panel waves, per-worker A/micro-B panels, skinny accumulators, and
+split-K partial outputs. Concurrent batch products are accounted for separately
+from inner-GEMM parallelism; nested split-K packing is serial per partition.
+
+The shape-only registration API carries neither dtype nor executor policy.
+Consequently the hook reports only a conservative worst case across FLOAT,
+DOUBLE, FLOAT16, BFLOAT16 and all plan-admitted executor sizes. It does not
+assume that profiling's current (often serial) executor is execution's executor.
+For a known participant limit, the plan ``ScratchBytes(limit)`` and
+``HalfScratchBytes(is_bfloat16, limit)`` APIs give a tighter bound. Unrestricted
+executor bounds can exceed typical session usage, especially for large batches
+or projections; this is packing concurrency, not full-source promotion.
 
 The embedded ``GemmPlan`` chooses the current shape-specific algorithm once:
 

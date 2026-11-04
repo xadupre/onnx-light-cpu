@@ -5,11 +5,16 @@
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "ml_cpu_compute/checked_arithmetic.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/shapes/shape_broadcast.h"
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+#include "onnx_extensions/shapes/dispatch_table.h"
+#endif
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
+#include <algorithm>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -68,6 +73,43 @@ void CheckScaleBroadcast(shapes_ns::ShapesContext &ctx, const SymShape &x, const
 }
 
 } // namespace
+
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryMatMul(sym_ns::Device device,
+                                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                                                      const std::vector<SymShape> &input_shapes) {
+  const auto unknown = [] { return shapes_ns::UnknownPeakMemory("ai.onnx", "MatMul"); };
+  if ((device != sym_ns::Device::kCPU && device != sym_ns::Device::kUndefined) ||
+      input_shapes.size() != 2 || (node.input_size() != 0 && node.input_size() != 2) ||
+      (node.output_size() != 0 && node.output_size() != 1)) {
+    return unknown();
+  }
+  std::vector<std::size_t> shapes[2];
+  for (std::size_t index = 0; index < 2; ++index) {
+    if (input_shapes[index].Rank() == 0) {
+      return unknown();
+    }
+    for (const auto &dimension : input_shapes[index].Dims()) {
+      if (!dimension.IsInt()) {
+        return unknown();
+      }
+      shapes[index].push_back(
+          ml_cpu_compute::CheckedDimension(dimension.AsInt(), "MatMul", "input dimension"));
+    }
+  }
+  const ml_cpu_compute::MatMulPlan<float> f32(shapes[0], shapes[1]);
+  const ml_cpu_compute::MatMulPlan<double> f64(shapes[0], shapes[1]);
+  // ComputeHalf owns exactly one full FP32 output workspace. Inputs are converted
+  // only inside packing/reduction; Y is already counted by the graph memory planner.
+  const std::size_t bytes = std::max({f32.ScratchBytes(), f64.ScratchBytes(),
+                                      f32.HalfScratchBytes(false), f32.HalfScratchBytes(true)});
+  if (bytes > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument("MatMul: peak memory bytes overflow int64_t.");
+  }
+  if (bytes == 0) {
+    return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+  }
+  return shapes_ns::PeakMemoryEstimate(static_cast<std::int64_t>(bytes));
+}
 
 shapes_ns::PeakMemoryEstimate
 ComputePeakMemoryAttention(sym_ns::Device device, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
@@ -308,6 +350,13 @@ shapes_ns::PeakMemoryEstimate ComputePeakMemorySimplifiedLayerNormalization(
 void RegisterExperimentalShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
+  // Install lazy builtins before overriding them, so later generic registration
+  // cannot replace CPU-specific allocation accounting.
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+    ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+#endif
+    shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryMatMul);
     shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "Attention", sym_ns::Device::kCPU,
                                            ComputePeakMemoryAttention);
     shapes_ns::RegisterComputeShapeFn("ai.onnx", "RotaryEmbedding", ComputeShapeRotaryEmbedding);

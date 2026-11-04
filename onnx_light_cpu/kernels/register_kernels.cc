@@ -49,6 +49,7 @@
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_proto/onnx_helper.h"
 
@@ -193,6 +194,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
 void RegisterAllKernels() { RegisterAllKernels(MicrosoftKernelImplementation::OPTIMIZED); }
 
 void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
+  RegisterExperimentalShapeAndMemoryFunctions();
   // Opens a fresh duplicate-registration check for this call, unless one is
   // already active (``CollectRegisteredKernels`` opens one first so this
   // pass collects metadata instead of installing kernels; see

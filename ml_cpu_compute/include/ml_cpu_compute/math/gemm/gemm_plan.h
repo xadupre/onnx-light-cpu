@@ -73,8 +73,17 @@ public:
   GemmAlgorithm algorithm() const noexcept { return algorithm_; }
   const GemmBlocking &blocking() const noexcept { return blocking_; }
   std::size_t useful_threads() const noexcept { return useful_threads_; }
+  /// Plan-admitted executor budget, independent of the current executor.
+  std::size_t maximum_participants() const noexcept {
+    return algorithm_ == GemmAlgorithm::kSkinnyM ? useful_threads_ : participant_limit_;
+  }
   bool has_constant_b() const noexcept { return has_constant_b_; }
   bool has_prepared_b() const noexcept { return prepared_wide_b_; }
+
+  /// Conservative product scratch bound, excluding inputs, output and plan-owned weights.
+  /// Zero participants covers every executor, not just the calling thread's executor.
+  /// Bias/activation epilogue storage is not included.
+  std::size_t ScratchBytes(std::size_t maximum_participants = 0) const;
 
 private:
   using RoutineFn = void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *,
@@ -140,6 +149,12 @@ public:
   const GemmBlocking &blocking() const noexcept { return blocking_; }
   const GemmBlocking &compact_blocking() const noexcept { return compact_blocking_; }
   std::size_t useful_threads() const noexcept { return useful_threads_; }
+  std::size_t maximum_participants() const noexcept {
+    return algorithm_ == GemmAlgorithm::kSkinnyM ? useful_threads_ : participant_limit_;
+  }
+
+  /// Product packing/partial-reduction storage; excludes the caller-owned FP32 output.
+  std::size_t ScratchBytes(std::size_t maximum_participants = 0) const;
 
 private:
   using RoutineFn = void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
@@ -182,6 +197,11 @@ public:
   std::size_t batch_count() const noexcept { return batch_count_; }
   bool has_constant_b() const noexcept { return has_constant_b_; }
   const GemmPlan<T> &gemm_plan() const noexcept { return gemm_plan_; }
+
+  /// Product scratch including concurrent broadcast batches, excluding output tensors.
+  std::size_t ScratchBytes(std::size_t maximum_participants = 0) const;
+  /// As above for compact inputs, including the full caller-owned FP32 output workspace.
+  std::size_t HalfScratchBytes(bool is_bfloat16, std::size_t maximum_participants = 0) const;
 
 private:
   MatMulPlan(detail::MatMulDimensions dimensions, bool trans_a, bool trans_b,

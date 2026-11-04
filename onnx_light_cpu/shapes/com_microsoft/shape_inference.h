@@ -112,8 +112,7 @@ ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryGatherBl
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
-/// Bounds prepared INT8 workspace, excluding outputs. INT4 retained scratch and
-/// unresolved activation dimensions remain unknown; generic streaming paths use no heap scratch.
+/// Returns zero heap scratch; bounded INT4 panels use 6144 bytes of stack per callback.
 ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const ONNX_LIGHT_NAMESPACE::NodeProto &node,

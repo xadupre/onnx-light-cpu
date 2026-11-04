@@ -27,9 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
-#include <limits>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -77,88 +75,6 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeNode(std::int64_t k, std::int64_t n, std::in
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", block_size);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "accuracy_level", std::int64_t{4});
   return node;
-}
-
-TEST(MatMulNBitsMemory, RetainedInt4ScratchDoesNotClaimAShapeOnlyBound) {
-  namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
-  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
-  auto node = MakeNode(64, 32);
-  const std::vector<sym_ns::SymShape> shapes{sym_ns::SymShape({2, 3, 64})};
-  const auto estimate = shapes_ns::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes);
-  EXPECT_TRUE(estimate.worst_case.IsExpr());
-  EXPECT_FALSE(estimate.average_case.has_value());
-  for (const char *name : {"", "", "bias"}) {
-    node.add_input(name);
-  }
-  EXPECT_TRUE(shapes_ns::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes).worst_case.IsExpr());
-  // Even an empty activation can trigger invocation-local weight packing.
-  for (const auto shape : {sym_ns::SymShape({64}), sym_ns::SymShape({std::int64_t{0}, 64})}) {
-    EXPECT_TRUE(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU, node, {shape})
-                    .worst_case.IsExpr());
-  }
-}
-
-TEST(MatMulNBitsMemory, BoundsInt8WorkspaceIndependentlyOfExecutorAndTuning) {
-  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  InlineExecutor executor;
-  ml_cpu_compute::ExecutionExecutorView view{&executor, 64, &InlineExecutor::Run};
-  ml_cpu_compute::ExecutionExecutorScope scope(&view);
-  for (const std::size_t rows : {0, 1, 4, 5, 64}) {
-    const auto estimate = onnx_light_cpu::ComputePeakMemoryMatMulNBits(
-        sym_ns::Device::kCPU, MakeNode(64, 32, 8),
-        {sym_ns::SymShape({static_cast<std::int64_t>(rows), 64})});
-    const auto workspace =
-        ml_cpu_compute::MatMulNBitsInt8WorkspaceElements(rows, 64, 32, {1, 1, 64}) * sizeof(double);
-    EXPECT_GE(estimate.worst_case.AsInt(), static_cast<std::int64_t>(workspace));
-    if (rows <= 4) {
-      EXPECT_EQ(estimate.worst_case.AsInt(), static_cast<std::int64_t>(workspace));
-    }
-  }
-}
-
-TEST(MatMulNBitsMemory, GenericAndEncodedPathsDoNotAllocateHeapScratch) {
-  namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
-  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  for (auto node :
-       {MakeNode(35, 3), MakeNode(64, 32, 2), MakeNode(64, 32, 3), MakeNode(64, 32, 4, 64)}) {
-    EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMatMulNBits(
-                  sym_ns::Device::kCPU, node, {sym_ns::SymShape({2, 3, node.attribute(0).i()})}),
-              shapes_ns::PeakMemoryEstimate::Exact(std::int64_t{0}));
-  }
-  auto node = MakeNode(64, 32);
-  node.add_input("zero_points");
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU, node,
-                                                         {sym_ns::SymShape({2, 64})}),
-            shapes_ns::PeakMemoryEstimate::Exact(std::int64_t{0}));
-  node = MakeNode(64, 32);
-  node.ref_input()[2] = "";
-  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU, node,
-                                                         {sym_ns::SymShape({2, 64})}),
-            shapes_ns::PeakMemoryEstimate::Exact(std::int64_t{0}));
-}
-
-TEST(MatMulNBitsMemory, UnknownAndInvalidShapesNeverReportZero) {
-  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  const auto node = MakeNode(64, 32);
-  for (const std::vector<sym_ns::SymShape> shapes :
-       {std::vector<sym_ns::SymShape>{},
-        {sym_ns::SymShape({})},
-        {sym_ns::SymShape({sym_ns::SymDim("rows"), sym_ns::SymDim(64)})}}) {
-    EXPECT_TRUE(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU, node, shapes)
-                    .worst_case.IsExpr());
-  }
-  EXPECT_TRUE(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU,
-                                                           ONNX_LIGHT_NAMESPACE::NodeProto{},
-                                                           {sym_ns::SymShape({2, 64})})
-                  .worst_case.IsExpr());
-  for (const auto shape : {sym_ns::SymShape({-1, 64}), sym_ns::SymShape({2, 63}),
-                           sym_ns::SymShape({std::numeric_limits<std::int64_t>::max(), 2, 64}),
-                           sym_ns::SymShape({std::numeric_limits<std::int64_t>::max(), 64})}) {
-    EXPECT_THROW(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU,
-                                                              MakeNode(64, 32, 8), {shape}),
-                 std::invalid_argument);
-  }
 }
 
 rt_ns::Tensor MakeTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,

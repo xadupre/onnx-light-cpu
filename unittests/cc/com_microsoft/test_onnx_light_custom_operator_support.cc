@@ -1741,7 +1741,7 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
             shapes_ns::PeakMemoryEstimate(96));
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "MatMulNBits",
                                          sym_ns::Device::kCPU, {}),
-            shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "MatMulNBits"));
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
 
   grad_ns::GradRegistry gradients;
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);

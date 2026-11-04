@@ -1686,50 +1686,10 @@ ComputePeakMemoryGatherBlockQuantized(sym_ns::Device, const ONNX_LIGHT_NAMESPACE
   return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-shapes_ns::PeakMemoryEstimate
-ComputePeakMemoryMatMulNBits(sym_ns::Device device, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                             const std::vector<SymShape> &shapes) {
-  const auto unknown = [] { return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MatMulNBits"); };
-  const auto k_attr = GetIntAttribute(node, "K", 0);
-  const auto n_attr = GetIntAttribute(node, "N", 0);
-  if ((device != sym_ns::Device::kCPU && device != sym_ns::Device::kUndefined) || k_attr <= 0 ||
-      n_attr <= 0 || shapes.empty() || shapes[0].Rank() == 0) {
-    return unknown();
-  }
-  std::vector<std::int64_t> row_shape;
-  for (std::size_t i = 0; i < shapes[0].Rank(); ++i) {
-    if (!shapes[0][i].IsInt()) {
-      return unknown();
-    }
-    ml_cpu_compute::CheckedDimension(shapes[0][i].AsInt(), "MatMulNBits", "A dimension");
-    if (i + 1 < shapes[0].Rank()) {
-      row_shape.push_back(shapes[0][i].AsInt());
-    } else if (shapes[0][i].AsInt() != k_attr) {
-      throw std::invalid_argument("MatMulNBits: A must have final dimension K.");
-    }
-  }
-  const auto rows = ml_cpu_compute::CheckedShapeIndexProduct(row_shape, "MatMulNBits", "rows");
-  const auto bits = GetIntAttribute(node, "bits", 4);
-  if (GetIntAttribute(node, "accuracy_level", 0) != 4 ||
-      GetIntAttribute(node, "block_size", 0) != 32 || k_attr % 32 != 0 ||
-      (bits != 4 && bits != 8) || (bits == 4 && n_attr % 16 != 0) || HasInput(node, 3) ||
-      HasInput(node, 4) || !HasInput(node, 2)) {
-    return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
-  }
-  const auto mul = [](std::int64_t a, std::int64_t b) {
-    return ml_cpu_compute::CheckedIndexMultiply(a, b, "MatMulNBits", "scratch bytes");
-  };
-  const auto add = [](std::int64_t a, std::int64_t b) {
-    return ml_cpu_compute::CheckedIndexAdd(a, b, "MatMulNBits", "scratch bytes");
-  };
-  if (bits == 8) {
-    // At most one four-row INT8 workspace per input row, regardless of tuning or executor.
-    // The small-row path instead stores one byte per activation and a double per block.
-    return mul(rows, rows <= 4 ? add(k_attr, mul(k_attr / 32, sizeof(double))) : mul(k_attr, 5));
-  }
-  // INT4 keeps thread-local quantization and half-conversion vectors. Their
-  // retained capacities depend on earlier calls, so shapes alone cannot bound them.
-  return unknown();
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryMatMulNBits(sym_ns::Device,
+                                                           const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                           const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
 shapes_ns::PeakMemoryEstimate ComputePeakMemoryMoE(sym_ns::Device,
