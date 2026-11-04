@@ -111,10 +111,17 @@ ComputePeakMemoryAttention(sym_ns::Device device, const ONNX_LIGHT_NAMESPACE::No
                                : ml_cpu_compute::AttentionMaskKind::kNone,
       shapes[4], shapes[5]);
   // The hook has no dtype metadata: cover half-mask conversion even for BOOL/FLOAT masks.
-  const std::size_t bytes = ml_cpu_compute::CheckedAdd(
+  std::size_t bytes = ml_cpu_compute::CheckedAdd(
       ml_cpu_compute::AttentionPeakMemoryBytes(plan),
       ml_cpu_compute::CheckedByteSize(mask_elements, sizeof(float), "Attention", "mask conversion"),
       "Attention", "peak memory bytes");
+  if (node.input_size() > 7 && !node.input(7).empty()) {
+    bytes = ml_cpu_compute::CheckedAdd(bytes,
+                                       ml_cpu_compute::CheckedByteSize(plan.q_num_heads,
+                                                                       sizeof(float), "Attention",
+                                                                       "head-sink conversion"),
+                                       "Attention", "peak memory bytes");
+  }
   if (bytes > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::invalid_argument("Attention: peak memory bytes overflow int64_t.");
   }

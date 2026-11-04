@@ -81,7 +81,84 @@ TEST(AttentionMemory, SingleKeyHeadSinkDoesNotReportZeroPeak) {
   node.add_input("head_sink");
   shapes.emplace_back(SymShape({}));
   shapes.emplace_back(SymShape({16}));
-  EXPECT_EQ(Peak(node, shapes), metadata_peak);
+  EXPECT_EQ(Peak(node, shapes), metadata_peak + 64);
+}
+
+TEST(AttentionMemory, HeadSinkIsCountedAcrossExecutionPaths) {
+  onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+  for (bool present : {false, true}) {
+    for (bool qk : {false, true}) {
+      for (std::int64_t precision : {1, 11}) {
+        for (std::int64_t length : {0, 1, 128}) {
+          SCOPED_TRACE(::testing::Message()
+                       << present << " " << qk << " " << precision << " " << length);
+          auto node = AttentionNode(present, qk);
+          IntAttribute(node, "softmax_precision", precision);
+          auto shapes = PrefillShapes(length);
+          const auto without_sink = Peak(node, shapes);
+          node.add_input("");
+          node.add_input("");
+          shapes.emplace_back(SymShape({}));
+          shapes.emplace_back(SymShape({16}));
+          EXPECT_EQ(Peak(node, shapes), without_sink);
+          node.ref_input()[7] = "head_sink";
+          EXPECT_EQ(Peak(node, shapes), without_sink + 64);
+          node.ref_input()[3] = "mask";
+          shapes[3] = SymShape({1});
+          EXPECT_EQ(Peak(node, shapes), without_sink + 64 + 4);
+        }
+      }
+    }
+  }
+}
+
+TEST(AttentionMemory, LargeHeadSinkIsNotCappedWithStreamingWorkers) {
+  onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+  constexpr std::int64_t heads = 1LL << 28;
+  auto node = AttentionNode(false);
+  node.ref_input()[4] = "";
+  node.ref_input()[5] = "";
+  std::vector<SymShape> shapes = {SymShape({1, 1024, 1, 1}), SymShape({1, 1, 1, 1}),
+                                  SymShape({1, 1, 1, 1})};
+  const auto capped_workers = Peak(node, shapes);
+  shapes[0] = SymShape({1, heads, 1, 1});
+  EXPECT_EQ(Peak(node, shapes), capped_workers);
+  node.add_input("");
+  node.add_input("head_sink");
+  shapes.resize(7, SymShape({}));
+  shapes.emplace_back(SymShape({heads}));
+  EXPECT_EQ(Peak(node, shapes), capped_workers + heads * 4);
+}
+
+TEST(AttentionMemory, HeadSinkByteArithmeticIsChecked) {
+  onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+  auto node = AttentionNode(false);
+  node.ref_input()[4] = "";
+  node.ref_input()[5] = "";
+  node.add_input("");
+  node.add_input("");
+  std::vector<SymShape> shapes = {SymShape({1, 1, std::int64_t{0}, 1}),
+                                  SymShape({1, 1, std::int64_t{0}, 1}),
+                                  SymShape({1, 1, std::int64_t{0}, 1})};
+  shapes.resize(8, SymShape({}));
+  const auto size_limit = std::numeric_limits<std::size_t>::max() / sizeof(float);
+  const auto check = [&](std::int64_t heads, bool mask) {
+    shapes[0] = SymShape({1, heads, std::int64_t{0}, 1});
+    shapes[7] = SymShape({heads});
+    node.ref_input()[3] = mask ? "mask" : "";
+    shapes[3] = mask ? SymShape({1}) : SymShape({});
+    node.ref_input()[7] = "";
+    EXPECT_EQ(Peak(node, shapes), mask ? 4 : 0);
+    node.ref_input()[7] = "head_sink";
+    EXPECT_THROW(Peak(node, shapes), std::invalid_argument);
+  };
+  // Empty Q/K/V isolate the sink's byte multiplication and addition checks.
+  check(static_cast<std::int64_t>(size_limit + 1), false);
+  check(static_cast<std::int64_t>(size_limit), true);
+  if (std::numeric_limits<std::size_t>::max() >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    check(std::numeric_limits<std::int64_t>::max() / sizeof(float) + 1, false);
+  }
 }
 
 TEST(AttentionMemory, ExplicitMaskConversionIsNotErased) {
