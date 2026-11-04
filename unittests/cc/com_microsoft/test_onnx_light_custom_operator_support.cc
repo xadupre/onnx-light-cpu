@@ -314,9 +314,9 @@ TEST(CustomOperatorSupport, QMoEFP4MetadataWithOptionalHolesAndGlobalScales) {
   EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
 }
 
-TEST(CustomOperatorSupport, QMoEFP4ValidatesStoredReductionWithSymbolicHidden) {
+TEST(CustomOperatorSupport, QMoEFP4ValidatesAlignmentWithSymbolicHidden) {
   for (const bool output_major : {false, true}) {
-    for (const int64_t hidden : {2880, 2878}) {
+    for (const int64_t hidden : {2880, 2878, 2879}) {
       SCOPED_TRACE(output_major);
       SCOPED_TRACE(hidden);
       shapes_ns::ShapesContext ctx;
@@ -324,10 +324,10 @@ TEST(CustomOperatorSupport, QMoEFP4ValidatesStoredReductionWithSymbolicHidden) {
       ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16, {SymDim("T"), SymDim("H")}));
       ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8,
                               {SymDim(32), SymDim(output_major ? 5760 : hidden),
-                               SymDim(output_major ? hidden / 2 : 2880)}));
+                               SymDim(output_major ? (hidden + 1) / 2 : 2880)}));
       ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8,
                               {SymDim(32), SymDim(output_major ? hidden : 2880),
-                               SymDim(output_major ? 1440 : hidden / 2)}));
+                               SymDim(output_major ? 1440 : (hidden + 1) / 2)}));
       ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat8e8m0,
                               {SymDim(32), SymDim(hidden), SymDim(90)}));
       ctx.Set("B2", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(32), SymDim(hidden)}));
