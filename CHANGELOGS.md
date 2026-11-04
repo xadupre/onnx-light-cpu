@@ -7,6 +7,18 @@ All notable changes to this project are documented in this file. The format is b
 ### Improvements
 
 - Bumped the project version to 0.2.6 ([#1090](https://github.com/xadupre/onnx-light-cpu/issues/1090)).
+- Fused AVX2/FMA online `Attention` max subtraction, masked exponential, and reduction into one pass, preserving mask and nonfinite-input behavior without additional scratch memory; scalar and AVX-512 dispatch remain unchanged ([#1096](https://github.com/xadupre/onnx-light-cpu/pull/1096)).
+- Kept wide AVX-512 FP32 GEMM accumulators in registers by splitting MR12 products into tiles of at most 32 columns, reducing register spills and improving measured Intel AVX-512 `Attention` latency ([#1097](https://github.com/xadupre/onnx-light-cpu/pull/1097)).
+
+### Fixes
+
+- Preserved the A row stride in AVX-512 FP32 GEMM scalar column tails ([#1097](https://github.com/xadupre/onnx-light-cpu/pull/1097)).
+- Added metadata-only `com.microsoft::QMoE` shape inference for GPT-OSS FP4 models with 17 positional input slots, FLOAT8E8M0 block scales, and per-expert FLOAT global scales. Validated both packed layouts and block alignment, including symbolic hidden dimensions, improved arity diagnostics, and accepted empty extended slots for integer CPU execution; FP4 execution remains unsupported ([#1099](https://github.com/xadupre/onnx-light-cpu/pull/1099), pending merge).
+
+### Documentation & CI
+
+- Replaced platform-specific onnx-light wheel requirements with a single `onnx-light>=0.2.5` dependency, deriving CI, release-wheel URLs, and CMake minimum-version constraints from project metadata ([#1092](https://github.com/xadupre/onnx-light-cpu/pull/1092)).
+- Updated Ruff to 0.17.3, mypy to 2.4.1, and cibuildwheel to 4.3.5 ([#1093](https://github.com/xadupre/onnx-light-cpu/pull/1093), [#1095](https://github.com/xadupre/onnx-light-cpu/pull/1095), [#1094](https://github.com/xadupre/onnx-light-cpu/pull/1094)).
 
 ## [0.2.5] – Unreleased
 
@@ -15,6 +27,7 @@ All notable changes to this project are documented in this file. The format is b
 - Bumped the project version to 0.2.5 ([#1083](https://github.com/xadupre/onnx-light-cpu/issues/1083)).
 - Migrated all 14 peak-memory callbacks to onnx-light 0.2.5's node-aware `PeakMemoryEstimate` interface, preserving concrete scratch bounds and distinguishing exact zero workspace from unresolved symbolic estimates ([#1087](https://github.com/xadupre/onnx-light-cpu/pull/1087)).
 - Added mandatory onnx-light 0.2.5 GitHub wheel dependencies selected by Python 3.12–3.14, operating system, and architecture. These direct URLs prevent PyPI publication and require the matching upstream wheel to be available, with no older-version fallback ([#1087](https://github.com/xadupre/onnx-light-cpu/pull/1087)).
+- Connected immutable FLOAT `MatMul` LM-head weights to runtime-owned, shared panel preparation on AVX2 and AVX-512, avoiding repeated packing for eligible prefill projections. Preparation adds persistent memory and startup cost; decode and unsupported inputs retain generic execution, and FLOAT16/BFLOAT16 paths are unchanged ([#1078](https://github.com/xadupre/onnx-light-cpu/pull/1078)).
 
 ### Documentation & CI
 
