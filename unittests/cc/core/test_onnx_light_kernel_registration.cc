@@ -6,8 +6,12 @@
 
 #include "ml_cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+#include "onnx_extensions/shapes/dispatch_table.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -20,6 +24,7 @@
 namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 using onnx_light_cpu::KernelRegistration;
@@ -605,6 +610,82 @@ TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   EXPECT_EQ(factory->second(node, runtime, runtime.kernel_ctx()), nullptr);
+}
+
+TEST(KernelRegistration, CollectionDoesNotRegisterMatMulMemoryEstimator) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  const std::vector<sym_ns::SymShape> shapes{sym_ns::SymShape({128, 512}),
+                                             sym_ns::SymShape({512, 4096})};
+  const auto before =
+      ONNX_LIGHT_NAMESPACE::core::shapes::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes);
+
+  onnx_light_cpu::CollectRegisteredKernels();
+  onnx_light_cpu::CollectKernelFactories(onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED);
+
+  EXPECT_EQ(
+      ONNX_LIGHT_NAMESPACE::core::shapes::ComputePeakMemory(sym_ns::Device::kCPU, node, shapes),
+      before);
+}
+
+TEST(KernelRegistration, SupportAndOtherKernelRegistrationPreserveMatMulMemoryEstimator) {
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+  ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+#endif
+  shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
+                                         [](auto, const auto &, const auto &) {
+                                           return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+                                         });
+  const std::vector<sym_ns::SymShape> shapes{sym_ns::SymShape({1, 1024}),
+                                             sym_ns::SymShape({1024, 151936})};
+  onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+  EXPECT_EQ(shapes_ns::ComputePeakMemory("", "MatMul", sym_ns::Device::kCPU, shapes),
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
+  EXPECT_TRUE(onnx_light_cpu::RegisterKernelGlobal("", "Abs"));
+  rt_ns::RuntimeContext session(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  EXPECT_TRUE(onnx_light_cpu::RegisterKernelForSession(session, "", "MatMul"));
+  EXPECT_GT(onnx_light_cpu::RegisterAllKernelsForSession(session), 0U);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory("", "MatMul", sym_ns::Device::kCPU, shapes),
+            shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
+}
+
+TEST(KernelRegistration, GlobalMatMulRegistrationInstallsMemoryEstimatorOnlyOnSuccess) {
+  const std::vector<sym_ns::SymShape> shapes{sym_ns::SymShape({1, 1024}),
+                                             sym_ns::SymShape({1024, 151936})};
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  const auto expected = onnx_light_cpu::ComputePeakMemoryMatMul(sym_ns::Device::kCPU, node, shapes);
+  onnx_light_cpu::RegisterAllKernels();
+  for (int api : {0, 1, 2}) {
+    SCOPED_TRACE(api);
+    const auto reset_estimator = [] {
+      shapes_ns::RegisterComputePeakMemoryFn(
+          "ai.onnx", "MatMul", sym_ns::Device::kCPU, [](auto, const auto &, const auto &) {
+            return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
+          });
+    };
+    reset_estimator();
+    EXPECT_FALSE(onnx_light_cpu::RegisterKernelGlobal("", "MatMul", false));
+    EXPECT_EQ(onnx_light_cpu::RegisterAllKernelsGlobal(false), 0U);
+    EXPECT_EQ(shapes_ns::ComputePeakMemory("", "MatMul", sym_ns::Device::kCPU, shapes),
+              shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
+    if (api == 0) {
+      onnx_light_cpu::RegisterAllKernels();
+    } else if (api == 1) {
+      EXPECT_TRUE(onnx_light_cpu::RegisterKernelGlobal("", "MatMul"));
+    } else {
+      EXPECT_GT(onnx_light_cpu::RegisterAllKernelsGlobal(), 0U);
+    }
+    for (const std::string domain : {"", "ai.onnx"}) {
+      EXPECT_EQ(shapes_ns::ComputePeakMemory(domain, "MatMul", sym_ns::Device::kCPU, shapes),
+                expected);
+    }
+    onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+    EXPECT_EQ(shapes_ns::ComputePeakMemory("", "MatMul", sym_ns::Device::kCPU, shapes), expected);
+  }
 }
 
 // A repeated ``(domain, op_type, device)`` registration within a single pass

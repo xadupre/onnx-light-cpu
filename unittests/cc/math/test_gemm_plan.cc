@@ -5,6 +5,7 @@
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/gemm/arm/gemm_arm.h"
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "unittests/cc/heap_allocation_tracker.h"
 
 #include <gtest/gtest.h>
 
@@ -95,6 +96,120 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
   EXPECT_EQ(plan.blocking().nc % plan.blocking().nr, 0u);
   EXPECT_EQ(plan.blocking().kc % 16, 0u);
   EXPECT_GE(plan.useful_threads(), 1u);
+}
+
+TEST(GemmScratch, CheckedPackingSizesMatchAllocatorRequests) {
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedAElements(17, 129), 17U * 129);
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedBElements(3, 129, 65, 16), 3U * 129 * 80);
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedBElements(3, 129, 65), 3U * 129 * 65);
+  EXPECT_EQ(
+      ml_cpu_compute::detail::GemmPackedBElements(2, std::numeric_limits<std::size_t>::max(), 0),
+      0U);
+  EXPECT_THROW(ml_cpu_compute::detail::GemmPackedBElements(1, 1, 1, 0), std::invalid_argument);
+  EXPECT_THROW(
+      ml_cpu_compute::detail::GemmPackedAElements(std::numeric_limits<std::size_t>::max(), 2),
+      std::invalid_argument);
+  EXPECT_THROW(ml_cpu_compute::detail::GemmPackedBElements(
+                   1, 1, std::numeric_limits<std::size_t>::max(), 16),
+               std::invalid_argument);
+}
+
+TEST(GemmScratch, PackingColumnOverridesAreSharedWithExecution) {
+  const ml_cpu_compute::GemmBlocking f64{64, 128, 4096, 6, 16};
+  EXPECT_EQ(
+      ml_cpu_compute::detail::GemmPackedColumnBlock(f64, sizeof(double), 512, 513, 4096, true),
+      32U);
+  const ml_cpu_compute::GemmBlocking f32{64, 128, 256, 12, 32};
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedColumnBlock(f32, sizeof(float), 128, 513, 256, true),
+            16U);
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedBElements(1, 257, 33, 32), 257U * 64);
+  EXPECT_EQ(ml_cpu_compute::detail::GemmPackedColumnBlock(f32, sizeof(float), 128, 256, 256, true),
+            ml_cpu_compute::detail::SelectGemmColumnBlock(f32, sizeof(float)));
+  const ml_cpu_compute::GemmBlocking narrow_nc{128, 1, 256, 12, 32};
+  EXPECT_EQ(
+      ml_cpu_compute::detail::GemmPackedColumnBlock(narrow_nc, sizeof(float), 128, 4096, 256, true),
+      16U);
+  EXPECT_EQ(ml_cpu_compute::detail::GemmProductScratchBytes(
+                GemmAlgorithm::kGeneral, true, false, 128, 4096, 256, narrow_nc, sizeof(float), 1),
+            147456U);
+}
+
+TEST(GemmScratch, BoundsProductAllocationsAcrossAlgorithmsAndExecutorSizes) {
+  for (const auto shape : {std::array<std::size_t, 3>{8, 4097, 32},
+                           {1, 1024, 1024},
+                           {128, 1, 1024},
+                           {32, 32, 16384},
+                           {128, 513, 257},
+                           {512, 512, 512}}) {
+    const auto [m, n, k] = shape;
+    SCOPED_TRACE(m);
+    SCOPED_TRACE(n);
+    SCOPED_TRACE(k);
+    // Construct with no executor; the estimate must not silently become serial.
+    const GemmPlan<float> f32({false, false, m, n, k});
+    const GemmPlan<double> f64({false, false, m, n, k});
+    const GemmHalfPlan half({false, false, false, m, n, k});
+    const GemmHalfPlan bf16({true, false, false, m, n, k});
+    const std::vector<float> a(m * k, 0.25f), b(k * n, 0.5f);
+    const std::vector<double> ad(m * k, 0.25), bd(k * n, 0.5);
+    const std::vector<std::uint16_t> ah(m * k, 0x3400), bh(k * n, 0x3800);
+    const std::vector<std::uint16_t> ab(m * k, 0x3e80), bb(k * n, 0x3f00);
+    std::vector<float> y(m * n);
+    std::vector<double> yd(m * n);
+    std::vector<std::uint16_t> yh(m * n);
+    ml_cpu_compute::GemmEpilogue<float> epilogue;
+    epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kFloat16;
+    epilogue.converted_output = yh.data();
+    for (const std::size_t threads : {1U, 4U, 48U}) {
+      SCOPED_TRACE(threads);
+      InlineExecutor executor;
+      ml_cpu_compute::ExecutionExecutorView view{&executor, static_cast<std::int64_t>(threads),
+                                                 &InlineExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
+      EXPECT_LE(PeakAllocationBytes([&] { f32.Execute(a.data(), b.data(), nullptr, y.data()); }),
+                f32.ScratchBytes(threads));
+      EXPECT_LE(PeakAllocationBytes([&] { f64.Execute(ad.data(), bd.data(), nullptr, yd.data()); }),
+                f64.ScratchBytes(threads));
+      EXPECT_LE(
+          PeakAllocationBytes([&] { half.Execute(ah.data(), bh.data(), epilogue, y.data()); }),
+          half.ScratchBytes(threads));
+      epilogue.output_conversion = ml_cpu_compute::GemmOutputConversion::kBFloat16;
+      EXPECT_LE(
+          PeakAllocationBytes([&] { bf16.Execute(ab.data(), bb.data(), epilogue, y.data()); }),
+          bf16.ScratchBytes(threads));
+      EXPECT_GE(half.ScratchBytes(), half.ScratchBytes(threads));
+      EXPECT_GE(f32.ScratchBytes(), f32.ScratchBytes(threads));
+    }
+  }
+}
+
+TEST(GemmScratch, SplitKAndConcurrentBroadcastBatchesHaveDistinctOwnership) {
+  const GemmHalfPlan split({false, false, false, 32, 32, 16384});
+  ASSERT_EQ(split.algorithm(), GemmAlgorithm::kSplitK);
+  const std::size_t parts =
+      std::min<std::size_t>(4, (split.k() + split.blocking().kc - 1) / split.blocking().kc);
+  ASSERT_GT(parts, 1U);
+  EXPECT_GE(split.ScratchBytes(4), parts * 32 * 32 * sizeof(float));
+  EXPECT_GE(split.ScratchBytes(4), split.ScratchBytes(1));
+  const std::array<std::size_t, 4> a{2, 1, 128, 257}, b{1, 3, 257, 513};
+  const MatMulPlan<float> batched(a, b);
+  const GemmHalfPlan product({false, false, false, 128, 513, 257});
+  const std::size_t workspace = 6 * 128 * 513 * sizeof(float);
+  EXPECT_EQ(batched.HalfScratchBytes(false, 4),
+            workspace + std::max(product.ScratchBytes(4), 4 * product.ScratchBytes(1)));
+  EXPECT_EQ(batched.HalfScratchBytes(false, 1), workspace + product.ScratchBytes(1));
+  const MatMulPlan<float> custom_blocking(128, 4096, 512, false, true);
+  GemmHalfPlanOptions custom_options{true, false, true, 128, 4096, 512};
+  custom_options.blocking = {128, 4096, 512};
+  custom_options.maximum_participants = 1;
+  const GemmHalfPlan custom_half(custom_options);
+  EXPECT_EQ(custom_blocking.HalfScratchBytes(custom_half, 1),
+            128U * 4096 * sizeof(float) + custom_half.ScratchBytes(1));
+  EXPECT_GT(custom_blocking.HalfScratchBytes(custom_half, 1),
+            custom_blocking.HalfScratchBytes(true, 1));
+  const MatMulPlan<float> zero(std::array<std::size_t, 2>{8, 0}, std::array<std::size_t, 2>{0, 9});
+  EXPECT_EQ(zero.ScratchBytes(), 0U);
+  EXPECT_EQ(zero.HalfScratchBytes(false), 8 * 9 * sizeof(float));
 }
 
 TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {

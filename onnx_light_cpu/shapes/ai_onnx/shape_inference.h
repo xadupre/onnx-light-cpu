@@ -12,6 +12,13 @@
 
 namespace onnx_light_cpu {
 
+/// CPU MatMul product scratch, excluding declared Y and input/prepared-weight storage.
+/// Without dtype/executor metadata this covers all supported dtypes and executor sizes.
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMatMul(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+
 /// Conservative CPU Attention peak memory bound, excluding declared outputs.
 /// Unresolved dimensions remain unknown.
 ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryAttention(
@@ -41,5 +48,8 @@ ComputePeakMemorySimplifiedLayerNormalization(
 
 /// Registers experimental ai.onnx shape-inference and CPU peak-memory functions.
 void RegisterExperimentalShapeAndMemoryFunctions();
+
+/// Installs the CPU MatMul estimator after its global kernel is selected.
+void RegisterMatMulMemoryFunction();
 
 } // namespace onnx_light_cpu

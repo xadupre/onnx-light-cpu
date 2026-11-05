@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
+
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_proto/onnx_helper.h"
@@ -64,6 +66,18 @@ KernelRegistrationScope::~KernelRegistrationScope() {
   }
 }
 
+bool detail::InstallKernel(KernelFactoryRegistration entry, bool replace) {
+  const auto &info = entry.info;
+  if (!rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(entry.factory),
+                               replace)) {
+    return false;
+  }
+  if (info.domain == "ai.onnx" && info.op_type == "MatMul" && info.device == sym_ns::Device::kCPU) {
+    RegisterMatMulMemoryFunction();
+  }
+  return true;
+}
+
 void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
   info.domain = ONNX_LIGHT_NAMESPACE::NormaliseDomain(info.domain);
 
@@ -99,7 +113,7 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
   }
 
   if (scope->installed_.insert(dispatch_key).second) {
-    rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(fn));
+    detail::InstallKernel({std::move(info), std::move(fn)}, true);
   }
 }
 

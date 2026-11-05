@@ -4,6 +4,7 @@
 
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
 
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/gemm/arm/gemm_arm.h"
 #include "ml_cpu_compute/math/gemm/gemm_common.h"
@@ -576,6 +577,18 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T 
   ExecuteProduct(a, resolved_b, beta_, c, y);
 }
 
+template <typename T>
+std::size_t GemmPlan<T>::ScratchBytes(std::size_t maximum_participants) const {
+  if (prepared_wide_b_) {
+    return 0;
+  }
+  const std::size_t participants =
+      std::min(ConfiguredParticipantLimit(maximum_participants),
+               RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  return detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_, k_, blocking_,
+                                         sizeof(T), participants);
+}
+
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) const {
   if (!has_constant_b_) {
     throw std::logic_error(
@@ -705,6 +718,15 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
   CheckedProduct(m_, n_, "Y");
 }
 
+std::size_t GemmHalfPlan::ScratchBytes(std::size_t maximum_participants) const {
+  const std::size_t participants =
+      std::min(ConfiguredParticipantLimit(maximum_participants),
+               RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  return detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_, k_, blocking_,
+                                         sizeof(float), participants, true, &compact_blocking_,
+                                         is_bfloat16_);
+}
+
 void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
                            const GemmEpilogue<float> &epilogue, float *y) const {
   ParticipantLimitScope participant_limit(
@@ -817,6 +839,49 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, T *y) const {
         "ml_cpu_compute::MatMulPlan: Execute without B requires a constant-B plan.");
   }
   Execute(a, nullptr, y);
+}
+
+template <typename T>
+std::size_t MatMulPlan<T>::ScratchBytes(std::size_t maximum_participants) const {
+  if (batch_count_ == 0 || output_matrix_elements_ == 0) {
+    return 0;
+  }
+  const std::size_t concurrent_batches =
+      std::min(batch_count_, ConfiguredParticipantLimit(maximum_participants));
+  return std::max(
+      gemm_plan_.ScratchBytes(maximum_participants),
+      CheckedMultiply(concurrent_batches, gemm_plan_.ScratchBytes(1), "MatMul", "scratch bytes"));
+}
+
+template <typename T>
+std::size_t MatMulPlan<T>::HalfScratchBytes(bool is_bfloat16,
+                                            std::size_t maximum_participants) const {
+  const GemmHalfPlan half_plan({is_bfloat16, gemm_plan_.trans_a(), gemm_plan_.trans_b(),
+                                gemm_plan_.m(), gemm_plan_.n(), gemm_plan_.k()});
+  return HalfScratchBytes(half_plan, maximum_participants);
+}
+
+template <typename T>
+std::size_t MatMulPlan<T>::HalfScratchBytes(const GemmHalfPlan &half_plan,
+                                            std::size_t maximum_participants) const {
+  if (half_plan.m() != gemm_plan_.m() || half_plan.n() != gemm_plan_.n() ||
+      half_plan.k() != gemm_plan_.k() || half_plan.trans_a() != gemm_plan_.trans_a() ||
+      half_plan.trans_b() != gemm_plan_.trans_b()) {
+    throw std::invalid_argument(
+        "ml_cpu_compute::MatMulPlan: half GEMM plan dimensions do not match.");
+  }
+  if (batch_count_ == 0 || output_matrix_elements_ == 0) {
+    return 0;
+  }
+  const std::size_t concurrent_batches =
+      std::min(batch_count_, ConfiguredParticipantLimit(maximum_participants));
+  const std::size_t packing = std::max(
+      half_plan.ScratchBytes(maximum_participants),
+      CheckedMultiply(concurrent_batches, half_plan.ScratchBytes(1), "MatMul", "half scratch"));
+  const std::size_t workspace =
+      CheckedMultiply(CheckedMultiply(batch_count_, output_matrix_elements_, "MatMul", "workspace"),
+                      sizeof(float), "MatMul", "workspace bytes");
+  return CheckedAdd(workspace, packing, "MatMul", "half scratch bytes");
 }
 
 template <typename T>

@@ -44,6 +44,21 @@ SimdLevel EffectiveGemmSimdLevel();
 
 namespace detail {
 
+/// Shared checked size formulas for the packed A and B allocations.
+std::size_t GemmPackedAElements(std::size_t rows, std::size_t k);
+std::size_t GemmPackedBElements(std::size_t panels, std::size_t k, std::size_t columns,
+                                std::size_t alignment = 1);
+std::size_t GemmPackedColumnBlock(const GemmBlocking &blocking, std::size_t element_size,
+                                  std::size_t m, std::size_t n, std::size_t k, bool avx512);
+
+/// Bounds all product dispatch branches, including compact/native and converting panels.
+std::size_t GemmProductScratchBytes(GemmAlgorithm algorithm, bool trans_a, bool trans_b,
+                                    std::size_t m, std::size_t n, std::size_t k,
+                                    const GemmBlocking &blocking, std::size_t element_size,
+                                    std::size_t participants, bool half = false,
+                                    const GemmBlocking *compact_blocking = nullptr,
+                                    bool is_bfloat16 = false);
+
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
                                   std::size_t k, std::size_t vector_lanes,
                                   std::size_t register_rows);
