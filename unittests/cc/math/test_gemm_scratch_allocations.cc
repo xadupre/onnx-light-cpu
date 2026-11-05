@@ -435,7 +435,20 @@ TEST(GemmScratchAllocations, SharedAndSplitKScratchFailuresPrecedeEveryDispatch)
     const auto [m, n, k] = shape;
     const GemmPlan<float> plan({true, true, m, n, k});
     const std::vector<float> a(m * k, 0.25f), b(n * k, 0.5f);
-    for (const std::size_t fail_after : {0U, 1U}) {
+    std::size_t allocation_count = 0;
+    {
+      std::vector<float> y(m * n);
+      AllocationCheckingExecutor executor_tracker;
+      ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
+      ExecutionExecutorScope executor_scope(&executor);
+      TrackingAllocator tracker;
+      const auto allocator = tracker.View();
+      ExecutionAllocatorScope allocator_scope(&allocator);
+      plan.Execute(a.data(), b.data(), nullptr, y.data());
+      allocation_count = tracker.allocations;
+    }
+    ASSERT_GT(allocation_count, 0U);
+    for (std::size_t fail_after = 0; fail_after < allocation_count; ++fail_after) {
       SCOPED_TRACE(::testing::Message()
                    << "M=" << m << ", N=" << n << ", fail_after=" << fail_after);
       std::vector<float> y(m * n, -1.0f);
