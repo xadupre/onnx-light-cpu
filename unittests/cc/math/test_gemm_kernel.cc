@@ -233,6 +233,63 @@ TEST(GemmFloat32, PreparedWidePanelsMatchReferenceWithRowTailsAndBiasAliasing) {
   }
 }
 
+TEST(GemmFloat32, PreparedWidePanelPairsMatchReference) {
+  for (const std::size_t m : {1u, 11u, 12u, 13u, 23u, 24u, 25u}) {
+    for (const std::size_t n : {16u, 32u, 48u, 80u}) {
+      for (const std::size_t k : {1u, 3u, 4u, 5u, 23u}) {
+        SCOPED_TRACE(::testing::Message() << "M=" << m << " N=" << n << " K=" << k);
+        const auto a = RandomVector(m * k, 21);
+        const auto b = RandomVector(k * n, 22);
+        const auto bias = RandomVector(m * n, 23);
+        const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+        for (const float beta : {0.0f, 0.5f, 1.0f}) {
+          const auto expected = ReferenceGemm(false, false, m, n, k, 0.75f, a, b, beta, &bias);
+          auto output = bias;
+          ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 0.75f, a.data(), packed.data(), beta,
+                                                    output.data(), output.data(), 12);
+          for (std::size_t index = 0; index < output.size(); ++index) {
+            EXPECT_NEAR(output[index], expected[index], 1e-4f) << "beta=" << beta << " i=" << index;
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(GemmFloat32, PreparedWidePanelPairsRespectExecutorBoundaries) {
+  constexpr std::size_t m = 25, n = 176, k = 2049;
+  const auto a = RandomVector(m * k, 21);
+  auto b = RandomVector(k * n, 22);
+  b[0] = std::numeric_limits<float>::infinity();
+  b[16] = std::numeric_limits<float>::quiet_NaN();
+  const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+  const auto expected = ReferenceGemm<float>(false, false, m, n, k, 1, a, b, 0, nullptr);
+  std::int64_t blocks = 0;
+  ml_cpu_compute::ExecutionExecutorView executor{
+      &blocks, 4,
+      [](void *context, int64_t num_blocks, void *task_context,
+         ml_cpu_compute::ExecutionBlockFn task) {
+        *static_cast<std::int64_t *>(context) = num_blocks;
+        for (int64_t block = num_blocks; block-- > 0;) {
+          task(task_context, block);
+        }
+      }};
+  ml_cpu_compute::ExecutionExecutorScope scope(&executor);
+  std::vector<float> output(m * n, std::numeric_limits<float>::quiet_NaN());
+  ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 1, a.data(), packed.data(), 0, nullptr,
+                                            output.data(), 12);
+  EXPECT_GT(blocks, 1);
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    if (std::isnan(expected[index])) {
+      EXPECT_TRUE(std::isnan(output[index])) << index;
+    } else if (std::isinf(expected[index])) {
+      EXPECT_EQ(output[index], expected[index]) << index;
+    } else {
+      EXPECT_NEAR(output[index], expected[index], 2e-3f) << index;
+    }
+  }
+}
+
 TEST(GemmFloat32, TypedEpilogueCombinesBroadcastResidualAndRelu) {
   const std::size_t M = 2, N = 3, K = 2;
   const std::vector<float> A = {1, -2, -3, 4};

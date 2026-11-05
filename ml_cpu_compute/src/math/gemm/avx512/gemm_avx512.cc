@@ -266,6 +266,7 @@ void GemmMicroTile_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha, d
   }
 }
 
+template <bool Paired16 = false>
 void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, float beta,
                                    const float *Bmat, std::size_t N, const float *Crow_base,
                                    std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
@@ -305,7 +306,7 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
   for (std::size_t k = 0; k < K; ++k) {
     const float *b_row = Bmat + k * N + n0;
     const __m512 vb0 = _mm512_loadu_ps(b_row);
-    const __m512 vb1 = _mm512_loadu_ps(b_row + 16);
+    const __m512 vb1 = _mm512_loadu_ps(b_row + (Paired16 ? K * 16 : 16));
     if (k + kGemmPrefetchDistanceK < K) {
       PrefetchT0(b_row + kGemmPrefetchDistanceK * N);
     }
@@ -368,6 +369,14 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
   STORE_ROW(10);
   STORE_ROW(11);
 #undef STORE_ROW
+}
+
+void GemmMicroTile_AVX512_F32_MR12_Paired16(std::size_t K, float alpha, float beta, const float *B,
+                                            const float *C, std::size_t Cstride, float *Y,
+                                            std::size_t Ystride, GemmAccumMode mode,
+                                            const float *A) {
+  GemmMicroTile_AVX512_F32_MR12<true>(32, K, alpha, beta, B, 16, C, Cstride, Y, Ystride, 0, mode, A,
+                                      K);
 }
 
 void GemmMicroTile_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double alpha, double beta,

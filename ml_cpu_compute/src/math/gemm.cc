@@ -2054,15 +2054,36 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
                 static_cast<double>(m) * width * k / kGemmFmasPerParallelWorkUnit,
                 [&](std::int64_t begin, std::int64_t end) {
                   for (std::size_t panel = static_cast<std::size_t>(begin);
-                       panel < static_cast<std::size_t>(end); ++panel) {
+                       panel < static_cast<std::size_t>(end);) {
                     const std::size_t col = panel * width;
                     const float *b = packed_b + col * k;
+                    const bool paired =
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+                        kind == GemmImplementation::kAVX512 && mr == 12 && m >= 12 &&
+                        panel + 1 < static_cast<std::size_t>(end);
+#else
+                        false;
+#endif
                     for (std::size_t row = 0; row < m; row += mr) {
                       const std::size_t rows = std::min(mr, m - row);
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+                      if (paired && rows == 12) {
+                        GemmMicroTile_AVX512_F32_MR12_Paired16(
+                            k, alpha, beta, b, c == nullptr ? nullptr : c + row * n + col, n,
+                            y + row * n + col, n, mode, a + row * k);
+                        continue;
+                      }
+#endif
                       GemmTileF32(kind, rows, width, k, alpha, beta, b, width,
                                   c == nullptr ? nullptr : c + row * n + col, n, y + row * n + col,
                                   n, 0, mode, a + row * k);
+                      if (paired) {
+                        GemmTileF32(kind, rows, width, k, alpha, beta, b + width * k, width,
+                                    c == nullptr ? nullptr : c + row * n + col + width, n,
+                                    y + row * n + col + width, n, 0, mode, a + row * k);
+                      }
                     }
+                    panel += paired ? 2 : 1;
                   }
                 });
 }

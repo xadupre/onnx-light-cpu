@@ -195,6 +195,9 @@ constexpr GemmCase kCases[] = {
     {"qwen_up", 128, 1376, 512, false, false, true},
     {"qwen_down", 128, 512, 1376, false, false, true},
     {"qwen_decode_lm_head", 1, 32000, 512, false, false, true},
+    {"qwen_decode_lm_head_tail", 1, 32016, 512, false, false, true},
+    {"qwen_small_m_lm_head", 12, 32000, 512, false, false, true},
+    {"qwen_small_m_lm_head_tail", 12, 32016, 512, false, false, true},
 };
 
 std::size_t RepeatCount(const GemmCase &c) {
@@ -207,7 +210,7 @@ std::size_t RepeatCount(const GemmCase &c) {
 template <typename T>
 double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecutor *executor,
                      std::int64_t *actual_blocks, double *p90_seconds = nullptr,
-                     bool *prepared_b = nullptr) {
+                     bool *prepared_b = nullptr, double *preparation_seconds = nullptr) {
   std::mt19937 rng(0x5eed5eedu);
   std::uniform_real_distribution<double> dist(-1.0, 1.0);
   std::vector<T> a(c.m * c.k);
@@ -231,7 +234,12 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
   if (c.constant_b) {
     options.constant_b = std::span<const T>(b.data(), b.size());
   }
+  const auto preparation_start = std::chrono::steady_clock::now();
   const ml_cpu_compute::GemmPlan<T> plan(options);
+  if (preparation_seconds != nullptr) {
+    *preparation_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - preparation_start).count();
+  }
   *useful_threads = plan.useful_threads();
   if (prepared_b != nullptr) {
     *prepared_b = plan.has_prepared_b();
@@ -401,6 +409,7 @@ int main(int argc, char **argv) {
       std::size_t useful_threads = 0;
       std::int64_t blocks = 1;
       double p90_seconds = 0;
+      double preparation_seconds = 0;
       bool prepared_b = false;
       const std::string dtype(argv[3]);
       if (dtype != "fp32" && dtype != "fp64" && dtype != "fp16" && dtype != "bf16") {
@@ -409,19 +418,20 @@ int main(int argc, char **argv) {
       }
       const double gflops =
           dtype == "fp32"   ? MeasureGflops<float>(c, &useful_threads, &executor, &blocks,
-                                                   &p90_seconds, &prepared_b)
+                                                   &p90_seconds, &prepared_b, &preparation_seconds)
           : dtype == "fp64" ? MeasureGflops<double>(c, &useful_threads, &executor, &blocks,
-                                                    &p90_seconds, &prepared_b)
+                                                    &p90_seconds, &prepared_b, &preparation_seconds)
           : dtype == "fp16" ? MeasureHalfGflops<false>(c, &executor, &blocks, &p90_seconds)
                             : MeasureHalfGflops<true>(c, &executor, &blocks, &p90_seconds);
       const double seconds = 2.0 * c.m * c.n * c.k / (gflops * 1e9);
       std::printf("%s %s M=%zu N=%zu K=%zu seconds=%.9g p90=%.9g GFLOP/s=%.3f blocks=%lld "
-                  "prepared_b=%s prepared_bytes=%zu\n",
+                  "prepared_b=%s prepared_bytes=%zu preparation_seconds=%.9g\n",
                   c.name, dtype.c_str(), c.m, c.n, c.k, seconds, p90_seconds, gflops,
                   static_cast<long long>(blocks), prepared_b ? "yes" : "no",
                   c.constant_b && (dtype == "fp32" || dtype == "fp64")
                       ? c.k * c.n * (dtype == "fp32" ? sizeof(float) : sizeof(double))
-                      : std::size_t{0});
+                      : std::size_t{0},
+                  preparation_seconds);
       continue;
     }
     std::size_t fp32_threads = 0;
