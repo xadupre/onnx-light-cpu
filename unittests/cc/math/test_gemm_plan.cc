@@ -17,6 +17,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -263,8 +264,12 @@ TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
   EXPECT_LE(plan.useful_threads(), 51u);
 }
 
-TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
-  constexpr std::size_t m = 128, n = 32000, k = 512;
+class PreparedWideProjectionTest
+    : public ::testing::TestWithParam<std::pair<std::size_t, std::int64_t>> {};
+
+TEST_P(PreparedWideProjectionTest, MatchesDynamicWithBiasAndEpilogue) {
+  constexpr std::size_t m = 128, k = 512;
+  const auto [n, threads] = GetParam();
   std::vector<float> a(m * k), b(k * n), bias(m * n);
   for (std::size_t i = 0; i < a.size(); ++i) {
     a[i] = static_cast<float>(static_cast<int>(i % 13) - 6) / 16.0f;
@@ -284,7 +289,7 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
   const ml_cpu_compute::GemmPlan<float> dynamic(options);
   options.constant_b = b;
   InlineExecutor executor;
-  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
   ml_cpu_compute::ExecutionExecutorScope scope(&view);
   const ml_cpu_compute::GemmPlan<float> prepared(options);
   EXPECT_EQ(prepared.algorithm(), ml_cpu_compute::GemmAlgorithm::kGeneral);
@@ -294,7 +299,11 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
   std::vector<float> expected(m * n), actual(m * n);
   dynamic.Execute(a.data(), b.data(), bias.data(), expected.data());
   prepared.Execute(a.data(), nullptr, bias.data(), actual.data());
-  EXPECT_GT(executor.maximum_blocks, 1);
+  if (threads > 1) {
+    EXPECT_GT(executor.maximum_blocks, 1);
+  } else {
+    EXPECT_LE(executor.maximum_blocks, 1);
+  }
   for (std::size_t i = 0; i < actual.size(); ++i) {
     ASSERT_NEAR(actual[i], expected[i], 1e-4f) << i;
   }
@@ -309,6 +318,12 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
     ASSERT_NEAR(actual[i], expected[i], 1e-4f) << i;
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(GemmPlan, PreparedWideProjectionTest,
+                         ::testing::Values(std::make_pair(std::size_t{32000}, std::int64_t{1}),
+                                           std::make_pair(std::size_t{32000}, std::int64_t{4}),
+                                           std::make_pair(std::size_t{32016}, std::int64_t{1}),
+                                           std::make_pair(std::size_t{32016}, std::int64_t{4})));
 
 TEST(GemmHalfPlan, Bfloat16ProjectionUsesBoundedConversion) {
   constexpr std::size_t m = 128, n = 512, k = 512;

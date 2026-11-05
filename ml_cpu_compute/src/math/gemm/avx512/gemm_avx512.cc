@@ -266,6 +266,13 @@ void GemmMicroTile_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha, d
   }
 }
 
+// Keep the 24 accumulators out of the caller's row loop to avoid register spills.
+template <bool Paired16 = false>
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
 void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, float beta,
                                    const float *Bmat, std::size_t N, const float *Crow_base,
                                    std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
@@ -305,7 +312,7 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
   for (std::size_t k = 0; k < K; ++k) {
     const float *b_row = Bmat + k * N + n0;
     const __m512 vb0 = _mm512_loadu_ps(b_row);
-    const __m512 vb1 = _mm512_loadu_ps(b_row + 16);
+    const __m512 vb1 = _mm512_loadu_ps(b_row + (Paired16 ? K * 16 : 16));
     if (k + kGemmPrefetchDistanceK < K) {
       PrefetchT0(b_row + kGemmPrefetchDistanceK * N);
     }
@@ -368,6 +375,36 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
   STORE_ROW(10);
   STORE_ROW(11);
 #undef STORE_ROW
+}
+
+void GemmMicroTile_AVX512_F32_Paired16(std::size_t M, std::size_t K, float alpha, float beta,
+                                       const float *B, const float *C, std::size_t Cstride,
+                                       float *Y, std::size_t Ystride, GemmAccumMode mode,
+                                       const float *A) {
+  std::size_t row = 0;
+  for (; row + 12 <= M; row += 12) {
+    GemmMicroTile_AVX512_F32_MR12<true>(32, K, alpha, beta, B, 16,
+                                        C == nullptr ? nullptr : C + row * Cstride, Cstride,
+                                        Y + row * Ystride, Ystride, 0, mode, A + row * K, K);
+  }
+  if (row < M) {
+    float column_bias[12];
+    const float *tail_c = C == nullptr ? nullptr : C + row * Cstride;
+    std::size_t tail_c_stride = Cstride;
+    if (mode == GemmAccumMode::kInitColumnBias) {
+      for (std::size_t r = 0; r < M - row; ++r) {
+        column_bias[r] = tail_c[r * Cstride];
+      }
+      tail_c = column_bias;
+      tail_c_stride = 1;
+    }
+    for (std::size_t column = 0; column < 32; column += 16) {
+      const std::size_t bias_column = mode == GemmAccumMode::kInitColumnBias ? 0 : column;
+      GemmMicroTile_AVX512_F32(M - row, 16, K, alpha, beta, B + column * K, 16,
+                               tail_c == nullptr ? nullptr : tail_c + bias_column, tail_c_stride,
+                               Y + row * Ystride + column, Ystride, 0, mode, A + row * K);
+    }
+  }
 }
 
 void GemmMicroTile_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double alpha, double beta,

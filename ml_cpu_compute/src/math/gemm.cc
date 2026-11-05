@@ -2057,6 +2057,16 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
                        panel < static_cast<std::size_t>(end); ++panel) {
                     const std::size_t col = panel * width;
                     const float *b = packed_b + col * k;
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+                    if (kind == GemmImplementation::kAVX512 && mr == 12 && m >= 12 &&
+                        panel + 1 < static_cast<std::size_t>(end)) {
+                      GemmMicroTile_AVX512_F32_Paired16(m, k, alpha, beta, b,
+                                                        c == nullptr ? nullptr : c + col, n,
+                                                        y + col, n, mode, a);
+                      ++panel;
+                      continue;
+                    }
+#endif
                     for (std::size_t row = 0; row < m; row += mr) {
                       const std::size_t rows = std::min(mr, m - row);
                       GemmTileF32(kind, rows, width, k, alpha, beta, b, width,
