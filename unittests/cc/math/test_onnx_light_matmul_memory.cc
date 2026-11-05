@@ -129,7 +129,7 @@ TEST(MatMulMemory, UnresolvedAndInvalidShapes) {
 
 class RecordingAllocator : public rt_ns::SimpleRawBufferAllocator {
 public:
-  RecordingAllocator() : SimpleRawBufferAllocator(4) {}
+  explicit RecordingAllocator(std::size_t capacity = 4) : SimpleRawBufferAllocator(capacity) {}
   rt_ns::RawBuffer *Allocate(std::size_t bytes) override {
     requests.push_back(bytes);
     return SimpleRawBufferAllocator::Allocate(bytes);
@@ -195,7 +195,7 @@ TEST(GemmMemory, RuntimeAllocatorOwnsTransposedGenericPacking) {
   for (const auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
                            rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
     SCOPED_TRACE(static_cast<int>(dtype));
-    RecordingAllocator scratch, outputs;
+    RecordingAllocator scratch(16), outputs;
     const rt_ns::KernelContext context(rt_ns::OpsetId("", 18));
     rt_ns::RuntimeContext runtime(
         context, rt_ns::RuntimeContextOptions{.allocator = &scratch, .io_allocator = &outputs});

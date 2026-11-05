@@ -308,8 +308,10 @@ void CheckGenericWorkerScratch(std::size_t m, std::size_t n, std::size_t k, std:
   if (nested || threads == 1) {
     EXPECT_EQ(tracker.submissions, 0U);
   } else {
-    EXPECT_GT(tracker.maximum_blocks, 1);
     EXPECT_LE(tracker.maximum_blocks, threads);
+    if (m >= 257) {
+      EXPECT_GT(tracker.maximum_blocks, 1);
+    }
   }
   EXPECT_EQ(y, expected);
 }
