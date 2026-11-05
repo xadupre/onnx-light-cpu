@@ -76,11 +76,13 @@ The generic five-loop GEMM follows this contract for A and B packing, including
 preplanned serial inner packing buffers for split-K partitions. No private pool
 or thread-local scratch cache is retained across calls.
 
-With a borrowed allocator installed, MatMul, strided-batched GEMM, and grouped
-GEMM keep their outer batch loop on the caller; each inner GEMM can still
-parallelize using preallocated slices. This preserves generic packing scratch ownership
+With a borrowed allocator installed and a nonzero inner GEMM scratch bound,
+MatMul, strided-batched GEMM, and grouped GEMM keep their outer batch loop on the
+caller; each inner GEMM can still parallelize using preallocated slices. This
+preserves generic packing scratch ownership
 without sending a potentially non-thread-safe allocator to batch workers.
-Standalone calls without an allocator retain outer batch parallelism.
+Allocation-free plans and standalone calls without an allocator retain outer
+batch parallelism.
 
 Nested work stays serial
 ------------------------

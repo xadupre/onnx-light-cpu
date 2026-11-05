@@ -367,21 +367,17 @@ template <typename T> double GemmWork(const GemmPlan<T> &plan) {
   return static_cast<double>(plan.m()) * plan.n() * plan.k() / kGemmFmasPerParallelWorkUnit;
 }
 
+template <typename Plan> bool RequiresCallerScratch(const Plan &plan) {
+  return CurrentExecutionAllocator() != nullptr && plan.ScratchBytes(1) != 0;
+}
+
 template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmProblem<T>> problems) {
-  if (CurrentExecutionAllocator() != nullptr) {
-    return false;
-  }
   return std::all_of(problems.begin(), problems.end(), [](const GroupedGemmProblem<T> &problem) {
-    return problem.plan->useful_threads() == 1;
+    return problem.plan->useful_threads() == 1 && !RequiresCallerScratch(*problem.plan);
   });
 }
 
 bool PreferMatMulBatchParallelism(std::size_t batch_count, std::size_t gemm_threads) {
-  // Keep allocator-backed packing on its owning caller. Inner GEMMs can still
-  // dispatch their preallocated slices without sharing the allocator itself.
-  if (CurrentExecutionAllocator() != nullptr) {
-    return false;
-  }
   if (gemm_threads == 1) {
     return true;
   }
@@ -829,7 +825,10 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
       gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_);
     }
   };
-  if (PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads())) {
+  // Keep allocator-backed packing on its owning caller. Inner GEMMs can still
+  // dispatch their preallocated slices without sharing the allocator itself.
+  if (!RequiresCallerScratch(gemm_plan_) &&
+      PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads())) {
     const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
       ParticipantLimitScope serial_gemm(1);
       execute(begin, end);
@@ -926,7 +925,8 @@ void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16
       half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_);
     }
   };
-  if (PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads())) {
+  if (!RequiresCallerScratch(half_plan) &&
+      PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads())) {
     const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
       ParticipantLimitScope serial_gemm(1);
       execute(begin, end);
@@ -955,7 +955,7 @@ void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const 
                    c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y);
     }
   };
-  if (plan.useful_threads() == 1 && CurrentExecutionAllocator() == nullptr) {
+  if (plan.useful_threads() == 1 && !RequiresCallerScratch(plan)) {
     ExecuteRanges(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count));

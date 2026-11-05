@@ -567,6 +567,30 @@ TEST(GemmScratchAllocations, BorrowedAllocatorOwnsBatchedAndGroupedPacking) {
   CheckBorrowedBatchScratch<float>(2);
 }
 
+TEST(GemmScratchAllocations, BorrowedAllocatorPreservesAllocationFreeBatchParallelism) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t batches = 1024, m = 32, n = 64, k = 16;
+  const MatMulPlan<float> plan(std::array<std::size_t, 3>{batches, m, k},
+                               std::array<std::size_t, 2>{k, n});
+  ASSERT_EQ(plan.ScratchBytes(4), 0U);
+  const std::vector<float> a(batches * m * k, 0.25f), b(k * n, 0.5f);
+  std::vector<float> y(batches * m * n);
+  AllocationCheckingExecutor executor_tracker;
+  ExecutionExecutorView executor{&executor_tracker, 4, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope executor_scope(&executor);
+  TrackingAllocator tracker;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  callback_allocations = 0;
+  callback_parent_depth = 0;
+  plan.Execute(a.data(), b.data(), y.data());
+  callback_parent_depth = -1;
+  EXPECT_GT(executor_tracker.maximum_blocks, 1);
+  EXPECT_EQ(callback_allocations.load(), 0U);
+  EXPECT_EQ(tracker.allocations, 0U);
+  EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == 2.0f; }));
+}
+
 TEST(GemmScratchAllocations, ConcurrentPackingAndSplitKFitPlanBounds) {
   for (const auto shape : {std::array<std::size_t, 3>{128, 513, 257}, {32, 32, 16384}}) {
     const auto [m, n, k] = shape;
