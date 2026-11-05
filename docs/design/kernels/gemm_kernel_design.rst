@@ -246,8 +246,8 @@ column). In those cases the kernel vectorizes the large dimension (or the
 
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
 or split-K path once from the prepared shape. It may own constant B in its
-original representation; persistent B prepacking is explicitly excluded from
-the roadmap. The skinny-N path reduces each output element through several
+original representation or, for eligible FP32 LM-head projections, as K-by-16
+panels instead. The skinny-N path reduces each output element through several
 partial accumulators over a unit-stride ``K`` body with an exact scalar tail,
 so single-column and small-N shapes vectorize the reduction instead of walking
 it with a serial dependency chain. A single output column (``N == 1``) is kept
@@ -262,6 +262,66 @@ non-transposed ``B``, so it vectorizes over ``N`` -- the useful dimension when
 micro-panels. Its lower per-participant work budget reflects the memory-streaming
 kernel. An oversized runtime pool falls back to serial execution when at most
 four useful panel groups would otherwise wake dozens of idle workers.
+
+Prepared FP32 LM-head panel pairs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For AVX-512 with a 12-row register tile, ``GemmWidePreparedB`` consumes two
+existing K-by-16 panels together. Each A broadcast feeds two FMAs in the
+named-accumulator MR12 kernel, without converting the weights to K-by-32 panels.
+The 24 accumulators stay in registers; the core is deliberately out of line
+because GCC otherwise spills accumulators when inlining it into the row loop.
+Each worker pairs panels only within its existing executor range. An unpaired
+panel and row remainders retain the existing microtiles. AVX2 and other fallbacks,
+preparation eligibility, scheduling policy, and weight ownership are unchanged.
+There is no new weight copy or execution scratch.
+
+The following isolated measurements were collected on an Intel Xeon Platinum
+8370C (two physical cores, four logical CPUs), GCC 13.3 Release, AVX-512/FMA,
+with CPU affinity 0-3. Baseline is the original one-panel prepared loop;
+both binaries use identical benchmark instrumentation, seed, inputs, and
+persistent ``ThreadExecutor`` through ``ExecutionExecutorScope``. Three ABBA
+rounds alternate baseline/candidate process order. Values are medians of six
+process medians per variant: three warmups followed by five timed executions
+(12 for decode). K is 512 throughout. Times are seconds:
+
+.. code-block:: text
+
+    M     N      threads  baseline    paired
+    128   32000  1        0.0588650   0.0389212
+    128   32016  1        0.0588820   0.0391348
+    128   32000  4        0.0259412   0.0165250
+    128   32016  4        0.0259633   0.0165860
+    1     32000  1        0.0045830   0.0045716
+    1     32016  1        0.0102866   0.0104675
+    1     32000  4        0.0025266   0.0025284
+    1     32016  4        0.0045501   0.0044507
+    12    32000  1        0.0412423   0.0403506
+    12    32016  1        0.0410270   0.0399215
+    12    32000  4        0.0195098   0.0202746
+    12    32016  4        0.0195002   0.0202623
+
+Prepared latency falls by 33.5-36.3%. Decode differs by at most 2.2%;
+four-thread small-M is 3.9% slower and remains a regression to monitor.
+The dynamic-B M=128 control is within 0.2%. Decode and small-M do not use
+prepared panels. Cold plan construction, timed separately by the driver's
+``preparation_seconds`` field, is 0.0436-0.0458 seconds for the baseline and
+0.0441-0.0467 seconds for the candidate at these vocabulary widths.
+This includes allocating and packing the plan's weights, not full session setup.
+
+Reproduce each configuration with ``gemm_throughput 1 lm_head fp32`` and
+``gemm_throughput 4 lm_head fp32``, applying the same affinity and alternating
+binary order. The driver reports effective ISA, executor block count,
+``prepared_b``, and persistent weight bytes. Assembly inspection confirms two
+B loads and twelve broadcasts feeding 24 register FMAs per K step, without
+accumulator spills in the paired reduction. Hardware counters were unavailable
+(``perf_event_paranoid=4``). An AVX2-ceiling build also passed the focused GEMM
+tests; no AVX2 speedup is claimed.
+
+These are isolated kernel results, not an ORT comparison or a completed TinyLLM
+end-to-end acceptance run. The exported full TinyLLM model and its runtime
+dependencies were unavailable in this checkout, so unchanged full-model logits
+and full-prefill latency still require validation with that external artifact.
 
 ``detail::SelectGemmAlgorithm()`` (``gemm_plan.cc``) picks one of these five
 strategies from ``m``, ``n``, ``k``, ``trans_a``/``trans_b``, and the

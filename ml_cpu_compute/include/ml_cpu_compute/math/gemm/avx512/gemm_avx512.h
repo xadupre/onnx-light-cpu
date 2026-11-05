@@ -34,10 +34,10 @@ void GemmMicroTile_AVX512_F32_StridedA(std::size_t mr, std::size_t nb, std::size
                                        GemmAccumMode mode, const float *A, std::size_t AStride);
 
 // Reuse each A broadcast across two adjacent, separately packed K-by-16 B panels.
-void GemmMicroTile_AVX512_F32_MR12_Paired16(std::size_t K, float alpha, float beta, const float *B,
-                                            const float *C, std::size_t Cstride, float *Y,
-                                            std::size_t Ystride, GemmAccumMode mode,
-                                            const float *A);
+void GemmMicroTile_AVX512_F32_Paired16(std::size_t M, std::size_t K, float alpha, float beta,
+                                       const float *B, const float *C, std::size_t Cstride,
+                                       float *Y, std::size_t Ystride, GemmAccumMode mode,
+                                       const float *A);
 
 void GemmSkinnyM1Routine_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
                                     std::size_t N, float beta, const float *C, float *Y,

@@ -266,7 +266,13 @@ void GemmMicroTile_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha, d
   }
 }
 
+// Keep the 24 accumulators out of the caller's row loop to avoid register spills.
 template <bool Paired16 = false>
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
 void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, float beta,
                                    const float *Bmat, std::size_t N, const float *Crow_base,
                                    std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
@@ -371,12 +377,23 @@ void GemmMicroTile_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, f
 #undef STORE_ROW
 }
 
-void GemmMicroTile_AVX512_F32_MR12_Paired16(std::size_t K, float alpha, float beta, const float *B,
-                                            const float *C, std::size_t Cstride, float *Y,
-                                            std::size_t Ystride, GemmAccumMode mode,
-                                            const float *A) {
-  GemmMicroTile_AVX512_F32_MR12<true>(32, K, alpha, beta, B, 16, C, Cstride, Y, Ystride, 0, mode, A,
-                                      K);
+void GemmMicroTile_AVX512_F32_Paired16(std::size_t M, std::size_t K, float alpha, float beta,
+                                       const float *B, const float *C, std::size_t Cstride,
+                                       float *Y, std::size_t Ystride, GemmAccumMode mode,
+                                       const float *A) {
+  std::size_t row = 0;
+  for (; row + 12 <= M; row += 12) {
+    GemmMicroTile_AVX512_F32_MR12<true>(32, K, alpha, beta, B, 16,
+                                        C == nullptr ? nullptr : C + row * Cstride, Cstride,
+                                        Y + row * Ystride, Ystride, 0, mode, A + row * K, K);
+  }
+  if (row < M) {
+    for (std::size_t column = 0; column < 32; column += 16) {
+      GemmMicroTile_AVX512_F32(M - row, 16, K, alpha, beta, B + column * K, 16,
+                               C == nullptr ? nullptr : C + row * Cstride + column, Cstride,
+                               Y + row * Ystride + column, Ystride, 0, mode, A + row * K);
+    }
+  }
 }
 
 void GemmMicroTile_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double alpha, double beta,
