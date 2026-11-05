@@ -52,6 +52,36 @@ built, installed, and consumed with CMake without ONNX or Python.
 The public :doc:`registering_kernels` guide covers the equivalent
 ``onnx-light`` ``CpuExecutorScope`` requirement for direct ``KernelBase`` use.
 
+Borrowing scratch storage
+-------------------------
+
+``ExecutionAllocatorView`` and ``ExecutionAllocatorScope`` provide a separate
+borrowed allocation binding for temporary compute storage. ``ExecutionBuffer``
+allocates aligned, uninitialized bytes through that binding, or through aligned
+heap allocation for standalone callers. A null allocator scope explicitly selects
+the heap fallback. Allocator scopes restore the previous binding on return or
+exception, independently of executor scopes.
+
+``RuntimeExecutionScope`` accepts an optional ``RuntimeContext`` pointer.
+Gemm and MatMul pass their context so packing buffers borrow its execution
+allocator without replacing an explicit compute allocator. The bridge retains
+the runtime allocation handle and aligns its payload within checked extra
+capacity; releasing the buffer returns that handle to the same allocator.
+
+Allocators need not be thread-safe: allocate scratch before dispatch and release
+it after synchronous completion. Workers borrow disjoint, cache-line-aligned
+slices selected by actual range boundaries, not worker identities or the
+requested participant count. Allocator bindings are not transferred to workers.
+The generic five-loop GEMM follows this contract for A and B packing, including
+preplanned serial inner packing buffers for split-K partitions. No private pool
+or thread-local scratch cache is retained across calls.
+
+With a borrowed allocator installed, MatMul, strided-batched GEMM, and grouped
+GEMM keep their outer batch loop on the caller; each inner GEMM can still
+parallelize using preallocated slices. This preserves runtime scratch ownership
+without sending a potentially non-thread-safe allocator to batch workers.
+Standalone calls without an allocator retain outer batch parallelism.
+
 Nested work stays serial
 ------------------------
 

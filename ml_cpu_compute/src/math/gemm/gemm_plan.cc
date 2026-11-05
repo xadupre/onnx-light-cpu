@@ -368,12 +368,20 @@ template <typename T> double GemmWork(const GemmPlan<T> &plan) {
 }
 
 template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmProblem<T>> problems) {
+  if (CurrentExecutionAllocator() != nullptr) {
+    return false;
+  }
   return std::all_of(problems.begin(), problems.end(), [](const GroupedGemmProblem<T> &problem) {
     return problem.plan->useful_threads() == 1;
   });
 }
 
 bool PreferMatMulBatchParallelism(std::size_t batch_count, std::size_t gemm_threads) {
+  // Keep allocator-backed packing on its owning caller. Inner GEMMs can still
+  // dispatch their preallocated slices without sharing the allocator itself.
+  if (CurrentExecutionAllocator() != nullptr) {
+    return false;
+  }
   if (gemm_threads == 1) {
     return true;
   }
@@ -947,7 +955,7 @@ void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const 
                    c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y);
     }
   };
-  if (plan.useful_threads() == 1) {
+  if (plan.useful_threads() == 1 && CurrentExecutionAllocator() == nullptr) {
     ExecuteRanges(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count));

@@ -446,18 +446,18 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &c, float alpha,
                               float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr, tuning_);
 }
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, bool trans_a,
                               bool trans_b, RuntimeContext *rt) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr, tuning_);
 }
 
 void GemmKernel::Run(RuntimeContext &rt) {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(&rt);
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);

@@ -4,7 +4,12 @@
 
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "ml_cpu_compute/checked_arithmetic.h"
+#include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/tuning/cpu_executor.h"
+
+#include <memory>
+#include <new>
 
 namespace onnx_light_cpu {
 namespace {
@@ -52,12 +57,50 @@ ml_cpu_compute::ExecutionExecutorView RuntimeExecutorView() noexcept {
                                    &RunCpuExecutorBlocks, &PlanCpuExecutor};
 }
 
+ml_cpu_compute::ExecutionAllocation AllocateRuntimeScratch(void *context, std::size_t bytes,
+                                                           std::size_t alignment) {
+  auto *allocator = static_cast<rt_ns::RawBufferAllocator *>(context);
+  const std::size_t capacity =
+      ml_cpu_compute::CheckedAdd(bytes, alignment - 1, "ExecutionBuffer", "aligned scratch bytes");
+  auto *buffer = allocator->Allocate(capacity);
+  if (buffer == nullptr) {
+    throw std::bad_alloc();
+  }
+  void *data = buffer->data();
+  std::size_t space = buffer->size();
+  if (data == nullptr || space < capacity || std::align(alignment, bytes, data, space) == nullptr) {
+    allocator->Free(buffer);
+    throw std::bad_alloc();
+  }
+  return {data, buffer};
+}
+
+void ReleaseRuntimeScratch(void *context, ml_cpu_compute::ExecutionAllocation allocation) noexcept {
+  static_cast<rt_ns::RawBufferAllocator *>(context)->Free(
+      static_cast<rt_ns::RawBuffer *>(allocation.handle));
+}
+
+ml_cpu_compute::ExecutionAllocatorView
+RuntimeAllocatorView(rt_ns::RuntimeContext *runtime) noexcept {
+  auto *allocator = runtime == nullptr ? nullptr : runtime->execution_allocator();
+  return allocator == nullptr ? ml_cpu_compute::ExecutionAllocatorView{}
+                              : ml_cpu_compute::ExecutionAllocatorView{
+                                    allocator, &AllocateRuntimeScratch, &ReleaseRuntimeScratch};
+}
+
 } // namespace
 
-RuntimeExecutionScope::RuntimeExecutionScope() noexcept
+RuntimeExecutionScope::RuntimeExecutionScope(rt_ns::RuntimeContext *runtime) noexcept
     : view_(RuntimeExecutorView()), scope_(ml_cpu_compute::HasExecutionExecutorScope()
                                                ? ml_cpu_compute::CurrentExecutionExecutor()
                                            : view_.context != nullptr ? &view_
-                                                                      : nullptr) {}
+                                                                      : nullptr),
+      allocator_view_(RuntimeAllocatorView(runtime)) {
+  if (ml_cpu_compute::HasExecutionAllocatorScope()) {
+    allocator_scope_.emplace(ml_cpu_compute::CurrentExecutionAllocator());
+  } else if (allocator_view_.context != nullptr) {
+    allocator_scope_.emplace(&allocator_view_);
+  }
+}
 
 } // namespace onnx_light_cpu

@@ -4,6 +4,7 @@
 
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
+#include "ml_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -31,6 +33,19 @@ struct AllocationHeader {
 std::atomic<std::uint64_t> generation{0};
 std::atomic<bool> recording{false};
 std::atomic<std::size_t> live_bytes{0}, peak_bytes{0};
+thread_local bool in_callback = false;
+thread_local int callback_parent_depth = -1;
+std::atomic<std::size_t> callback_allocations{0};
+
+bool AllocatingInCallback() {
+  return in_callback || (callback_parent_depth >= 0 &&
+                         ml_cpu_compute::detail::ExecutionRegionDepth() > callback_parent_depth);
+}
+
+struct CallbackScope {
+  CallbackScope() { in_callback = true; }
+  ~CallbackScope() { in_callback = false; }
+};
 
 void RecordPeak(std::size_t bytes) {
   std::size_t previous = peak_bytes.load();
@@ -69,7 +84,26 @@ struct ConcurrentExecutor {
 
 } // namespace
 
+void *operator new(std::size_t bytes) {
+  if (AllocatingInCallback()) {
+    ++callback_allocations;
+  }
+  if (void *pointer = std::malloc(std::max<std::size_t>(bytes, 1))) {
+    return pointer;
+  }
+  throw std::bad_alloc();
+}
+
+void operator delete(void *pointer) noexcept { std::free(pointer); }
+void operator delete(void *pointer, std::size_t) noexcept { std::free(pointer); }
+void *operator new[](std::size_t bytes) { return ::operator new(bytes); }
+void operator delete[](void *pointer) noexcept { ::operator delete(pointer); }
+void operator delete[](void *pointer, std::size_t) noexcept { ::operator delete(pointer); }
+
 void *operator new(std::size_t bytes, std::align_val_t alignment) {
+  if (AllocatingInCallback()) {
+    ++callback_allocations;
+  }
   const std::size_t align =
       std::max(static_cast<std::size_t>(alignment), alignof(AllocationHeader));
   const std::size_t overhead = align - 1 + sizeof(AllocationHeader);
@@ -116,6 +150,402 @@ void operator delete[](void *pointer, std::size_t, std::align_val_t alignment) n
 }
 
 namespace {
+
+struct AllocationCheckingExecutor {
+  std::size_t submissions = 0;
+  std::int64_t maximum_blocks = 0;
+
+  static void Run(void *self, std::int64_t blocks, void *context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
+    auto &executor = *static_cast<AllocationCheckingExecutor *>(self);
+    ++executor.submissions;
+    executor.maximum_blocks = std::max(executor.maximum_blocks, blocks);
+    std::vector<std::thread> threads;
+    for (std::int64_t block = blocks - 1; block > 0; --block) {
+      threads.emplace_back([=] {
+        CallbackScope callback;
+        task(context, block);
+      });
+    }
+    {
+      CallbackScope callback;
+      task(context, 0);
+    }
+    for (auto &thread : threads) {
+      thread.join();
+    }
+  }
+};
+
+struct TrackingAllocator {
+  struct Handle {
+    std::size_t bytes, alignment;
+  };
+  std::size_t allocations = 0, releases = 0, live = 0, peak = 0;
+  std::size_t fail_after = std::numeric_limits<std::size_t>::max();
+  std::size_t callback_calls = 0;
+
+  static ml_cpu_compute::ExecutionAllocation Allocate(void *context, std::size_t bytes,
+                                                      std::size_t alignment) {
+    auto &self = *static_cast<TrackingAllocator *>(context);
+    if (AllocatingInCallback()) {
+      ++self.callback_calls;
+    }
+    if (self.allocations == self.fail_after) {
+      return {};
+    }
+    // Keep the size with the opaque handle so release accounting is independent
+    // of the aligned payload address borrowed by GEMM.
+    const std::size_t offset = (sizeof(Handle) + alignment - 1) / alignment * alignment;
+    const std::size_t capacity = bytes + offset;
+    auto *handle = static_cast<Handle *>(::operator new(capacity, std::align_val_t{alignment}));
+    *handle = {bytes, alignment};
+    void *data = reinterpret_cast<char *>(handle) + offset;
+    ++self.allocations;
+    self.live += bytes;
+    self.peak = std::max(self.peak, self.live);
+    return {data, handle};
+  }
+
+  static void Release(void *context, ml_cpu_compute::ExecutionAllocation allocation) noexcept {
+    if (allocation.handle == nullptr) {
+      return;
+    }
+    auto &self = *static_cast<TrackingAllocator *>(context);
+    auto *handle = static_cast<Handle *>(allocation.handle);
+    self.live -= handle->bytes;
+    ++self.releases;
+    ::operator delete(handle, std::align_val_t{handle->alignment});
+  }
+
+  ml_cpu_compute::ExecutionAllocatorView View() { return {this, &Allocate, &Release}; }
+};
+
+template <typename T>
+void CheckGenericWorkerScratch(std::size_t m, std::size_t n, std::size_t k, std::int64_t threads,
+                               bool trans_a, bool nested, int half = 0) {
+  using namespace ml_cpu_compute;
+  std::vector<T> a(m * k), b(n * k), y(m * n, T(-1000)), expected(m * n, T(0));
+  for (std::size_t row = 0; row < m; ++row) {
+    for (std::size_t inner = 0; inner < k; ++inner) {
+      const T value = T(static_cast<int>((row + 3 * inner) % 7) - 3) / T(8);
+      a[trans_a ? inner * m + row : row * k + inner] = value;
+    }
+  }
+  for (std::size_t column = 0; column < n; ++column) {
+    for (std::size_t inner = 0; inner < k; ++inner) {
+      b[column * k + inner] = T(static_cast<int>((column * 5 + inner) % 11) - 5) / T(8);
+    }
+  }
+  for (std::size_t row = 0; row < m; ++row) {
+    for (std::size_t column = 0; column < n; ++column) {
+      for (std::size_t inner = 0; inner < k; ++inner) {
+        expected[row * n + column] +=
+            a[trans_a ? inner * m + row : row * k + inner] * b[column * k + inner];
+      }
+    }
+  }
+  std::vector<std::uint16_t> ah, bh;
+  if (half != 0) {
+    const auto convert = [half](T value) {
+      return half == 1 ? detail::FloatToFloat16Bits(static_cast<float>(value))
+                       : detail::FloatToBFloat16Bits(static_cast<float>(value));
+    };
+    ah.resize(a.size());
+    bh.resize(b.size());
+    std::transform(a.begin(), a.end(), ah.begin(), convert);
+    std::transform(b.begin(), b.end(), bh.begin(), convert);
+  }
+
+  AllocationCheckingExecutor tracker;
+  ExecutionExecutorView executor{&tracker, threads, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope scope(threads == 1 ? nullptr : &executor);
+  TrackingAllocator allocation_tracker;
+  const auto allocator = allocation_tracker.View();
+  ExecutionAllocatorScope allocation_scope(&allocator);
+  const GemmPlan<T> plan({trans_a, true, m, n, k});
+  const GemmHalfPlan half_plan({half == 2, trans_a, true, m, n, k});
+  const auto &blocking = half != 0 ? half_plan.blocking() : plan.blocking();
+  SCOPED_TRACE(::testing::Message()
+               << "element_size=" << sizeof(T) << ", half=" << half << ", blocking=" << blocking.mc
+               << "," << blocking.nc << "," << blocking.kc);
+  const auto run = [&] {
+    if constexpr (std::is_same_v<T, float>) {
+      if (half != 0) {
+        detail::GemmHalfPlanned<GemmAlgorithm::kGeneral>(half == 2, trans_a, true, m, n, k, 1.0f,
+                                                         ah.data(), bh.data(), y.data(), &blocking,
+                                                         &half_plan.compact_blocking());
+      } else {
+        detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(
+            trans_a, true, m, n, k, T(1), a.data(), b.data(), T(0), nullptr, y.data(), &blocking);
+      }
+    } else {
+      detail::GemmFloat64Planned<GemmAlgorithm::kGeneral>(
+          trans_a, true, m, n, k, T(1), a.data(), b.data(), T(0), nullptr, y.data(), &blocking);
+    }
+  };
+  callback_allocations = 0;
+  callback_parent_depth = nested ? 1 : 0;
+  if (nested) {
+    detail::ExecutionRegionScope region;
+    run();
+  } else {
+    run();
+  }
+  callback_parent_depth = -1;
+  EXPECT_EQ(callback_allocations.load(), 0U);
+  EXPECT_EQ(allocation_tracker.callback_calls, 0U);
+  EXPECT_GT(allocation_tracker.allocations, 0U);
+  EXPECT_EQ(allocation_tracker.allocations, allocation_tracker.releases);
+  EXPECT_EQ(allocation_tracker.live, 0U);
+  // Forced detail entry points do not apply the plan's shape-specific participant
+  // limit, so estimate their actual executor budget rather than the plan budget.
+  const std::size_t bound = detail::GemmProductScratchBytes(
+      GemmAlgorithm::kGeneral, trans_a, true, m, n, k, blocking, sizeof(T),
+      static_cast<std::size_t>(threads), half != 0,
+      half != 0 ? &half_plan.compact_blocking() : nullptr, half == 2);
+  EXPECT_LE(allocation_tracker.peak, bound);
+  if (nested || threads == 1) {
+    EXPECT_EQ(tracker.submissions, 0U);
+  } else {
+    EXPECT_GT(tracker.maximum_blocks, 1);
+    EXPECT_LE(tracker.maximum_blocks, threads);
+  }
+  EXPECT_EQ(y, expected);
+}
+
+TEST(GemmScratchAllocations, AllocatorScopesRestoreBindingsAndExplicitHeapFallback) {
+  using namespace ml_cpu_compute;
+  TrackingAllocator first, second;
+  const auto first_view = first.View();
+  const auto second_view = second.View();
+  const auto *previous = CurrentExecutionAllocator();
+  const bool had_scope = HasExecutionAllocatorScope();
+  {
+    ExecutionAllocatorScope scope(&first_view);
+    EXPECT_TRUE(HasExecutionAllocatorScope());
+    EXPECT_EQ(CurrentExecutionAllocator(), &first_view);
+    ExecutionBuffer empty(0);
+    EXPECT_EQ(empty.data(), nullptr);
+    EXPECT_EQ(first.allocations, 0U);
+    {
+      ExecutionAllocatorScope heap(nullptr);
+      ExecutionBuffer buffer(129);
+      EXPECT_EQ(reinterpret_cast<std::uintptr_t>(buffer.data()) % 64, 0U);
+      EXPECT_EQ(CurrentExecutionAllocator(), nullptr);
+      EXPECT_EQ(first.allocations, 0U);
+    }
+    EXPECT_EQ(CurrentExecutionAllocator(), &first_view);
+    EXPECT_THROW(
+        [&] {
+          ExecutionAllocatorScope nested(&second_view);
+          ExecutionBuffer buffer(129, 128);
+          EXPECT_EQ(reinterpret_cast<std::uintptr_t>(buffer.data()) % 128, 0U);
+          throw std::runtime_error("unwind");
+        }(),
+        std::runtime_error);
+    EXPECT_EQ(CurrentExecutionAllocator(), &first_view);
+    EXPECT_EQ(second.allocations, 1U);
+    EXPECT_EQ(second.releases, 1U);
+    EXPECT_EQ(second.live, 0U);
+    ExecutionBuffer buffer(17);
+    EXPECT_EQ(first.allocations, 1U);
+  }
+  EXPECT_EQ(first.live, 0U);
+  EXPECT_EQ(first.releases, 1U);
+  EXPECT_EQ(CurrentExecutionAllocator(), previous);
+  EXPECT_EQ(HasExecutionAllocatorScope(), had_scope);
+}
+
+TEST(GemmScratchAllocations, AllocatorRejectsInvalidContractsAndReleasesMisalignedStorage) {
+  using namespace ml_cpu_compute;
+  EXPECT_THROW(ExecutionBuffer(1, 0), std::invalid_argument);
+  EXPECT_THROW(ExecutionBuffer(1, 3), std::invalid_argument);
+  TrackingAllocator tracker;
+  auto allocator = tracker.View();
+  {
+    allocator.allocate = nullptr;
+    ExecutionAllocatorScope scope(&allocator);
+    EXPECT_THROW(ExecutionBuffer(1), std::invalid_argument);
+  }
+  {
+    allocator = tracker.View();
+    allocator.release = nullptr;
+    ExecutionAllocatorScope scope(&allocator);
+    EXPECT_THROW(ExecutionBuffer(1), std::invalid_argument);
+  }
+  allocator = tracker.View();
+  allocator.allocate = [](void *context, std::size_t bytes, std::size_t alignment) {
+    auto allocation = TrackingAllocator::Allocate(context, bytes, alignment);
+    allocation.data = static_cast<char *>(allocation.data) + 1;
+    return allocation;
+  };
+  ExecutionAllocatorScope scope(&allocator);
+  EXPECT_THROW(ExecutionBuffer(1), std::bad_alloc);
+  EXPECT_EQ(tracker.allocations, 1U);
+  EXPECT_EQ(tracker.releases, 1U);
+  EXPECT_EQ(tracker.live, 0U);
+}
+
+TEST(GemmScratchAllocations, GenericCallbacksDoNotAllocateAndOwnDisjointScratch) {
+  for (const auto shape : {std::array<std::size_t, 3>{49, 1057, 259}, {257, 65, 259}}) {
+    const auto [m, n, k] = shape;
+    for (const std::int64_t threads : {1, 3, 7}) {
+      for (const bool trans_a : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "M=" << m << ", N=" << n << ", threads=" << threads
+                                          << ", trans_a=" << trans_a);
+        CheckGenericWorkerScratch<float>(m, n, k, threads, trans_a, false);
+        CheckGenericWorkerScratch<double>(m, n, k, threads, trans_a, false);
+        CheckGenericWorkerScratch<float>(m, n, k, threads, trans_a, false, 1);
+        CheckGenericWorkerScratch<float>(m, n, k, threads, trans_a, false, 2);
+      }
+    }
+  }
+}
+
+TEST(GemmScratchAllocations, NestedGenericExecutionDoesNotResubmit) {
+  CheckGenericWorkerScratch<float>(49, 1057, 259, 7, true, true);
+  CheckGenericWorkerScratch<double>(49, 1057, 259, 7, true, true);
+  CheckGenericWorkerScratch<float>(49, 1057, 259, 7, true, true, 1);
+  CheckGenericWorkerScratch<float>(49, 1057, 259, 7, true, true, 2);
+}
+
+TEST(GemmScratchAllocations, AllocationFailurePrecedesDispatchAndOutputWrites) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t m = 129, n = 1057, k = 259;
+  const GemmPlan<float> plan({true, true, m, n, k});
+  const std::vector<float> a(m * k, 0.25f), b(n * k, 0.5f);
+  std::vector<float> y(m * n, -1.0f);
+  AllocationCheckingExecutor executor_tracker;
+  ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope executor_scope(&executor);
+  TrackingAllocator tracker;
+  tracker.fail_after = 0;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  EXPECT_THROW(plan.Execute(a.data(), b.data(), nullptr, y.data()), std::bad_alloc);
+  EXPECT_EQ(executor_tracker.submissions, 0U);
+  EXPECT_EQ(tracker.live, 0U);
+  EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == -1.0f; }));
+}
+
+TEST(GemmScratchAllocations, SharedAndSplitKScratchFailuresPrecedeEveryDispatch) {
+  using namespace ml_cpu_compute;
+  for (const auto shape : {std::array<std::size_t, 3>{257, 65, 259}, {32, 31, 8193}}) {
+    const auto [m, n, k] = shape;
+    const GemmPlan<float> plan({true, true, m, n, k});
+    const std::vector<float> a(m * k, 0.25f), b(n * k, 0.5f);
+    for (const std::size_t fail_after : {0U, 1U}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "M=" << m << ", N=" << n << ", fail_after=" << fail_after);
+      std::vector<float> y(m * n, -1.0f);
+      AllocationCheckingExecutor executor_tracker;
+      ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
+      ExecutionExecutorScope executor_scope(&executor);
+      TrackingAllocator tracker;
+      tracker.fail_after = fail_after;
+      const auto allocator = tracker.View();
+      ExecutionAllocatorScope allocator_scope(&allocator);
+      EXPECT_THROW(plan.Execute(a.data(), b.data(), nullptr, y.data()), std::bad_alloc);
+      EXPECT_EQ(executor_tracker.submissions, 0U);
+      EXPECT_EQ(tracker.live, 0U);
+      EXPECT_EQ(tracker.allocations, tracker.releases);
+      EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == -1.0f; }));
+    }
+  }
+}
+
+TEST(GemmScratchAllocations, SplitKReservesNestedPackingBeforeDispatch) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t m = 32, n = 31, k = 8193;
+  const GemmPlan<float> plan({true, true, m, n, k});
+  const std::vector<float> a(m * k, 0.25f), b(n * k, 0.5f);
+  std::vector<float> y(m * n);
+  ASSERT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
+  AllocationCheckingExecutor executor_tracker;
+  ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope executor_scope(&executor);
+  TrackingAllocator tracker;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  callback_allocations = 0;
+  callback_parent_depth = 0;
+  plan.Execute(a.data(), b.data(), nullptr, y.data());
+  callback_parent_depth = -1;
+  EXPECT_EQ(callback_allocations.load(), 0U);
+  EXPECT_EQ(tracker.callback_calls, 0U);
+  EXPECT_GT(executor_tracker.maximum_blocks, 1);
+  EXPECT_EQ(tracker.live, 0U);
+  EXPECT_EQ(tracker.allocations, tracker.releases);
+  EXPECT_LE(tracker.peak, plan.ScratchBytes(7));
+  EXPECT_TRUE(
+      std::all_of(y.begin(), y.end(), [](float value) { return value == float(k) * 0.125f; }));
+}
+
+template <typename T> void CheckBorrowedBatchScratch(int half = 0) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t batches = 4, m = 32, n = 65, k = 259;
+  const MatMulPlan<T> plan(std::array<std::size_t, 3>{batches, m, k},
+                           std::array<std::size_t, 2>{n, k}, false, true);
+  const std::vector<T> a(batches * m * k, T(0.25)), b(n * k, T(0.5));
+  std::vector<T> y(batches * m * n);
+  AllocationCheckingExecutor executor_tracker;
+  ExecutionExecutorView executor{&executor_tracker, 4, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope executor_scope(&executor);
+  TrackingAllocator tracker;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  const auto check = [&](auto execute) {
+    const std::size_t previous_allocations = tracker.allocations;
+    callback_allocations = 0;
+    callback_parent_depth = 0;
+    execute();
+    callback_parent_depth = -1;
+    EXPECT_EQ(callback_allocations.load(), 0U);
+    EXPECT_EQ(tracker.callback_calls, 0U);
+    EXPECT_GE(tracker.allocations - previous_allocations, batches);
+    EXPECT_EQ(tracker.allocations, tracker.releases);
+    EXPECT_EQ(tracker.live, 0U);
+    EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](T value) { return value == T(k) * T(0.125); }));
+  };
+  if constexpr (std::is_same_v<T, float>) {
+    if (half != 0) {
+      const GemmHalfPlan half_plan({half == 2, false, true, m, n, k});
+      const std::vector<std::uint16_t> ah(batches * m * k, half == 1 ? 0x3400 : 0x3e80);
+      const std::vector<std::uint16_t> bh(n * k, half == 1 ? 0x3800 : 0x3f00);
+      std::vector<std::uint16_t> converted(y.size());
+      GemmEpilogue<float> epilogue;
+      epilogue.output_conversion =
+          half == 1 ? GemmOutputConversion::kFloat16 : GemmOutputConversion::kBFloat16;
+      epilogue.converted_output = converted.data();
+      check([&] { plan.ExecuteHalf(half_plan, ah.data(), bh.data(), epilogue, y.data()); });
+      EXPECT_LE(tracker.peak + y.size() * sizeof(float), plan.HalfScratchBytes(half_plan, 4));
+      return;
+    }
+  }
+  check([&] { plan.Execute(a.data(), b.data(), y.data()); });
+  GemmPlanOptions<T> serial_options{false, true, m, n, k};
+  serial_options.maximum_participants = 1;
+  const GemmPlan<T> serial_plan(serial_options);
+  check([&] {
+    StridedBatchedGemm(serial_plan, batches, a.data(), m * k, b.data(), 0,
+                       static_cast<const T *>(nullptr), 0, y.data(), m * n);
+  });
+  std::array<GroupedGemmProblem<T>, batches> problems;
+  for (std::size_t batch = 0; batch < batches; ++batch) {
+    problems[batch] = {&serial_plan, a.data() + batch * m * k, b.data(), nullptr,
+                       y.data() + batch * m * n};
+  }
+  check([&] { GroupedGemm<T>(problems); });
+  EXPECT_LE(tracker.peak, plan.ScratchBytes(4));
+}
+
+TEST(GemmScratchAllocations, BorrowedAllocatorOwnsBatchedAndGroupedPacking) {
+  CheckBorrowedBatchScratch<float>();
+  CheckBorrowedBatchScratch<double>();
+  CheckBorrowedBatchScratch<float>(1);
+  CheckBorrowedBatchScratch<float>(2);
+}
 
 TEST(GemmScratchAllocations, ConcurrentPackingAndSplitKFitPlanBounds) {
   for (const auto shape : {std::array<std::size_t, 3>{128, 513, 257}, {32, 32, 16384}}) {
