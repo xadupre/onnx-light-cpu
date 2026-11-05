@@ -2132,8 +2132,9 @@ std::size_t GemmProductScratchBytes(GemmAlgorithm algorithm, bool trans_a, bool 
       const std::size_t column_block = GemmPackedColumnBlock(blocking, element_size, m, n, k,
                                                              kind == GemmImplementation::kAVX512);
       const std::size_t kc = std::min(blocking.kc, ceil_div(k, parts));
-      const std::size_t a =
-          aligned_elements(GemmPackedAElements(std::min(blocking.mc, m), kc), element_size);
+      const std::size_t base_mc = std::min(m, blocking.mc);
+      const std::size_t mc = blocking.mr >= m - base_mc ? m : base_mc + blocking.mr;
+      const std::size_t a = aligned_elements(GemmPackedAElements(mc, kc), element_size);
       const std::size_t micro =
           aligned_elements(GemmPackedBElements(1, kc, column_block), element_size);
       const std::size_t panel = aligned_elements(
