@@ -203,6 +203,36 @@ TEST(GemmScratchAllocations, CustomAvx512ColumnOverrideFitsPlanBound) {
   EXPECT_EQ(PackingPeak([&] { plan.Execute(a.data(), b.data(), nullptr, y.data()); }), 147456U);
 }
 
+template <typename T> void CheckSubMrBlockingFitsPlanBound() {
+  for (const bool trans_b : {false, true}) {
+    ml_cpu_compute::GemmPlanOptions<T> options;
+    options.trans_a = true;
+    options.trans_b = trans_b;
+    options.m = 24;
+    options.n = 4096;
+    options.k = 256;
+    options.blocking = {1, 4096, 256};
+    options.maximum_participants = 1;
+    options.m = 2 * ml_cpu_compute::GemmPlan<T>(options).blocking().mr;
+    const ml_cpu_compute::GemmPlan<T> plan(options);
+    SCOPED_TRACE(::testing::Message()
+                 << "element_size=" << sizeof(T) << ", M=" << options.m << ", trans_b=" << trans_b);
+    ASSERT_LT(plan.blocking().mc, plan.blocking().mr);
+    const std::vector<T> a(options.m * options.k, T(0.25)), b(options.k * options.n, T(0.5));
+    std::vector<T> y(options.m * options.n);
+    ml_cpu_compute::ExecutionExecutorScope serial(nullptr);
+    const std::size_t peak =
+        PackingPeak([&] { plan.Execute(a.data(), b.data(), nullptr, y.data()); });
+    EXPECT_GE(peak, options.k * options.n * sizeof(T));
+    EXPECT_LE(peak, plan.ScratchBytes(1));
+  }
+}
+
+TEST(GemmScratchAllocations, CustomSubMrBlockingFitsPlanBound) {
+  CheckSubMrBlockingFitsPlanBound<float>();
+  CheckSubMrBlockingFitsPlanBound<double>();
+}
+
 TEST(GemmScratchAllocations, CustomHalfBlockingFitsMatMulPlanEstimate) {
   constexpr std::size_t m = 128, n = 4096, k = 512;
   const ml_cpu_compute::MatMulPlan<float> matmul(m, n, k, false, true);

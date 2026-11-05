@@ -1946,7 +1946,7 @@ std::size_t GemmProductScratchBytes(GemmAlgorithm algorithm, bool trans_a, bool 
       return mul(fused, bytes);
     }
     if (!half && ceil_div(n, column_block) >= 16) {
-      if (m <= 2 * profile.mr) {
+      if (profile.mc >= profile.mr && m <= 2 * profile.mr) {
         return mul(fused, bytes);
       }
       if (native_float) {
