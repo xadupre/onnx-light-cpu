@@ -389,8 +389,9 @@ void GemmMicroTile_AVX512_F32_Paired16(std::size_t M, std::size_t K, float alpha
   }
   if (row < M) {
     for (std::size_t column = 0; column < 32; column += 16) {
+      const std::size_t bias_column = mode == GemmAccumMode::kInitColumnBias ? 0 : column;
       GemmMicroTile_AVX512_F32(M - row, 16, K, alpha, beta, B + column * K, 16,
-                               C == nullptr ? nullptr : C + row * Cstride + column, Cstride,
+                               C == nullptr ? nullptr : C + row * Cstride + bias_column, Cstride,
                                Y + row * Ystride + column, Ystride, 0, mode, A + row * K);
     }
   }

@@ -290,6 +290,30 @@ TEST(GemmFloat32, PreparedWidePanelPairsRespectExecutorBoundaries) {
   }
 }
 
+#ifdef ML_CPU_COMPUTE_HAVE_AVX512
+TEST(GemmFloat32, Avx512PreparedPanelPairPreservesColumnBiasInRowTail) {
+  if (ml_cpu_compute::EffectiveGemmSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is unavailable.";
+  }
+  constexpr std::size_t m = 13, n = 32, k = 7;
+  const auto a = RandomVector(m * k, 21);
+  const auto b = RandomVector(k * n, 22);
+  const auto bias = RandomVector(m, 23);
+  const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+  std::vector<float> broadcast_bias(m * n), output(m * n);
+  for (std::size_t row = 0; row < m; ++row) {
+    std::fill_n(broadcast_bias.data() + row * n, n, bias[row]);
+  }
+  const auto expected = ReferenceGemm(false, false, m, n, k, 0.75f, a, b, 0.5f, &broadcast_bias);
+  ml_cpu_compute::GemmMicroTile_AVX512_F32_Paired16(
+      m, k, 0.75f, 0.5f, packed.data(), bias.data(), 1, output.data(), n,
+      ml_cpu_compute::GemmAccumMode::kInitColumnBias, a.data());
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    EXPECT_NEAR(output[index], expected[index], 1e-4f) << index;
+  }
+}
+#endif
+
 TEST(GemmFloat32, TypedEpilogueCombinesBroadcastResidualAndRelu) {
   const std::size_t M = 2, N = 3, K = 2;
   const std::vector<float> A = {1, -2, -3, 4};
