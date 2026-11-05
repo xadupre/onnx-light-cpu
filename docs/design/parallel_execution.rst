@@ -63,7 +63,7 @@ the heap fallback. Allocator scopes restore the previous binding on return or
 exception, independently of executor scopes.
 
 ``RuntimeExecutionScope`` accepts an optional ``RuntimeContext`` pointer.
-Gemm and MatMul pass their context so packing buffers borrow its execution
+Gemm and MatMul pass their context so generic packing buffers borrow its execution
 allocator without replacing an explicit compute allocator. The bridge retains
 the runtime allocation handle and aligns its payload within checked extra
 capacity; releasing the buffer returns that handle to the same allocator.
@@ -78,7 +78,7 @@ or thread-local scratch cache is retained across calls.
 
 With a borrowed allocator installed, MatMul, strided-batched GEMM, and grouped
 GEMM keep their outer batch loop on the caller; each inner GEMM can still
-parallelize using preallocated slices. This preserves runtime scratch ownership
+parallelize using preallocated slices. This preserves generic packing scratch ownership
 without sending a potentially non-thread-safe allocator to batch workers.
 Standalone calls without an allocator retain outer batch parallelism.
 

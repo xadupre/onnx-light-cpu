@@ -455,6 +455,26 @@ TEST(GemmScratchAllocations, SharedAndSplitKScratchFailuresPrecedeEveryDispatch)
   }
 }
 
+TEST(GemmScratchAllocations, PackingSlicePaddingAndByteOverflowPrecedeAllocation) {
+  using namespace ml_cpu_compute;
+  TrackingAllocator tracker;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  ExecutionExecutorScope serial(nullptr);
+  const float a = 1.0f, b = 1.0f;
+  float output = -1.0f;
+  for (const std::size_t rows : {std::numeric_limits<std::size_t>::max(),
+                                 std::numeric_limits<std::size_t>::max() / sizeof(float) + 1}) {
+    const GemmBlocking blocking{rows, 1, 1, 4, 16};
+    EXPECT_THROW(detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(
+                     true, true, rows, 1, 1, 1.0f, &a, &b, 0.0f, nullptr, &output, &blocking),
+                 std::invalid_argument);
+  }
+  EXPECT_EQ(output, -1.0f);
+  EXPECT_EQ(tracker.allocations, 0U);
+  EXPECT_EQ(tracker.live, 0U);
+}
+
 TEST(GemmScratchAllocations, SplitKReservesNestedPackingBeforeDispatch) {
   using namespace ml_cpu_compute;
   constexpr std::size_t m = 32, n = 31, k = 8193;
