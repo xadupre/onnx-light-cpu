@@ -154,7 +154,7 @@ struct GemmRangeSchedule {
         block_size(total / requested_blocks + (total % requested_blocks != 0)),
         block_count(total / block_size + (total % block_size != 0)) {}
 
-  ExecutionSchedule schedule() const { return {1, 1, requested_blocks, requested_blocks}; }
+  ExecutionSchedule schedule() const { return {1, 1, block_count, block_count}; }
 
   std::size_t slot(std::int64_t begin) const noexcept {
     return static_cast<std::size_t>(begin / block_size);
