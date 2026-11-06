@@ -16,6 +16,18 @@ using schema_ns::LightOpSchema;
 using schema_ns::SchemaBuilder;
 using schema_ns::TensorType;
 
+LightOpSchema MakeGeluSchema() {
+  return LightOpSchema(
+      "Gelu", kMicrosoftDomain, 1,
+      "ONNX Runtime contrib Gelu: Y = 0.5 * X * (1 + erf(X / sqrt(2))). No attributes.",
+      {{"X", "Input tensor of any rank.", "T"}},
+      {{"Y", "Output with the same shape and type as X.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kDouble, TensorType::kFloat16, TensorType::kBfloat16},
+        "Floating-point tensors."}},
+      {}, false, true);
+}
+
 LightOpSchema MakeRotaryEmbeddingSchema() {
   return LightOpSchema(
       "RotaryEmbedding", kMicrosoftDomain, 1,
@@ -541,6 +553,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
                                                             bool init_doc) {
   static const std::map<std::string, SchemaBuilder> builders = {
       {"BiasGelu", [] { return std::vector<LightOpSchema>{MakeBiasGeluSchema()}; }},
+      {"Gelu", [] { return std::vector<LightOpSchema>{MakeGeluSchema()}; }},
       {"CausalConvWithState",
        [] { return std::vector<LightOpSchema>{MakeCausalConvWithStateSchema()}; }},
       {"CDist", [] { return std::vector<LightOpSchema>{MakeCDistSchema()}; }},

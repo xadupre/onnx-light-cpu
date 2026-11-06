@@ -867,7 +867,10 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif record.op_type in {
+            elif (record.domain, record.op_type) == (
+                "com.microsoft",
+                "Gelu",
+            ) or record.op_type in {
                 "MultiHeadAttention",
                 "ReduceSum",
                 "SimplifiedLayerNormalization",

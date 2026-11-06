@@ -21,6 +21,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
 
   static const OpRegisterModeMap kEntries = {
       {"BiasGelu", &RegisterCpuBiasGeluCases},
+      {"Gelu", &RegisterCpuMicrosoftGeluCases},
       {"CDist", &RegisterCpuCDistCases},
       {"CausalConvWithState", &RegisterCpuCausalConvWithStateCases},
       {"GatherBlockQuantized", &RegisterCpuGatherBlockQuantizedCases},
