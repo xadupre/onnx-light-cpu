@@ -517,69 +517,189 @@ TEST(GemmScratchAllocations, SplitKReservesNestedPackingBeforeDispatch) {
       std::all_of(y.begin(), y.end(), [](float value) { return value == float(k) * 0.125f; }));
 }
 
-template <typename T> void CheckBorrowedBatchScratch(int half = 0) {
+template <typename T>
+void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed = true,
+                               std::size_t m = 32, std::size_t n = 65, std::size_t k = 1031) {
   using namespace ml_cpu_compute;
-  constexpr std::size_t batches = 4, m = 32, n = 65, k = 259;
+  constexpr std::size_t batches = 11;
   const MatMulPlan<T> plan(std::array<std::size_t, 3>{batches, m, k},
-                           std::array<std::size_t, 2>{n, k}, false, true);
-  const std::vector<T> a(batches * m * k, T(0.25)), b(n * k, T(0.5));
+                           trans_b ? std::array<std::size_t, 2>{n, k}
+                                   : std::array<std::size_t, 2>{k, n},
+                           false, trans_b);
+  std::vector<T> a(batches * m * k);
+  const std::vector<T> b(n * k, T(0.5));
+  for (std::size_t batch = 0; batch < batches; ++batch) {
+    std::fill_n(a.data() + batch * m * k, m * k, T(batch + 1) / T(16));
+  }
   std::vector<T> y(batches * m * n);
   AllocationCheckingExecutor executor_tracker;
-  ExecutionExecutorView executor{&executor_tracker, 4, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
   ExecutionExecutorScope executor_scope(&executor);
   TrackingAllocator tracker;
   const auto allocator = tracker.View();
-  ExecutionAllocatorScope allocator_scope(&allocator);
-  const auto check = [&](auto execute) {
+  ExecutionAllocatorScope allocator_scope(borrowed ? &allocator : nullptr);
+  const auto check = [&](auto execute, std::size_t scratch_bytes) {
     const std::size_t previous_allocations = tracker.allocations;
+    executor_tracker.submissions = 0;
+    executor_tracker.maximum_blocks = 0;
     callback_allocations = 0;
     callback_parent_depth = 0;
     execute();
     callback_parent_depth = -1;
     EXPECT_EQ(callback_allocations.load(), 0U);
     EXPECT_EQ(tracker.callback_calls, 0U);
-    EXPECT_GE(tracker.allocations - previous_allocations, batches);
+    EXPECT_EQ(tracker.allocations - previous_allocations, borrowed && scratch_bytes != 0 ? 1U : 0U);
+    EXPECT_EQ(executor_tracker.submissions, 1U);
+    EXPECT_GT(executor_tracker.maximum_blocks, 1);
+    EXPECT_LT(executor_tracker.maximum_blocks, 7);
     EXPECT_EQ(tracker.allocations, tracker.releases);
     EXPECT_EQ(tracker.live, 0U);
-    EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](T value) { return value == T(k) * T(0.125); }));
+    for (std::size_t batch = 0; batch < batches; ++batch) {
+      const T expected = T(batch + 1) * T(k) / T(32);
+      EXPECT_TRUE(std::all_of(y.begin() + batch * m * n, y.begin() + (batch + 1) * m * n,
+                              [expected](T value) { return value == expected; }));
+    }
   };
   if constexpr (std::is_same_v<T, float>) {
     if (half != 0) {
-      const GemmHalfPlan half_plan({half == 2, false, true, m, n, k});
-      const std::vector<std::uint16_t> ah(batches * m * k, half == 1 ? 0x3400 : 0x3e80);
+      const GemmHalfPlan half_plan({half == 2, false, trans_b, m, n, k});
+      std::vector<std::uint16_t> ah(a.size());
+      std::transform(a.begin(), a.end(), ah.begin(), [half](float value) {
+        return half == 1 ? detail::FloatToFloat16Bits(value) : detail::FloatToBFloat16Bits(value);
+      });
       const std::vector<std::uint16_t> bh(n * k, half == 1 ? 0x3800 : 0x3f00);
       std::vector<std::uint16_t> converted(y.size());
       GemmEpilogue<float> epilogue;
       epilogue.output_conversion =
           half == 1 ? GemmOutputConversion::kFloat16 : GemmOutputConversion::kBFloat16;
       epilogue.converted_output = converted.data();
-      check([&] { plan.ExecuteHalf(half_plan, ah.data(), bh.data(), epilogue, y.data()); });
-      EXPECT_LE(tracker.peak + y.size() * sizeof(float), plan.HalfScratchBytes(half_plan, 4));
+      check([&] { plan.ExecuteHalf(half_plan, ah.data(), bh.data(), epilogue, y.data()); },
+            half_plan.ScratchBytes(1));
+      for (std::size_t index = 0; index < y.size(); ++index) {
+        EXPECT_EQ(converted[index], half == 1 ? detail::FloatToFloat16Bits(y[index])
+                                              : detail::FloatToBFloat16Bits(y[index]));
+      }
+      EXPECT_LE(tracker.peak + y.size() * sizeof(float), plan.HalfScratchBytes(half_plan, 7));
       return;
     }
   }
-  check([&] { plan.Execute(a.data(), b.data(), y.data()); });
-  GemmPlanOptions<T> serial_options{false, true, m, n, k};
+  check([&] { plan.Execute(a.data(), b.data(), y.data()); }, plan.gemm_plan().ScratchBytes(1));
+  GemmPlanOptions<T> serial_options{false, trans_b, m, n, k};
   serial_options.maximum_participants = 1;
   const GemmPlan<T> serial_plan(serial_options);
-  check([&] {
-    StridedBatchedGemm(serial_plan, batches, a.data(), m * k, b.data(), 0,
-                       static_cast<const T *>(nullptr), 0, y.data(), m * n);
-  });
+  check(
+      [&] {
+        StridedBatchedGemm(serial_plan, batches, a.data(), m * k, b.data(), 0,
+                           static_cast<const T *>(nullptr), 0, y.data(), m * n);
+      },
+      serial_plan.ScratchBytes(1));
   std::array<GroupedGemmProblem<T>, batches> problems;
+  auto alternate_options = serial_options;
+  alternate_options.trans_a = true;
+  alternate_options.blocking = {1, 17, 129};
+  const GemmPlan<T> alternate_plan(alternate_options);
   for (std::size_t batch = 0; batch < batches; ++batch) {
-    problems[batch] = {&serial_plan, a.data() + batch * m * k, b.data(), nullptr,
-                       y.data() + batch * m * n};
+    problems[batch] = {batch % 2 == 0 ? &serial_plan : &alternate_plan, a.data() + batch * m * k,
+                       b.data(), nullptr, y.data() + batch * m * n};
   }
-  check([&] { GroupedGemm<T>(problems); });
-  EXPECT_LE(tracker.peak, plan.ScratchBytes(4));
+  check([&] { GroupedGemm<T>(problems); },
+        std::max(serial_plan.ScratchBytes(1), alternate_plan.ScratchBytes(1)));
+  EXPECT_LE(tracker.peak, std::max(plan.ScratchBytes(7), 7 * detail::GemmBatchScratchBytes(
+                                                                 alternate_plan.ScratchBytes(1))));
 }
 
 TEST(GemmScratchAllocations, BorrowedAllocatorOwnsBatchedAndGroupedPacking) {
-  CheckBorrowedBatchScratch<float>();
-  CheckBorrowedBatchScratch<double>();
-  CheckBorrowedBatchScratch<float>(1);
-  CheckBorrowedBatchScratch<float>(2);
+  for (bool trans_b : {false, true}) {
+    CheckBorrowedBatchScratch<float>(0, trans_b);
+    CheckBorrowedBatchScratch<double>(0, trans_b);
+    CheckBorrowedBatchScratch<float>(1, trans_b);
+    CheckBorrowedBatchScratch<float>(2, trans_b);
+  }
+}
+
+TEST(GemmScratchAllocations, HeapBackedBatchCallbacksAlsoBorrowPreallocatedScratch) {
+  CheckBorrowedBatchScratch<float>(0, true, false);
+  CheckBorrowedBatchScratch<float>(1, false, false);
+}
+
+TEST(GemmScratchAllocations, BatchScratchCoversDirectSkinnyAndSerialSplitKDispatch) {
+  for (const auto shape : {std::array<std::size_t, 3>{128, 128, 256},
+                           {1, 257, 16385},
+                           {32, 1, 16385},
+                           {32, 31, 8193}}) {
+    const auto [m, n, k] = shape;
+    SCOPED_TRACE(::testing::Message() << m << ":" << n << ":" << k);
+    CheckBorrowedBatchScratch<float>(0, false, true, m, n, k);
+    CheckBorrowedBatchScratch<double>(0, false, true, m, n, k);
+    CheckBorrowedBatchScratch<float>(1, false, true, m, n, k);
+    CheckBorrowedBatchScratch<float>(2, false, true, m, n, k);
+  }
+}
+
+TEST(GemmScratchAllocations, BatchReservationFailurePrecedesDispatchAndOutputWrites) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t batches = 11, m = 32, n = 65, k = 1031;
+  const MatMulPlan<float> plan(std::array<std::size_t, 3>{batches, m, k},
+                               std::array<std::size_t, 2>{n, k}, false, true);
+  GemmPlanOptions<float> options{false, true, m, n, k};
+  options.maximum_participants = 1;
+  const GemmPlan<float> serial(options);
+  const std::vector<float> a(batches * m * k, 0.25f), b(n * k, 0.5f);
+  std::vector<float> y(batches * m * n, -1.0f);
+  std::array<GroupedGemmProblem<float>, batches> problems;
+  for (std::size_t batch = 0; batch < batches; ++batch) {
+    problems[batch] = {&serial, a.data() + batch * m * k, b.data(), nullptr,
+                       y.data() + batch * m * n};
+  }
+  AllocationCheckingExecutor executor_tracker;
+  ExecutionExecutorView executor{&executor_tracker, 7, &AllocationCheckingExecutor::Run};
+  ExecutionExecutorScope executor_scope(&executor);
+  TrackingAllocator tracker;
+  tracker.fail_after = 0;
+  const auto allocator = tracker.View();
+  ExecutionAllocatorScope allocator_scope(&allocator);
+  EXPECT_THROW(plan.Execute(a.data(), b.data(), y.data()), std::bad_alloc);
+  EXPECT_THROW(StridedBatchedGemm(serial, batches, a.data(), m * k, b.data(), 0,
+                                  static_cast<const float *>(nullptr), 0, y.data(), m * n),
+               std::bad_alloc);
+  EXPECT_THROW(GroupedGemm<float>(problems), std::bad_alloc);
+  for (bool bf16 : {false, true}) {
+    const GemmHalfPlan half({bf16, false, true, m, n, k});
+    const std::vector<std::uint16_t> ah(a.size(), bf16 ? 0x3e80 : 0x3400);
+    const std::vector<std::uint16_t> bh(b.size(), bf16 ? 0x3f00 : 0x3800);
+    std::vector<std::uint16_t> converted(y.size(), 0xffff);
+    GemmEpilogue<float> epilogue;
+    epilogue.output_conversion =
+        bf16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
+    epilogue.converted_output = converted.data();
+    EXPECT_THROW(plan.ExecuteHalf(half, ah.data(), bh.data(), epilogue, y.data()), std::bad_alloc);
+    EXPECT_TRUE(std::all_of(converted.begin(), converted.end(),
+                            [](std::uint16_t value) { return value == 0xffff; }));
+  }
+  EXPECT_EQ(executor_tracker.submissions, 0U);
+  EXPECT_EQ(tracker.live, 0U);
+  EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == -1.0f; }));
+}
+
+TEST(GemmScratchAllocations, ExplicitBatchScratchChecksCapacityAndRestoresReuseState) {
+  using namespace ml_cpu_compute;
+  constexpr std::size_t m = 32, n = 65, k = 1031;
+  const GemmPlan<float> plan({true, true, m, n, k});
+  const std::vector<float> a(m * k, 0.25f), b(n * k, 0.5f);
+  std::vector<float> y(m * n, -1.0f);
+  const std::size_t bytes = detail::GemmBatchScratchBytes(plan.ScratchBytes(1));
+  ExecutionBuffer storage(bytes);
+  detail::GemmScratch scratch{static_cast<std::byte *>(storage.data()), 1};
+  EXPECT_THROW(plan.Execute(a.data(), b.data(), nullptr, y.data(), &scratch),
+               std::invalid_argument);
+  EXPECT_EQ(scratch.used, 0U);
+  EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == -1.0f; }));
+  scratch.capacity = bytes;
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    plan.Execute(a.data(), b.data(), nullptr, y.data(), &scratch);
+    EXPECT_EQ(scratch.used, 0U);
+    EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == k * 0.125f; }));
+  }
 }
 
 TEST(GemmScratchAllocations, BorrowedAllocatorPreservesAllocationFreeBatchParallelism) {

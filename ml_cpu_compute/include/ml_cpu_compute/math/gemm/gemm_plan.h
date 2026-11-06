@@ -52,6 +52,8 @@ public:
   explicit GemmPlan(const GemmPlanOptions<T> &options);
 
   void Execute(const T *a, const T *b, const T *c, T *y) const;
+  /// Executes a serial product using an exclusive preallocated batch slice.
+  void Execute(const T *a, const T *b, const T *c, T *y, detail::GemmScratch *scratch) const;
   void Execute(const T *a, const T *c, T *y) const;
 
   /// Executes the prepared product and applies ``epilogue`` (broadcast bias,
@@ -87,7 +89,8 @@ public:
 
 private:
   using RoutineFn = void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *,
-                             const T *, T, const T *, T *, const GemmBlocking *);
+                             const T *, T, const T *, T *, const GemmBlocking *,
+                             detail::GemmScratch *);
 
   bool trans_a_;
   bool trans_b_;
@@ -106,7 +109,8 @@ private:
   std::size_t serial_scratch_bytes_ = 0;
   RoutineFn routine_;
 
-  void ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y) const;
+  void ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y,
+                      detail::GemmScratch *scratch = nullptr) const;
 };
 
 /// Immutable inputs used to prepare a :cpp:class:`GemmHalfPlan`.
@@ -138,6 +142,9 @@ public:
   /// blocking, and thread count. ``a`` and ``b`` are raw 16-bit patterns.
   void Execute(const std::uint16_t *a, const std::uint16_t *b, const GemmEpilogue<float> &epilogue,
                float *y) const;
+  /// Borrows an exclusive preallocated slice for serial batch execution.
+  void Execute(const std::uint16_t *a, const std::uint16_t *b, const GemmEpilogue<float> &epilogue,
+               float *y, detail::GemmScratch *scratch) const;
 
   bool is_bfloat16() const noexcept { return is_bfloat16_; }
   bool trans_a() const noexcept { return trans_a_; }
@@ -160,7 +167,7 @@ public:
 private:
   using RoutineFn = void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
                              const std::uint16_t *, const std::uint16_t *, float *,
-                             const GemmBlocking *, const GemmBlocking *);
+                             const GemmBlocking *, const GemmBlocking *, detail::GemmScratch *);
 
   bool is_bfloat16_;
   bool trans_a_;

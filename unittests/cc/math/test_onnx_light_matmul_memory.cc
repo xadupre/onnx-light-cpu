@@ -144,7 +144,7 @@ TEST(MatMulMemory, RuntimeAllocatorOwnsGenericPackingAndWorkspaceNotDeclaredOutp
   for (const auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
                            rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
     SCOPED_TRACE(static_cast<int>(dtype));
-    RecordingAllocator scratch, outputs;
+    RecordingAllocator scratch(8), outputs;
     const rt_ns::KernelContext context(rt_ns::OpsetId("", 18));
     rt_ns::RuntimeContext runtime(
         context, rt_ns::RuntimeContextOptions{.allocator = &scratch, .io_allocator = &outputs});

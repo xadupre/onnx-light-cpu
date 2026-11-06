@@ -197,7 +197,9 @@ TEST(GemmScratch, SplitKAndConcurrentBroadcastBatchesHaveDistinctOwnership) {
   const GemmHalfPlan product({false, false, false, 128, 513, 257});
   const std::size_t workspace = 6 * 128 * 513 * sizeof(float);
   EXPECT_EQ(batched.HalfScratchBytes(false, 4),
-            workspace + std::max(product.ScratchBytes(4), 4 * product.ScratchBytes(1)));
+            workspace +
+                std::max(product.ScratchBytes(4), 4 * ml_cpu_compute::detail::GemmBatchScratchBytes(
+                                                          product.ScratchBytes(1))));
   EXPECT_EQ(batched.HalfScratchBytes(false, 1), workspace + product.ScratchBytes(1));
   const MatMulPlan<float> custom_blocking(128, 4096, 512, false, true);
   GemmHalfPlanOptions custom_options{true, false, true, 128, 4096, 512};

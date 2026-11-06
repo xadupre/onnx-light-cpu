@@ -44,6 +44,19 @@ SimdLevel EffectiveGemmSimdLevel();
 
 namespace detail {
 
+/// Explicit, invocation-local storage for a serial GEMM inside a batch callback.
+/// Buffers borrow aligned subranges in stack order; no allocator binding is changed.
+struct GemmScratch {
+  std::byte *data = nullptr;
+  std::size_t capacity = 0;
+  std::size_t used = 0;
+
+  void *Allocate(std::size_t bytes);
+};
+
+/// Includes compact-panel alignment and rounds each concurrent batch slice to 64 bytes.
+std::size_t GemmBatchScratchBytes(std::size_t product_bytes);
+
 /// Shared checked size formulas for the packed A and B allocations.
 std::size_t GemmPackedAElements(std::size_t rows, std::size_t k);
 std::size_t GemmPackedBElements(std::size_t panels, std::size_t k, std::size_t columns,
@@ -104,7 +117,8 @@ void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha,
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         float alpha, const float *A, const float *B, float beta, const float *C,
-                        float *Y, const GemmBlocking *blocking = nullptr);
+                        float *Y, const GemmBlocking *blocking = nullptr,
+                        GemmScratch *scratch = nullptr);
 
 void GemmFloat32PlannedRowBias(std::size_t M, std::size_t N, std::size_t K, float alpha,
                                const float *A, const float *B, float beta, const float *C, float *Y,
@@ -117,7 +131,8 @@ void GemmFloat32PlannedColumnBias(std::size_t M, std::size_t N, std::size_t K, f
 template <GemmAlgorithm Algorithm>
 void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         double alpha, const double *A, const double *B, double beta,
-                        const double *C, double *Y, const GemmBlocking *blocking = nullptr);
+                        const double *C, double *Y, const GemmBlocking *blocking = nullptr,
+                        GemmScratch *scratch = nullptr);
 
 /// FP16/BF16 GEMM executed through the typed source path for one prepared
 /// algorithm. ``A`` and ``B`` are raw 16-bit ``FLOAT16`` (``is_bfloat16 ==
@@ -130,7 +145,8 @@ template <GemmAlgorithm Algorithm>
 void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                      std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
                      float *Y, const GemmBlocking *blocking = nullptr,
-                     const GemmBlocking *compact_blocking = nullptr);
+                     const GemmBlocking *compact_blocking = nullptr,
+                     GemmScratch *scratch = nullptr);
 
 } // namespace detail
 
@@ -251,14 +267,14 @@ namespace detail {
 void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
                            GemmFp16MicroTile routine, std::size_t mr,
-                           const GemmBlocking *blocking = nullptr);
+                           const GemmBlocking *blocking = nullptr, GemmScratch *scratch = nullptr);
 
 // Native BFLOAT16 general GEMM driver. It uses the same compact B-panel and
 // K-chunk accumulation driver as :cpp:func:`GemmFp16NativeGeneral`.
 void GemmBf16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
                            GemmBf16MicroTile routine, std::size_t mr,
-                           const GemmBlocking *blocking = nullptr);
+                           const GemmBlocking *blocking = nullptr, GemmScratch *scratch = nullptr);
 
 } // namespace detail
 
