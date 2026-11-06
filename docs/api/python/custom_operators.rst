@@ -17,6 +17,29 @@ Custom operators
    These adapters are separate from standardized ONNX schemas and from the
    Microsoft-only :func:`custom_op_schemas` provider.
 
+Microsoft Gelu
+~~~~~~~~~~~~~~
+
+``com.microsoft::Gelu`` version 1 implements ONNX Runtime's exact, erf-based
+activation. It takes one tensor ``X`` and returns ``Y`` with the same shape
+and type, including scalar and empty tensors. Supported types are ``FLOAT``,
+``FLOAT16``, ``DOUBLE``, and ``BFLOAT16``; half inputs are evaluated in float
+and rounded once on output. The kernel requires no scratch memory.
+
+Call :func:`register_kernels_global` before evaluating exported vision graphs,
+or use :func:`register_kernel_for_session` with domain ``"com.microsoft"`` and
+operator ``"Gelu"``. Both Microsoft implementation policies provide this portable
+kernel. Unlike standard ONNX Gelu, the contrib operator has no ``approximate``
+attribute; standard-domain Gelu and its tanh mode are not replaced.
+
+This covers the patch merger in Qwen3.5 vision graphs. The offline regression
+uses hidden size 32, a 2x2 merge, spatial patch size 4, temporal patch size 2,
+one vision block, and output width 128, for both image and video inputs.
+
+The compatibility contract is the
+`ONNX Runtime contrib schema
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/graph/contrib_ops/contrib_defs.cc>`_.
+
 Microsoft normalization cast elimination
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

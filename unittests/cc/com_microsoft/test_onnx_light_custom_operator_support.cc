@@ -115,6 +115,34 @@ NodeProto MakeMatMulNBitsNode(bool bias = false, int64_t bits = 4) {
   return node;
 }
 
+TEST(CustomOperatorSupport, GeluSchemaSymbolicShapeAndZeroScratch) {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("Gelu");
+  node.add_input("X");
+  node.add_output("Y");
+  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("Gelu");
+  ASSERT_EQ(schemas.size(), 1U);
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  for (const auto dtype :
+       {TensorType::kFloat, TensorType::kDouble, TensorType::kFloat16, TensorType::kBfloat16}) {
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("X", SymTensor(nullptr, dtype, {SymDim("tokens"), SymDim(128)}));
+    onnx_light_cpu::ComputeShapeGelu(ctx, node);
+    EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+    EXPECT_EQ(ctx.Get("Y").Dtype(), dtype);
+    EXPECT_EQ(
+        onnx_light_cpu::ComputePeakMemoryGelu(sym_ns::Device::kCPU, node, {ctx.Get("X").Shape()}),
+        shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
+  }
+  shapes_ns::ShapesContext invalid;
+  invalid.Set("X", SymTensor(nullptr, TensorType::kInt32, {SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeGelu(invalid, node), std::invalid_argument);
+  invalid.Set("X", SymTensor(nullptr, TensorType::kFloat, {SymDim(2)}));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "approximate", std::string("tanh"));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeGelu(invalid, node), std::invalid_argument);
+}
+
 TEST(CustomOperatorSupport, QMoESymbolicShapeAndInvalidContracts) {
   NodeProto node;
   node.set_domain(onnx_light_cpu::kMicrosoftDomain);

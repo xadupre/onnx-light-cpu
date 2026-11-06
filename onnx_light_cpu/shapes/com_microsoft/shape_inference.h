@@ -32,6 +32,9 @@ void ComputeShapeCDist(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
 /// Infers output and unwindowed carry state for ``com.microsoft::CausalConvWithState``.
 void ComputeShapeCausalConvWithState(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the output shape for ``com.microsoft::Gelu``.
+void ComputeShapeGelu(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 /// Infers the output shape for ``com.microsoft::BiasGelu``.
 void ComputeShapeBiasGelu(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                           const ONNX_LIGHT_NAMESPACE::NodeProto &node);
@@ -72,6 +75,11 @@ ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryCDist(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero scratch memory for the streaming causal convolution.
 ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryCausalConvWithState(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns zero scratch memory for ``com.microsoft::Gelu``.
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryGelu(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const ONNX_LIGHT_NAMESPACE::NodeProto &node,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);

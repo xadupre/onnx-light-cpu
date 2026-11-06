@@ -326,6 +326,12 @@ void RequireRank4(const SymShape &shape, const char *name) {
 std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
   return {
       {kMicrosoftDomain,
+       "Gelu",
+       "onnx_light_cpu::ComputeShapeGelu",
+       "onnx_light_cpu::ComputePeakMemoryGelu",
+       {},
+       false},
+      {kMicrosoftDomain,
        "BiasGelu",
        "onnx_light_cpu::ComputeShapeBiasGelu",
        "onnx_light_cpu::ComputePeakMemoryBiasGelu",
@@ -434,6 +440,26 @@ void ComputeShapeCDist(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto
   output_shape.PushBack(a.Shape()[0]);
   output_shape.PushBack(b.Shape()[0]);
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), std::move(output_shape)));
+}
+
+void ComputeShapeGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() != 1 || node.output_size() != 1 || node.attribute_size() != 0 ||
+      !ctx.Has(node.input(0))) {
+    throw std::invalid_argument("ComputeShapeGelu: expected one input, one output, no attributes.");
+  }
+  const SymTensor &x = ctx.Get(node.input(0));
+  const auto type = x.Dtype();
+  if (type != sym_ns::TensorType::kFloat && type != sym_ns::TensorType::kDouble &&
+      type != sym_ns::TensorType::kFloat16 && type != sym_ns::TensorType::kBfloat16) {
+    throw std::invalid_argument("ComputeShapeGelu: input must be floating-point.");
+  }
+  ctx.Set(node.output(0), SymTensor(nullptr, x.Dtype(), x.Shape()));
+}
+
+shapes_ns::PeakMemoryEstimate ComputePeakMemoryGelu(sym_ns::Device,
+                                                    const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                    const std::vector<SymShape> &) {
+  return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
 void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
@@ -1974,6 +2000,7 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CausalConvWithState",
                                       ComputeShapeCausalConvWithState);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "BiasGelu", ComputeShapeBiasGelu);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "Gelu", ComputeShapeGelu);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "SkipLayerNormalization",
                                       ComputeShapeSkipLayerNormalization);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "SkipSimplifiedLayerNormalization",
@@ -1999,6 +2026,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            ComputePeakMemoryCausalConvWithState);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
                                            ComputePeakMemoryBiasGelu);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "Gelu", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryGelu);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "SkipLayerNormalization",
                                            sym_ns::Device::kCPU,
                                            ComputePeakMemorySkipLayerNormalization);

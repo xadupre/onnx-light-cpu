@@ -16,6 +16,7 @@ using ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase;
 using ONNX_LIGHT_NAMESPACE::core::backend_test::TestMode;
 
 void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuMicrosoftGeluCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuCausalConvWithStateCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuGatherBlockQuantizedCases(std::vector<TestCase> &registry, TestMode mode);
