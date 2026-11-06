@@ -9,6 +9,7 @@ directly to onnx-light during timing, avoiding NumPy adaptation overhead.
 """
 
 import os
+from functools import partial
 from timeit import timeit
 
 import numpy as np
@@ -44,6 +45,6 @@ for dtype in ("float32", "float16"):
     actual = cpu.run(None, numpy_feeds[0])[0]
     expected = ort.run(None, numpy_feeds[0])[0]
     np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
-    cpu_seconds = timeit(lambda: cpu.run(None, native_feeds[0]), number=repeat) / repeat
-    ort_seconds = timeit(lambda: ort.run(None, numpy_feeds[0]), number=repeat) / repeat
+    cpu_seconds = timeit(partial(cpu.run, None, native_feeds[0]), number=repeat) / repeat
+    ort_seconds = timeit(partial(ort.run, None, numpy_feeds[0]), number=repeat) / repeat
     print(f"{dtype}: onnx-light-cpu={cpu_seconds:.6g}s, ORT={ort_seconds:.6g}s")
