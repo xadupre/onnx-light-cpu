@@ -58,7 +58,7 @@ void MicrosoftGeluKernel::Run(rt_ns::RuntimeContext &rt) {
                                  reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), count);
     break;
   default:
-    break;
+    throw std::logic_error("com.microsoft::Gelu encountered an unexpected DataType.");
   }
   rt_ns::SetOutput(*node_, 0, std::move(y), rt);
 }
