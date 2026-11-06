@@ -103,6 +103,7 @@ private:
   bool has_constant_b_;
   bool prepared_wide_b_ = false;
   std::vector<T> constant_b_;
+  std::size_t serial_scratch_bytes_ = 0;
   RoutineFn routine_;
 
   void ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y) const;
@@ -173,6 +174,7 @@ private:
   GemmBlocking blocking_;
   GemmBlocking compact_blocking_;
   std::size_t useful_threads_;
+  std::size_t serial_scratch_bytes_ = 0;
   RoutineFn routine_;
 };
 

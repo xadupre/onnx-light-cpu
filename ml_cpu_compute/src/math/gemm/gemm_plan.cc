@@ -548,6 +548,10 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
   if (has_constant_b_ && !prepared_wide_b_) {
     constant_b_.assign(options.constant_b.begin(), options.constant_b.end());
   }
+  if (!prepared_wide_b_) {
+    serial_scratch_bytes_ = detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_,
+                                                            k_, blocking_, sizeof(T), 1);
+  }
 }
 
 template <typename T>
@@ -583,6 +587,9 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T 
 
 template <typename T>
 std::size_t GemmPlan<T>::ScratchBytes(std::size_t maximum_participants) const {
+  if (maximum_participants == 1) {
+    return serial_scratch_bytes_;
+  }
   if (prepared_wide_b_) {
     return 0;
   }
@@ -720,9 +727,15 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
   CheckedProduct(m_, k_, "A");
   CheckedProduct(k_, n_, "B");
   CheckedProduct(m_, n_, "Y");
+  serial_scratch_bytes_ =
+      detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_, k_, blocking_,
+                                      sizeof(float), 1, true, &compact_blocking_, is_bfloat16_);
 }
 
 std::size_t GemmHalfPlan::ScratchBytes(std::size_t maximum_participants) const {
+  if (maximum_participants == 1) {
+    return serial_scratch_bytes_;
+  }
   const std::size_t participants =
       std::min(ConfiguredParticipantLimit(maximum_participants),
                RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
@@ -827,8 +840,8 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
   };
   // Keep allocator-backed packing on its owning caller. Inner GEMMs can still
   // dispatch their preallocated slices without sharing the allocator itself.
-  if (!RequiresCallerScratch(gemm_plan_) &&
-      PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads())) {
+  if (PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads()) &&
+      !RequiresCallerScratch(gemm_plan_)) {
     const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
       ParticipantLimitScope serial_gemm(1);
       execute(begin, end);
@@ -925,8 +938,8 @@ void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16
       half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_);
     }
   };
-  if (!RequiresCallerScratch(half_plan) &&
-      PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads())) {
+  if (PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads()) &&
+      !RequiresCallerScratch(half_plan)) {
     const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
       ParticipantLimitScope serial_gemm(1);
       execute(begin, end);
