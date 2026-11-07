@@ -6,6 +6,7 @@
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/qmoe_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -278,6 +279,67 @@ TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
   ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5)}));
   onnx_light_cpu::ComputeShapeQMoE(ctx, node);
   EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
+}
+
+TEST(CustomOperatorSupport, QMoESparseMixerGraphConstructionAfterGlobalCPURegistration) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  onnx_light_cpu::RegisterAllKernelsGlobal();
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("QMoE");
+  for (const char *name : {"X", "router", "W1", "S1", "", "W2", "S2", "", "W3", "S3"}) {
+    node.add_input(name);
+  }
+  node.add_output("Y");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("silu"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "k", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "normalize_routing_weights", int64_t{0});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", int64_t{0});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "use_sparse_mixer", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "weights_prepacked", int64_t{0});
+  for (const bool symbolic : {false, true}) {
+    SCOPED_TRACE(symbolic);
+    const auto tokens = symbolic ? SymDim("S") : SymDim(2);
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("X", SymTensor(nullptr, TensorType::kFloat16, {SymDim(1), tokens, SymDim(64)}));
+    ctx.Set("router", SymTensor(nullptr, TensorType::kFloat16, {tokens, SymDim(4)}));
+    ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(4), SymDim(64), SymDim(48)}));
+    ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat16, {SymDim(4), SymDim(64), SymDim(3)}));
+    ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(4), SymDim(96), SymDim(32)}));
+    ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat16, {SymDim(4), SymDim(96), SymDim(2)}));
+    ctx.Set("W3", ctx.Get("W1"));
+    ctx.Set("S3", ctx.Get("S1"));
+    onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+    EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+    EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
+
+    builder_ns::GraphBuilder builder("legacy_cuda_qmoe", SchemaLookup());
+    builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+    for (const auto &name : node.input()) {
+      if (!name.empty()) {
+        const auto &input = ctx.Get(name);
+        builder.MakeInput(name, input.Dtype(), input.Shape());
+      }
+    }
+    builder.MakeNode("QMoE", {"X", "router", "W1", "S1", "", "W2", "S2", "", "W3", "S3"}, {"Y"},
+                     onnx_light_cpu::kMicrosoftDomain, "legacy_cuda_qmoe", node.attribute());
+    EXPECT_EQ(builder.GetShape("Y").Shape(), ctx.Get("X").Shape());
+    EXPECT_EQ(builder.GetShape("Y").Dtype(), TensorType::kFloat16);
+
+    const rt_ns::KernelContext context{rt_ns::OpsetId(onnx_light_cpu::kMicrosoftDomain, 1)};
+    EXPECT_THROW(onnx_light_cpu::QMoEKernel(node, context), std::invalid_argument);
+    for (const auto &attribute : {"use_sparse_mixer", "k"}) {
+      auto invalid = node;
+      for (auto &value : invalid.ref_attribute()) {
+        if (value.name() == attribute) {
+          value.set_i(std::string(attribute) == "k" ? 1 : 2);
+        }
+      }
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, invalid), std::invalid_argument);
+    }
+  }
 }
 
 NodeProto MakeFP4QMoENode() {

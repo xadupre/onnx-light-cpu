@@ -490,8 +490,9 @@ LightOpSchema MakeQMoESchema() {
        AttributeParam{"swiglu_limit", "Optional SwiGLU clamp limit.", AttributeType::FLOAT, false},
        AttributeParam{"normalize_routing_weights", "Renormalize selected softmax weights.",
                       AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"use_sparse_mixer", "Only zero is supported.", AttributeType::INT, false,
-                      int64_t{0}},
+       AttributeParam{"use_sparse_mixer",
+                      "0 or 1; sparse mixer requires k=2 and is shape-inference only.",
+                      AttributeType::INT, false, int64_t{0}},
        AttributeParam{"weights_prepacked", "Integer: only zero (CPU layout). Ignored for FP4.",
                       AttributeType::INT, false, int64_t{0}}},
       false, true);
