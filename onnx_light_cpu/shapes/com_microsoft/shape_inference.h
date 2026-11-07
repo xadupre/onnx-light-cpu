@@ -13,6 +13,13 @@
 
 namespace onnx_light_cpu {
 
+void ComputeShapeMicrosoftAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                    const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMicrosoftAttention(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+
 /// Describes the additional runtime support supplied for one custom operator.
 struct OperatorSupportRegistration {
   std::string domain;

@@ -437,6 +437,7 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
         "test_moe.py",
+        "test_microsoft_attention.py",
         "test_qmoe.py",
         "test_tanh.py",
         "test_tree_ensemble_parity_benchmark.py",

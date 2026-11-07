@@ -767,6 +767,15 @@ TEST(OnnxLightBackendKernels, AttentionRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, MicrosoftAttentionWhisperBenchmarksRunThroughRuntime) {
+  for (const std::string &name :
+       {"test_cpu_ms_attention_whisper_float_s128", "test_cpu_ms_attention_whisper_float_s512"}) {
+    const auto failures =
+        RunCpuBackendCases("Attention", core::backend_test::TestMode::BENCHMARK, name);
+    EXPECT_TRUE(failures.empty()) << Describe(failures);
+  }
+}
+
 TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
   std::vector<std::string> failures;
   for (const std::string &name :

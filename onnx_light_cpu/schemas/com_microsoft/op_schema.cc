@@ -176,6 +176,47 @@ LightOpSchema MakeSkipLayerNormalizationSchema() {
   return schema;
 }
 
+LightOpSchema MakeAttentionSchema() {
+  LightOpSchema schema(
+      "Attention", kMicrosoftDomain, 1,
+      "ONNX Runtime fused self-attention (bert_defs.cc Attention v1). This CPU subset supports "
+      "FLOAT only: QKV = input @ weights + optional bias, softmax(scale*QK^T + masks + "
+      "attention_bias) @ V. Q and K widths match; unequal V width is supported without cache. "
+      "Shared buffers, rotary embedding, and packed 3*B+2 masks are unsupported.",
+      {{"input", "(B,S,I), I>0; empty B/S are supported.", "T"},
+       {"weights", "(I,Q+K+V), positive Q/K/V widths divisible by num_heads.", "T"},
+       {"bias", "Optional (Q+K+V) projection bias.", "T"},
+       {"mask_index",
+        "Optional int32 exclusive ends (B), ends then starts (2B), binary (B,T)/(B,S,T), "
+        "or (B,1,M,M), M>=T, selecting rows P:P+S, unidirectional=0. T=P+S. "
+        "Lengths satisfy 0<=start<=end<=T; positive raw values are unmasked.",
+        "M"},
+       {"past", "Optional (2,B,N,P,H); requires present and equal Q/K/V widths.", "T"},
+       {"attention_bias", "Optional additive (1 or B,1 or N,S,T).", "T"},
+       {"past_sequence_length", "Unsupported shared-buffer input; must be omitted.", "M"}},
+      {{"output", "(B,S,V).", "T"},
+       {"present", "Optional (2,B,N,P+S,H), equal Q/K/V widths; past may be omitted.", "T"}},
+      {{"T", {TensorType::kFloat}, "Matching FLOAT tensors."},
+       {"M", {TensorType::kInt32}, "Mask indices."}},
+      {AttributeParam{"num_heads", "Positive head count.", AttributeType::INT, true},
+       AttributeParam{"unidirectional", "0 or 1; causal mask uses lowest FLOAT and P+query offset.",
+                      AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"qkv_hidden_sizes", "Optional [Q,K,V], Q=K, sum equals weights width.",
+                      AttributeType::INTS, false},
+       AttributeParam{"scale", "Finite scale; default 1/sqrt(H).", AttributeType::FLOAT, false},
+       AttributeParam{"mask_filter_value", "Finite additive mask penalty.", AttributeType::FLOAT,
+                      false, -10000.f},
+       AttributeParam{"past_present_share_buffer", "Only 0 is supported.", AttributeType::INT,
+                      false, int64_t{0}},
+       AttributeParam{"do_rotary", "Only 0 is supported.", AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"rotary_embedding_dim", "Unsupported; must be omitted.", AttributeType::INT,
+                      false}},
+      false, true);
+  schema.set_min_output(1);
+  schema.set_max_output(2);
+  return schema;
+}
+
 LightOpSchema MakeMultiHeadAttentionSchema() {
   LightOpSchema schema(
       "MultiHeadAttention", kMicrosoftDomain, 1,
@@ -552,6 +593,7 @@ LightOpSchema MakeMoESchema() {
 std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &op_type,
                                                             bool init_doc) {
   static const std::map<std::string, SchemaBuilder> builders = {
+      {"Attention", [] { return std::vector<LightOpSchema>{MakeAttentionSchema()}; }},
       {"BiasGelu", [] { return std::vector<LightOpSchema>{MakeBiasGeluSchema()}; }},
       {"Gelu", [] { return std::vector<LightOpSchema>{MakeGeluSchema()}; }},
       {"CausalConvWithState",

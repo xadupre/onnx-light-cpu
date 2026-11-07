@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/attention/linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
@@ -173,6 +174,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     RegisterNaiveCausalConvWithStateKernel();
     RegisterNaiveCDistKernel();
     RegisterNaiveGroupQueryAttentionKernel();
+    RegisterMicrosoftAttentionKernel();
     RegisterMultiHeadAttentionKernel();
     RegisterNaiveMicrosoftLinearAttentionKernel();
     RegisterSkipLayerNormalizationKernel();
@@ -183,6 +185,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     RegisterCausalConvWithStateKernel();
     RegisterCDistKernel();
     RegisterGroupQueryAttentionKernel();
+    RegisterMicrosoftAttentionKernel();
     RegisterMultiHeadAttentionKernel();
     RegisterMicrosoftLinearAttentionKernel();
     RegisterSkipLayerNormalizationKernel();

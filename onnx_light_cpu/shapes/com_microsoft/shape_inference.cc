@@ -362,6 +362,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {"onnx_light_cpu::GroupQueryAttentionFusionPattern"},
        true},
       {kMicrosoftDomain,
+       "Attention",
+       "onnx_light_cpu::ComputeShapeMicrosoftAttention",
+       "onnx_light_cpu::ComputePeakMemoryMicrosoftAttention",
+       {},
+       false},
+      {kMicrosoftDomain,
        "MultiHeadAttention",
        "onnx_light_cpu::ComputeShapeMultiHeadAttention",
        "onnx_light_cpu::ComputePeakMemoryMultiHeadAttention",
@@ -1991,6 +1997,10 @@ ComputePeakMemoryLinearAttention(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::Nod
 void RegisterMicrosoftShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "Attention",
+                                      ComputeShapeMicrosoftAttention);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "Attention", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryMicrosoftAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "GatherBlockQuantized",
                                       ComputeShapeGatherBlockQuantized);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "GatherBlockQuantized",

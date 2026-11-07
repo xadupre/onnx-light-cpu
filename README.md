@@ -250,7 +250,8 @@ print(f"SIMD level: {level}")
 `register_kernels` installs the optimized kernels into
 [onnx-light](https://github.com/xadupre/onnx-light)'s shared C++ kernel
 dispatch table. This includes the portable `com.microsoft::CDist`,
-`com.microsoft::BiasGelu`, `com.microsoft::MultiHeadAttention`, `com.microsoft::GroupQueryAttention`, and
+`com.microsoft::BiasGelu`, FP32 fused `com.microsoft::Attention` with packed present state,
+`com.microsoft::MultiHeadAttention`, `com.microsoft::GroupQueryAttention`, and
 `com.microsoft::LinearAttention` kernels, packed 2-/4-/8-bit embedding lookup
 with `com.microsoft::GatherBlockQuantized`, the standard numeric normalization
 family (`BatchNormalization` through `RMSNormalization`), and their related
