@@ -52,6 +52,41 @@ built, installed, and consumed with CMake without ONNX or Python.
 The public :doc:`registering_kernels` guide covers the equivalent
 ``onnx-light`` ``CpuExecutorScope`` requirement for direct ``KernelBase`` use.
 
+Borrowing scratch storage
+-------------------------
+
+``ExecutionAllocatorView`` and ``ExecutionAllocatorScope`` provide a separate
+borrowed allocation binding for temporary compute storage. ``ExecutionBuffer``
+allocates aligned, uninitialized bytes through that binding, or through aligned
+heap allocation for standalone callers. A null allocator scope explicitly selects
+the heap fallback. Allocator scopes restore the previous binding on return or
+exception, independently of executor scopes.
+
+``RuntimeExecutionScope`` accepts an optional ``RuntimeContext`` pointer.
+Gemm and MatMul pass their context so generic packing buffers borrow its execution
+allocator without replacing an explicit compute allocator. The bridge retains
+the runtime allocation handle and aligns its payload within checked extra
+capacity; releasing the buffer returns that handle to the same allocator.
+
+Allocators need not be thread-safe: allocate scratch before dispatch and release
+it after synchronous completion. Workers borrow disjoint, cache-line-aligned
+slices selected by actual range boundaries, not worker identities or the
+requested participant count. Allocator bindings are not transferred to workers.
+The generic five-loop GEMM follows this contract for A and B packing, including
+preplanned serial inner packing buffers for split-K partitions. No private pool
+or thread-local scratch cache is retained across calls.
+
+MatMul, strided-batched GEMM, and grouped GEMM retain outer batch parallelism
+whether or not their inner products need scratch. Before dispatch, the caller
+reserves one aligned slice per actual callback range, sized for the largest
+serial product in that range. Each callback passes an explicit ``GemmScratch``
+context through its inner GEMMs and reuses the same slice between products.
+Neither the allocator nor a scratch binding is transferred to workers.
+Reservations scale with concurrent ranges, not the number of matrices, and
+allocation failures occur before batch dispatch or output writes. Standalone
+heap-backed calls use the same preallocation path. If batch parallelism is not
+selected by the existing scheduling policy, inner GEMM parallelism is retained.
+
 Nested work stays serial
 ------------------------
 

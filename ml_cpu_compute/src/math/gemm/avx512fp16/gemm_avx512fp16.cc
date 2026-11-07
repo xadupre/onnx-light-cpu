@@ -20,12 +20,12 @@
 
 #include "ml_cpu_compute/math/gemm/avx512fp16/gemm_avx512fp16.h"
 
+#include "ml_cpu_compute/checked_arithmetic.h"
 #include "ml_cpu_compute/execution.h"
 
 #include <array>
 #include <cassert>
 #include <cstring>
-#include <vector>
 
 #include <immintrin.h>
 
@@ -136,11 +136,17 @@ void GemmMicroTile_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, flo
 
 void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
                                    const std::uint16_t *A, const std::uint16_t *B, float *Y) {
-  std::vector<float> widened_b(K);
+  ExecutionBuffer storage(CheckedByteSize(K, sizeof(float), "Gemm", "widened B"));
+  GemmFloat16SkinnyN_AVX512FP16(M, K, alpha, A, B, Y, static_cast<float *>(storage.data()));
+}
+
+void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
+                                   const std::uint16_t *A, const std::uint16_t *B, float *Y,
+                                   float *widened_b) {
   std::size_t depth = 0;
   for (; depth + 16 <= K; depth += 16) {
     const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(B + depth));
-    _mm512_storeu_ps(widened_b.data() + depth, _mm512_cvtxph_ps(values));
+    _mm512_storeu_ps(widened_b + depth, _mm512_cvtxph_ps(values));
   }
   for (; depth < K; ++depth) {
     widened_b[depth] = WidenHalfScalar(B + depth);
@@ -154,7 +160,7 @@ void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
                                 _mm512_setzero_ps()};
       std::size_t k = 0;
       for (; k + 16 <= K; k += 16) {
-        const __m512 b = _mm512_loadu_ps(widened_b.data() + k);
+        const __m512 b = _mm512_loadu_ps(widened_b + k);
         for (std::size_t r = 0; r < 4; ++r) {
           const std::uint16_t *a = A + (static_cast<std::size_t>(row) + r) * K + k;
           const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(a));
@@ -176,8 +182,8 @@ void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
       std::size_t k = 0;
       for (; k + 16 <= K; k += 16) {
         const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(a + k));
-        accumulator = _mm512_fmadd_ps(_mm512_cvtxph_ps(values),
-                                      _mm512_loadu_ps(widened_b.data() + k), accumulator);
+        accumulator =
+            _mm512_fmadd_ps(_mm512_cvtxph_ps(values), _mm512_loadu_ps(widened_b + k), accumulator);
       }
       float sum = _mm512_reduce_add_ps(accumulator);
       for (; k < K; ++k) {
