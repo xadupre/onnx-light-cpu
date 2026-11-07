@@ -440,7 +440,7 @@ class TestExtensionImportOrder(ExtTestCase):
 
             root = Path(sys.argv[1])
             # Diagnose editable-install overrides before loading either native build.
-            run_path(str(root / "unittests" / "python" / "test_native_package_import.py"))[
+            run_path(str(root / "unittests" / "python" / "native_import.py"))[
                 "_check_native_import_origins"
             ](root)
             for name in sys.argv[2:]:

@@ -5,36 +5,15 @@
 """Checks native import origins and optional runtime discovery without loading binaries."""
 
 import os
-from importlib.util import find_spec
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from unittest import TestCase
+from onnx_light.ext_test_case import ExtTestCase
 
 
-def _check_native_import_origins(root):
-    bindings_dir = (Path(root) / "onnx_light_cpu" / "onnx_py").resolve()
-    for module in ("_cpukernels", "_cpuregister"):
-        name = f"onnx_light_cpu.onnx_py.{module}"
-        spec = find_spec(name)
-        if (
-            spec is not None
-            and spec.origin is not None
-            and Path(spec.origin).resolve().parent != bindings_dir
-        ):
-            raise ImportError(
-                f"PYTHONPATH selects onnx-light-cpu from {bindings_dir}, but "
-                f"{name} was found at {spec.origin}; expected it in {bindings_dir}. "
-                "A conflicting installation or editable-install finder may be "
-                "overriding native imports. Use an environment without the conflicting "
-                "installation and build the selected checkout in place; "
-                "mixing native builds is not supported."
-            )
-
-
-class TestNativePackageImport(TestCase):
+class TestNativePackageImport(ExtTestCase):
     def test_editable_finder_native_origins(self):
         root = Path(__file__).resolve().parents[2]
         script = dedent("""
@@ -74,7 +53,7 @@ class TestNativePackageImport(TestCase):
             import_module("onnx_light_cpu.onnx_py")
             assert not EditableFinder.queries, EditableFinder.queries
             check_origins = run_path(
-                str(root / "unittests" / "python" / "test_native_package_import.py")
+                str(root / "unittests" / "python" / "native_import.py")
             )["_check_native_import_origins"]
             try:
                 if source_selected:
