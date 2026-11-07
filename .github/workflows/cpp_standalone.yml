@@ -104,6 +104,8 @@ jobs:
       contents: read
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      # GCC 13 rejects upstream case-name construction: xadupre/onnx-light#5819.
+      CXX: g++-14
       INSTALL_PREFIX: ${{ github.workspace }}/install
     steps:
       - uses: actions/checkout@v7
