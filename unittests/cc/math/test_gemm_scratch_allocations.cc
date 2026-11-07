@@ -538,8 +538,9 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
   TrackingAllocator tracker;
   const auto allocator = tracker.View();
   ExecutionAllocatorScope allocator_scope(borrowed ? &allocator : nullptr);
-  const auto check = [&](auto execute, std::size_t scratch_bytes) {
+  const auto check = [&](auto execute, std::size_t scratch_bytes, std::size_t scratch_bound) {
     const std::size_t previous_allocations = tracker.allocations;
+    tracker.peak = 0;
     executor_tracker.submissions = 0;
     executor_tracker.maximum_blocks = 0;
     callback_allocations = 0;
@@ -554,6 +555,7 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
     EXPECT_LT(executor_tracker.maximum_blocks, 7);
     EXPECT_EQ(tracker.allocations, tracker.releases);
     EXPECT_EQ(tracker.live, 0U);
+    EXPECT_LE(tracker.peak, scratch_bound);
     for (std::size_t batch = 0; batch < batches; ++batch) {
       const T expected = T(batch + 1) * T(k) / T(32);
       EXPECT_TRUE(std::all_of(y.begin() + batch * m * n, y.begin() + (batch + 1) * m * n,
@@ -574,7 +576,8 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
           half == 1 ? GemmOutputConversion::kFloat16 : GemmOutputConversion::kBFloat16;
       epilogue.converted_output = converted.data();
       check([&] { plan.ExecuteHalf(half_plan, ah.data(), bh.data(), epilogue, y.data()); },
-            half_plan.ScratchBytes(1));
+            half_plan.ScratchBytes(1),
+            plan.HalfScratchBytes(half_plan, 7) - y.size() * sizeof(float));
       for (std::size_t index = 0; index < y.size(); ++index) {
         EXPECT_EQ(converted[index], half == 1 ? detail::FloatToFloat16Bits(y[index])
                                               : detail::FloatToBFloat16Bits(y[index]));
@@ -583,7 +586,8 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
       return;
     }
   }
-  check([&] { plan.Execute(a.data(), b.data(), y.data()); }, plan.gemm_plan().ScratchBytes(1));
+  check([&] { plan.Execute(a.data(), b.data(), y.data()); }, plan.gemm_plan().ScratchBytes(1),
+        plan.ScratchBytes(7));
   GemmPlanOptions<T> serial_options{false, trans_b, m, n, k};
   serial_options.maximum_participants = 1;
   const GemmPlan<T> serial_plan(serial_options);
@@ -592,7 +596,7 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
         StridedBatchedGemm(serial_plan, batches, a.data(), m * k, b.data(), 0,
                            static_cast<const T *>(nullptr), 0, y.data(), m * n);
       },
-      serial_plan.ScratchBytes(1));
+      serial_plan.ScratchBytes(1), 7 * detail::GemmBatchScratchBytes(serial_plan.ScratchBytes(1)));
   std::array<GroupedGemmProblem<T>, batches> problems;
   auto alternate_options = serial_options;
   alternate_options.trans_a = true;
@@ -603,9 +607,9 @@ void CheckBorrowedBatchScratch(int half = 0, bool trans_b = true, bool borrowed 
                        b.data(), nullptr, y.data() + batch * m * n};
   }
   check([&] { GroupedGemm<T>(problems); },
-        std::max(serial_plan.ScratchBytes(1), alternate_plan.ScratchBytes(1)));
-  EXPECT_LE(tracker.peak, std::max(plan.ScratchBytes(7), 7 * detail::GemmBatchScratchBytes(
-                                                                 alternate_plan.ScratchBytes(1))));
+        std::max(serial_plan.ScratchBytes(1), alternate_plan.ScratchBytes(1)),
+        7 * detail::GemmBatchScratchBytes(
+                std::max(serial_plan.ScratchBytes(1), alternate_plan.ScratchBytes(1))));
 }
 
 TEST(GemmScratchAllocations, BorrowedAllocatorOwnsBatchedAndGroupedPacking) {
