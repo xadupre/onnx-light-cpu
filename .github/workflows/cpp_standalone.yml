@@ -104,6 +104,8 @@ jobs:
       contents: read
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      # GCC 13 rejects upstream case-name construction: xadupre/onnx-light#5819.
+      CXX: g++-14
       INSTALL_PREFIX: ${{ github.workspace }}/install
     steps:
       - uses: actions/checkout@v7
@@ -111,7 +113,7 @@ jobs:
       - name: Build and install onnx-light
         run: |
           python -m pip install "cmake>=4"
-          python tools/onnx_light_release.py clone "${RUNNER_TEMP}/onnx-light"
+          git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "${RUNNER_TEMP}/onnx-light"
           cmake -S "${RUNNER_TEMP}/onnx-light" -B "${RUNNER_TEMP}/build-onnx-light" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \

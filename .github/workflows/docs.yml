@@ -50,7 +50,7 @@ jobs:
           # get_cpp_build_info(), avoiding a second CMake-installed copy with a
           # different dispatch registry.
           pip install "cmake>=4" nanobind scikit-build-core numpy
-          python tools/onnx_light_release.py clone /tmp/onnx-light
+          git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           # Match the CPU extensions' STABLE_ABI; nanobind separates ABI3 and
           # regular CPython type registries (LightOpSchema, RuntimeContext).
           pip install -C build.verbose=true -C wheel.py-api=cp312 /tmp/onnx-light -v

@@ -115,6 +115,34 @@ NodeProto MakeMatMulNBitsNode(bool bias = false, int64_t bits = 4) {
   return node;
 }
 
+TEST(CustomOperatorSupport, GeluSchemaSymbolicShapeAndZeroScratch) {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("Gelu");
+  node.add_input("X");
+  node.add_output("Y");
+  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("Gelu");
+  ASSERT_EQ(schemas.size(), 1U);
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  for (const auto dtype :
+       {TensorType::kFloat, TensorType::kDouble, TensorType::kFloat16, TensorType::kBfloat16}) {
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("X", SymTensor(nullptr, dtype, {SymDim("tokens"), SymDim(128)}));
+    onnx_light_cpu::ComputeShapeGelu(ctx, node);
+    EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+    EXPECT_EQ(ctx.Get("Y").Dtype(), dtype);
+    EXPECT_EQ(
+        onnx_light_cpu::ComputePeakMemoryGelu(sym_ns::Device::kCPU, node, {ctx.Get("X").Shape()}),
+        shapes_ns::PeakMemoryEstimate::Exact(int64_t{0}));
+  }
+  shapes_ns::ShapesContext invalid;
+  invalid.Set("X", SymTensor(nullptr, TensorType::kInt32, {SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeGelu(invalid, node), std::invalid_argument);
+  invalid.Set("X", SymTensor(nullptr, TensorType::kFloat, {SymDim(2)}));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "approximate", std::string("tanh"));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeGelu(invalid, node), std::invalid_argument);
+}
+
 TEST(CustomOperatorSupport, QMoESymbolicShapeAndInvalidContracts) {
   NodeProto node;
   node.set_domain(onnx_light_cpu::kMicrosoftDomain);
@@ -544,37 +572,38 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 13U);
+  ASSERT_EQ(schemas.size(), 14U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
   EXPECT_EQ(schemas[3].name(), "GatherBlockQuantized");
-  EXPECT_EQ(schemas[4].name(), "GroupQueryAttention");
-  ASSERT_EQ(schemas[4].inputs().size(), 12U);
-  EXPECT_EQ(schemas[4].inputs()[11].name, "head_sink");
-  EXPECT_EQ(schemas[4].inputs()[11].type, "T");
-  EXPECT_EQ(schemas[5].name(), "LinearAttention");
-  EXPECT_EQ(schemas[6].name(), "MatMulNBits");
-  EXPECT_EQ(schemas[7].name(), "MoE");
-  EXPECT_EQ(schemas[8].name(), "MultiHeadAttention");
-  EXPECT_EQ(schemas[9].name(), "QMoE");
-  EXPECT_EQ(schemas[10].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[11].name(), "SkipLayerNormalization");
-  EXPECT_EQ(schemas[12].name(), "SkipSimplifiedLayerNormalization");
-  ASSERT_EQ(schemas[9].inputs().size(), 17U);
-  EXPECT_EQ(schemas[9].inputs()[14].name, "router_weights");
-  EXPECT_EQ(schemas[9].inputs()[15].name, "fc1_global_scale");
-  EXPECT_EQ(schemas[9].inputs()[16].name, "fc2_global_scale");
+  EXPECT_EQ(schemas[4].name(), "Gelu");
+  EXPECT_EQ(schemas[5].name(), "GroupQueryAttention");
+  ASSERT_EQ(schemas[5].inputs().size(), 12U);
+  EXPECT_EQ(schemas[5].inputs()[11].name, "head_sink");
+  EXPECT_EQ(schemas[5].inputs()[11].type, "T");
+  EXPECT_EQ(schemas[6].name(), "LinearAttention");
+  EXPECT_EQ(schemas[7].name(), "MatMulNBits");
+  EXPECT_EQ(schemas[8].name(), "MoE");
+  EXPECT_EQ(schemas[9].name(), "MultiHeadAttention");
+  EXPECT_EQ(schemas[10].name(), "QMoE");
+  EXPECT_EQ(schemas[11].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[12].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[13].name(), "SkipSimplifiedLayerNormalization");
+  ASSERT_EQ(schemas[10].inputs().size(), 17U);
+  EXPECT_EQ(schemas[10].inputs()[14].name, "router_weights");
+  EXPECT_EQ(schemas[10].inputs()[15].name, "fc1_global_scale");
+  EXPECT_EQ(schemas[10].inputs()[16].name, "fc2_global_scale");
   EXPECT_EQ(schemas[2].inputs().size(), 4U);
   EXPECT_EQ(schemas[2].outputs().size(), 2U);
-  EXPECT_EQ(schemas[7].inputs().size(), 8U);
-  ASSERT_EQ(schemas[6].inputs().size(), 6U);
-  EXPECT_EQ(schemas[6].inputs()[3].name, "zero_points");
-  EXPECT_EQ(schemas[6].inputs()[4].name, "g_idx");
-  EXPECT_EQ(schemas[6].inputs()[5].name, "bias");
-  ASSERT_EQ(schemas[6].attributes().size(), 6U);
+  EXPECT_EQ(schemas[8].inputs().size(), 8U);
+  ASSERT_EQ(schemas[7].inputs().size(), 6U);
+  EXPECT_EQ(schemas[7].inputs()[3].name, "zero_points");
+  EXPECT_EQ(schemas[7].inputs()[4].name, "g_idx");
+  EXPECT_EQ(schemas[7].inputs()[5].name, "bias");
+  ASSERT_EQ(schemas[7].attributes().size(), 6U);
   const auto find_attribute = [&](const char *name) {
-    return std::find_if(schemas[6].attributes().begin(), schemas[6].attributes().end(),
+    return std::find_if(schemas[7].attributes().begin(), schemas[7].attributes().end(),
                         [&](const auto &attribute) { return attribute.name == name; });
   };
   EXPECT_TRUE(find_attribute("K")->required);
@@ -607,6 +636,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       {"com.microsoft", "CDist", "onnx_light_cpu::CDistFusionPattern", true},
       {"com.microsoft", "CausalConvWithState", "", false},
       {"com.microsoft", "GatherBlockQuantized", "", false},
+      {"com.microsoft", "Gelu", "", false},
       {"com.microsoft", "GroupQueryAttention", "onnx_light_cpu::GroupQueryAttentionFusionPattern",
        true},
       {"com.microsoft", "MultiHeadAttention", "", false},
@@ -1765,6 +1795,18 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftMoE"), patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftNormalizationCast"),
             patterns.end());
+}
+
+TEST(CustomOperatorSupport, MicrosoftPatternsHavePriorityThree) {
+  onnx_light_cpu::RegisterCustomOperatorPatterns();
+  for (const char *name : {"MicrosoftBiasGelu", "MicrosoftCDist", "MicrosoftGroupQueryAttention",
+                           "MicrosoftLinearAttention", "MicrosoftMatMulNBitsBias",
+                           "MicrosoftNormalizationCast", "MicrosoftMoE"}) {
+    SCOPED_TRACE(name);
+    const auto pattern = builder_ns::CreateRegisteredPattern(name);
+    ASSERT_NE(pattern, nullptr);
+    EXPECT_EQ(pattern->priority, 3);
+  }
 }
 
 TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {

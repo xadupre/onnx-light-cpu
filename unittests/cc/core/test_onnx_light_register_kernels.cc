@@ -31,6 +31,12 @@ namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
+class SentinelKernel : public rt_ns::KernelBase {
+public:
+  using rt_ns::KernelBase::KernelBase;
+  void Run(rt_ns::RuntimeContext &) override {}
+};
+
 rt_ns::Tensor TreeTensor(rt_ns::DataType type, const rt_ns::Shape &shape,
                          const std::vector<float> &values) {
   if (type == rt_ns::DataType::FLOAT) {
@@ -545,10 +551,11 @@ TEST(OnnxLightRegisterKernels, VariadicFactoryUsesOneCommonBroadcastPlan) {
 TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
   namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
   namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  rt_ns::RegisterKernelFn(
-      "", "Abs", sym_ns::Device::kCPU,
-      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
-         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+                             const rt_ns::KernelContext &context) {
+                            return std::make_unique<SentinelKernel>(context);
+                          });
 
   EXPECT_FALSE(onnx_light_cpu::RegisterKernelGlobal("", "Abs", false));
   ONNX_LIGHT_NAMESPACE::NodeProto node;
@@ -557,8 +564,9 @@ TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
   node.add_output("y");
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-2.0f, 3.0f}));
-  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime, runtime.kernel_ctx()),
-            nullptr);
+  auto sentinel =
+      rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime, runtime.kernel_ctx());
+  EXPECT_NE(dynamic_cast<SentinelKernel *>(sentinel.get()), nullptr);
 
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelGlobal("ai.onnx", "Abs"));
   std::unique_ptr<rt_ns::KernelBase> kernel =
@@ -574,10 +582,11 @@ TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
 TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
   namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  rt_ns::RegisterKernelFn(
-      "", "Abs", sym_ns::Device::kCPU,
-      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
-         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+                             const rt_ns::KernelContext &context) {
+                            return std::make_unique<SentinelKernel>(context);
+                          });
   const std::size_t global_size = rt_ns::KernelDispatchTable().size();
 
   rt_ns::RuntimeContext selected(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
@@ -598,8 +607,8 @@ TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(selected, "", "Abs"));
   EXPECT_EQ(other.custom_kernels().find("ai.onnx:Abs"), other.custom_kernels().end());
   EXPECT_EQ(rt_ns::KernelDispatchTable().size(), global_size);
-  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other, other.kernel_ctx()),
-            nullptr);
+  auto sentinel = rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other, other.kernel_ctx());
+  EXPECT_NE(dynamic_cast<SentinelKernel *>(sentinel.get()), nullptr);
 
   selected.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f}));
   selected.set_kernel_usage_enabled(true);
