@@ -309,8 +309,8 @@ TEST(CustomOperatorSupport, QMoESparseMixerGraphConstructionAfterGlobalCPURegist
     ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat16, {SymDim(4), SymDim(64), SymDim(3)}));
     ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(4), SymDim(96), SymDim(32)}));
     ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat16, {SymDim(4), SymDim(96), SymDim(2)}));
-    ctx.Set("W3", ctx.Get("W1"));
-    ctx.Set("S3", ctx.Get("S1"));
+    ctx.Set("W3", SymTensor(nullptr, ctx.Get("W1").Dtype(), ctx.Get("W1").Shape()));
+    ctx.Set("S3", SymTensor(nullptr, ctx.Get("S1").Dtype(), ctx.Get("S1").Shape()));
     onnx_light_cpu::ComputeShapeQMoE(ctx, node);
     EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
     EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
