@@ -396,7 +396,7 @@ class TestBenchmarkCli(ExtTestCase):
         )
 
     def test_rejects_invalid_test_regular_expression(self):
-        with self.assertRaisesRegex(re.PatternError, "unterminated"):
+        with self.assertRaisesRegex(re.error, "unterminated"):
             _benchmark.run_backend_benchmark(
                 tests=["("],
                 dtypes=["all"],
