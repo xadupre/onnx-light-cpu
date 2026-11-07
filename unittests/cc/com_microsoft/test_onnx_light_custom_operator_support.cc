@@ -1797,6 +1797,18 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
             patterns.end());
 }
 
+TEST(CustomOperatorSupport, MicrosoftPatternsHavePriorityThree) {
+  onnx_light_cpu::RegisterCustomOperatorPatterns();
+  for (const char *name : {"MicrosoftBiasGelu", "MicrosoftCDist", "MicrosoftGroupQueryAttention",
+                           "MicrosoftLinearAttention", "MicrosoftMatMulNBitsBias",
+                           "MicrosoftNormalizationCast", "MicrosoftMoE"}) {
+    SCOPED_TRACE(name);
+    const auto pattern = builder_ns::CreateRegisteredPattern(name);
+    ASSERT_NE(pattern, nullptr);
+    EXPECT_EQ(pattern->priority, 3);
+  }
+}
+
 TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {
   grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);

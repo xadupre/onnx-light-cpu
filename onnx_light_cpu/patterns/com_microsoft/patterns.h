@@ -37,7 +37,7 @@ namespace onnx_light_cpu {
 class BiasGeluFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  BiasGeluFusionPattern() : PatternOptimization(0, "MicrosoftBiasGelu") {}
+  BiasGeluFusionPattern() : PatternOptimization(3, "MicrosoftBiasGelu") {}
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
@@ -85,7 +85,7 @@ public:
  */
 class CDistFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  CDistFusionPattern() : PatternOptimization(0, "MicrosoftCDist") {}
+  CDistFusionPattern() : PatternOptimization(3, "MicrosoftCDist") {}
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
@@ -133,7 +133,7 @@ public:
 class GroupQueryAttentionFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  GroupQueryAttentionFusionPattern() : PatternOptimization(0, "MicrosoftGroupQueryAttention") {}
+  GroupQueryAttentionFusionPattern() : PatternOptimization(3, "MicrosoftGroupQueryAttention") {}
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
@@ -166,7 +166,7 @@ public:
 class LinearAttentionFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  LinearAttentionFusionPattern() : PatternOptimization(0, "MicrosoftLinearAttention") {}
+  LinearAttentionFusionPattern() : PatternOptimization(3, "MicrosoftLinearAttention") {}
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
@@ -187,7 +187,7 @@ public:
 class MatMulNBitsBiasFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
-  MatMulNBitsBiasFusionPattern() : PatternOptimization(0, "MicrosoftMatMulNBitsBias") {}
+  MatMulNBitsBiasFusionPattern() : PatternOptimization(3, "MicrosoftMatMulNBitsBias") {}
 
   std::set<std::string> FastOpType() const override;
   ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
@@ -215,7 +215,7 @@ class NormalizationCastEliminationPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
   explicit NormalizationCastEliminationPattern(std::string kernel_name = {})
-      : PatternOptimization(0, "MicrosoftNormalizationCast",
+      : PatternOptimization(3, "MicrosoftNormalizationCast",
                             ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU),
         kernel_name_(std::move(kernel_name)) {}
 
@@ -279,7 +279,7 @@ private:
 class MoEFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
   MoEFusionPattern()
-      : PatternOptimization(0, "MicrosoftMoE", ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU) {
+      : PatternOptimization(3, "MicrosoftMoE", ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU) {
   }
 
   std::set<std::string> FastOpType() const override;
