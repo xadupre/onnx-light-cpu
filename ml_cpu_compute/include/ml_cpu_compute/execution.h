@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 
@@ -106,6 +107,54 @@ public:
 
 private:
   const ExecutionExecutorView *previous_;
+};
+
+struct ExecutionAllocation {
+  void *data = nullptr;
+  void *handle = nullptr;
+};
+
+// Borrowed scratch allocator, independent of the executor binding. Allocation
+// and release happen on the calling thread, before/after synchronous dispatch;
+// callbacks only borrow disjoint slices of the resulting storage. The allocator
+// need not be thread-safe. It must return aligned, uninitialized storage or throw,
+// and release must not throw. Neither the view nor its context is retained beyond
+// the scope and the buffers created within it. No binding is copied to workers.
+struct ExecutionAllocatorView {
+  void *context = nullptr;
+  ExecutionAllocation (*allocate)(void *context, std::size_t bytes,
+                                  std::size_t alignment) = nullptr;
+  void (*release)(void *context, ExecutionAllocation allocation) noexcept = nullptr;
+};
+
+const ExecutionAllocatorView *CurrentExecutionAllocator() noexcept;
+bool HasExecutionAllocatorScope() noexcept;
+
+class ExecutionAllocatorScope {
+public:
+  // nullptr explicitly selects the aligned heap fallback.
+  explicit ExecutionAllocatorScope(const ExecutionAllocatorView *allocator) noexcept;
+  ExecutionAllocatorScope(const ExecutionAllocatorScope &) = delete;
+  ExecutionAllocatorScope &operator=(const ExecutionAllocatorScope &) = delete;
+  ~ExecutionAllocatorScope();
+
+private:
+  const ExecutionAllocatorView *previous_;
+};
+
+class ExecutionBuffer {
+public:
+  explicit ExecutionBuffer(std::size_t bytes, std::size_t alignment = 64);
+  ExecutionBuffer(const ExecutionBuffer &) = delete;
+  ExecutionBuffer &operator=(const ExecutionBuffer &) = delete;
+  ~ExecutionBuffer();
+
+  void *data() noexcept { return allocation_.data; }
+
+private:
+  ExecutionAllocatorView allocator_;
+  ExecutionAllocation allocation_;
+  std::size_t alignment_;
 };
 
 namespace detail {

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -256,21 +257,21 @@ std::size_t RegisterRowsForShape(std::size_t m, std::size_t n, std::size_t k) {
 template <typename T, GemmAlgorithm Algorithm>
 void ExecuteFloatRoutine(bool trans_a, bool trans_b, std::size_t m, std::size_t n, std::size_t k,
                          T alpha, const T *a, const T *b, T beta, const T *c, T *y,
-                         const GemmBlocking *blocking) {
+                         const GemmBlocking *blocking, detail::GemmScratch *scratch) {
   if constexpr (std::is_same_v<T, float>) {
     detail::GemmFloat32Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y,
-                                          blocking);
+                                          blocking, scratch);
   } else {
     static_assert(std::is_same_v<T, double>);
     detail::GemmFloat64Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y,
-                                          blocking);
+                                          blocking, scratch);
   }
 }
 
 template <typename T>
 auto SelectRoutine(GemmAlgorithm algorithm)
     -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
-                const T *, T *, const GemmBlocking *) {
+                const T *, T *, const GemmBlocking *, detail::GemmScratch *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatRoutine<T, GemmAlgorithm::kDirect>;
@@ -289,7 +290,7 @@ auto SelectRoutine(GemmAlgorithm algorithm)
 auto SelectHalfRoutine(GemmAlgorithm algorithm)
     -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
                 const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *,
-                const GemmBlocking *) {
+                const GemmBlocking *, detail::GemmScratch *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
@@ -371,6 +372,43 @@ template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmPro
   return std::all_of(problems.begin(), problems.end(), [](const GroupedGemmProblem<T> &problem) {
     return problem.plan->useful_threads() == 1;
   });
+}
+
+template <typename ScratchBytesFn, typename ExecuteFn>
+void ExecuteBatchRanges(std::size_t count, double cost, ScratchBytesFn scratch_bytes,
+                        ExecuteFn execute) {
+  if (count > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::overflow_error("Gemm: batch count exceeds int64_t.");
+  }
+  const auto total = static_cast<std::int64_t>(count);
+  const std::int64_t requested = ExecutionBlockCount(total, cost);
+  if (requested <= 1) {
+    execute(0, total, nullptr);
+    return;
+  }
+  const std::int64_t block = total / requested + (total % requested != 0);
+  const std::size_t slots = static_cast<std::size_t>(total / block + (total % block != 0));
+  std::vector<std::size_t> offsets(CheckedAdd(slots, 1, "Gemm", "batch range offsets"), 0);
+  for (std::size_t slot = 0; slot < slots; ++slot) {
+    const auto begin = static_cast<std::int64_t>(slot) * block;
+    offsets[slot + 1] = CheckedAdd(
+        offsets[slot],
+        detail::GemmBatchScratchBytes(scratch_bytes(begin, begin + std::min(block, total - begin))),
+        "Gemm", "batch scratch");
+  }
+  ExecutionBuffer storage(offsets.back());
+  const auto ranges = static_cast<std::int64_t>(slots);
+  ExecuteRanges(ranges, ExecutionSchedule{1, 1, ranges, ranges},
+                [&](std::int64_t first, std::int64_t last) {
+                  for (auto index = first; index < last; ++index) {
+                    const auto slot = static_cast<std::size_t>(index);
+                    auto *base = static_cast<std::byte *>(storage.data());
+                    detail::GemmScratch scratch{base == nullptr ? nullptr : base + offsets[slot],
+                                                offsets[slot + 1] - offsets[slot]};
+                    const auto begin = index * block;
+                    execute(begin, begin + std::min(block, total - begin), &scratch);
+                  }
+                });
 }
 
 bool PreferMatMulBatchParallelism(std::size_t batch_count, std::size_t gemm_threads) {
@@ -544,10 +582,15 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
   if (has_constant_b_ && !prepared_wide_b_) {
     constant_b_.assign(options.constant_b.begin(), options.constant_b.end());
   }
+  if (!prepared_wide_b_) {
+    serial_scratch_bytes_ = detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_,
+                                                            k_, blocking_, sizeof(T), 1);
+  }
 }
 
 template <typename T>
-void GemmPlan<T>::ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y) const {
+void GemmPlan<T>::ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y,
+                                 detail::GemmScratch *scratch) const {
   if constexpr (std::is_same_v<T, float>) {
     if (prepared_wide_b_) {
       detail::GemmWidePreparedB(m_, n_, k_, alpha_, a, constant_b_.data(), beta, c, y,
@@ -555,12 +598,23 @@ void GemmPlan<T>::ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *
       return;
     }
   }
-  routine_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, beta, c, y, &blocking_);
+  routine_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, beta, c, y, &blocking_, scratch);
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
+  Execute(a, b, c, y, nullptr);
+}
+
+template <typename T>
+void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y,
+                          detail::GemmScratch *scratch) const {
   ParticipantLimitScope participant_limit(
-      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+      scratch == nullptr ? RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_)
+                         : 1);
+  std::optional<detail::ExecutionRegionScope> serial_region;
+  if (scratch != nullptr) {
+    serial_region.emplace();
+  }
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -574,11 +628,14 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T 
   if (k_ != 0 && resolved_b == nullptr) {
     throw std::invalid_argument("ml_cpu_compute::GemmPlan: B must not be null when K is nonzero.");
   }
-  ExecuteProduct(a, resolved_b, beta_, c, y);
+  ExecuteProduct(a, resolved_b, beta_, c, y, scratch);
 }
 
 template <typename T>
 std::size_t GemmPlan<T>::ScratchBytes(std::size_t maximum_participants) const {
+  if (maximum_participants == 1) {
+    return serial_scratch_bytes_;
+  }
   if (prepared_wide_b_) {
     return 0;
   }
@@ -716,9 +773,15 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
   CheckedProduct(m_, k_, "A");
   CheckedProduct(k_, n_, "B");
   CheckedProduct(m_, n_, "Y");
+  serial_scratch_bytes_ =
+      detail::GemmProductScratchBytes(algorithm_, trans_a_, trans_b_, m_, n_, k_, blocking_,
+                                      sizeof(float), 1, true, &compact_blocking_, is_bfloat16_);
 }
 
 std::size_t GemmHalfPlan::ScratchBytes(std::size_t maximum_participants) const {
+  if (maximum_participants == 1) {
+    return serial_scratch_bytes_;
+  }
   const std::size_t participants =
       std::min(ConfiguredParticipantLimit(maximum_participants),
                RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
@@ -729,8 +792,19 @@ std::size_t GemmHalfPlan::ScratchBytes(std::size_t maximum_participants) const {
 
 void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
                            const GemmEpilogue<float> &epilogue, float *y) const {
+  Execute(a, b, epilogue, y, nullptr);
+}
+
+void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
+                           const GemmEpilogue<float> &epilogue, float *y,
+                           detail::GemmScratch *scratch) const {
   ParticipantLimitScope participant_limit(
-      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+      scratch == nullptr ? RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_)
+                         : 1);
+  std::optional<detail::ExecutionRegionScope> serial_region;
+  if (scratch != nullptr) {
+    serial_region.emplace();
+  }
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -750,7 +824,7 @@ void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
   // ``alpha * op(A) @ op(B)`` float32 product, then the epilogue adds the
   // broadcast bias/residual, applies the activation, and narrows the output.
   routine_(is_bfloat16_, trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, y, &blocking_,
-           &compact_blocking_);
+           &compact_blocking_, scratch);
   ApplyGemmEpilogue(m_, n_, epilogue, y);
 }
 
@@ -812,23 +886,21 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
         "ml_cpu_compute::MatMulPlan: B must not be null when K is nonzero.");
   }
 
-  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+  const auto execute = [&](std::int64_t begin, std::int64_t end, detail::GemmScratch *scratch) {
     for (std::int64_t offset = begin; offset < end; ++offset) {
       const std::size_t batch = static_cast<std::size_t>(offset);
       const T *batch_a = a == nullptr ? nullptr : a + BatchOffset(batch, a_batch_strides_);
       const T *batch_b =
           resolved_b == nullptr ? nullptr : resolved_b + BatchOffset(batch, b_batch_strides_);
-      gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_);
+      gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_, scratch);
     }
   };
   if (PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads())) {
-    const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
-      ParticipantLimitScope serial_gemm(1);
-      execute(begin, end);
-    };
-    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute_batches);
+    ExecuteBatchRanges(
+        batch_count_, GemmWork(gemm_plan_),
+        [&](std::int64_t, std::int64_t) { return gemm_plan_.ScratchBytes(1); }, execute);
   } else {
-    execute(0, static_cast<std::int64_t>(batch_count_));
+    execute(0, static_cast<std::int64_t>(batch_count_), nullptr);
   }
 }
 
@@ -848,9 +920,12 @@ std::size_t MatMulPlan<T>::ScratchBytes(std::size_t maximum_participants) const 
   }
   const std::size_t concurrent_batches =
       std::min(batch_count_, ConfiguredParticipantLimit(maximum_participants));
-  return std::max(
-      gemm_plan_.ScratchBytes(maximum_participants),
-      CheckedMultiply(concurrent_batches, gemm_plan_.ScratchBytes(1), "MatMul", "scratch bytes"));
+  return std::max(gemm_plan_.ScratchBytes(maximum_participants),
+                  concurrent_batches <= 1
+                      ? gemm_plan_.ScratchBytes(1)
+                      : CheckedMultiply(concurrent_batches,
+                                        detail::GemmBatchScratchBytes(gemm_plan_.ScratchBytes(1)),
+                                        "MatMul", "scratch bytes"));
 }
 
 template <typename T>
@@ -875,9 +950,13 @@ std::size_t MatMulPlan<T>::HalfScratchBytes(const GemmHalfPlan &half_plan,
   }
   const std::size_t concurrent_batches =
       std::min(batch_count_, ConfiguredParticipantLimit(maximum_participants));
-  const std::size_t packing = std::max(
-      half_plan.ScratchBytes(maximum_participants),
-      CheckedMultiply(concurrent_batches, half_plan.ScratchBytes(1), "MatMul", "half scratch"));
+  const std::size_t packing =
+      std::max(half_plan.ScratchBytes(maximum_participants),
+               concurrent_batches <= 1
+                   ? half_plan.ScratchBytes(1)
+                   : CheckedMultiply(concurrent_batches,
+                                     detail::GemmBatchScratchBytes(half_plan.ScratchBytes(1)),
+                                     "MatMul", "half scratch"));
   const std::size_t workspace =
       CheckedMultiply(CheckedMultiply(batch_count_, output_matrix_elements_, "MatMul", "workspace"),
                       sizeof(float), "MatMul", "workspace bytes");
@@ -906,7 +985,8 @@ void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16
         "ml_cpu_compute::MatMulPlan: half A and B must not be null when K is nonzero.");
   }
 
-  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+  ValidateGemmEpilogue(half_plan.m(), half_plan.n(), epilogue);
+  const auto execute = [&](std::int64_t begin, std::int64_t end, detail::GemmScratch *scratch) {
     for (std::int64_t offset = begin; offset < end; ++offset) {
       const std::size_t batch = static_cast<std::size_t>(offset);
       const std::uint16_t *batch_a =
@@ -915,17 +995,16 @@ void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16
           b == nullptr ? nullptr : b + BatchOffset(batch, b_batch_strides_);
       GemmEpilogue<float> batch_epilogue = epilogue;
       batch_epilogue.converted_output += batch * output_matrix_elements_;
-      half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_);
+      half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_,
+                        scratch);
     }
   };
   if (PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads())) {
-    const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
-      ParticipantLimitScope serial_gemm(1);
-      execute(begin, end);
-    };
-    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute_batches);
+    ExecuteBatchRanges(
+        batch_count_, GemmWork(gemm_plan_),
+        [&](std::int64_t, std::int64_t) { return half_plan.ScratchBytes(1); }, execute);
   } else {
-    execute(0, static_cast<std::int64_t>(batch_count_));
+    execute(0, static_cast<std::int64_t>(batch_count_), nullptr);
   }
 }
 
@@ -940,17 +1019,19 @@ void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const 
     throw std::invalid_argument(
         "ml_cpu_compute::StridedBatchedGemm: B must not be null for a dynamic-B plan.");
   }
-  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+  const auto execute = [&](std::int64_t begin, std::int64_t end, detail::GemmScratch *scratch) {
     for (std::int64_t batch = begin; batch < end; ++batch) {
       const auto offset = static_cast<std::ptrdiff_t>(batch);
       plan.Execute(a + offset * stride_a, plan.has_constant_b() ? nullptr : b + offset * stride_b,
-                   c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y);
+                   c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y, scratch);
     }
   };
   if (plan.useful_threads() == 1) {
-    ExecuteRanges(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
+    ExecuteBatchRanges(
+        batch_count, GemmWork(plan),
+        [&](std::int64_t, std::int64_t) { return plan.ScratchBytes(1); }, execute);
   } else {
-    execute(0, static_cast<std::int64_t>(batch_count));
+    execute(0, static_cast<std::int64_t>(batch_count), nullptr);
   }
 }
 
@@ -976,10 +1057,10 @@ template <typename T> void GroupedGemm(std::span<const GroupedGemmProblem<T>> pr
     }
   }
 
-  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+  const auto execute = [&](std::int64_t begin, std::int64_t end, detail::GemmScratch *scratch) {
     for (std::int64_t index = begin; index < end; ++index) {
       const GroupedGemmProblem<T> &problem = problems[static_cast<std::size_t>(index)];
-      problem.plan->Execute(problem.a, problem.b, problem.c, problem.y);
+      problem.plan->Execute(problem.a, problem.b, problem.c, problem.y, scratch);
     }
   };
   if (PreferBatchParallelism(problems)) {
@@ -988,9 +1069,19 @@ template <typename T> void GroupedGemm(std::span<const GroupedGemmProblem<T>> pr
       average_cost += GemmWork(*problem.plan);
     }
     average_cost = problems.empty() ? 1.0 : average_cost / static_cast<double>(problems.size());
-    ExecuteRanges(static_cast<std::int64_t>(problems.size()), average_cost, execute);
+    ExecuteBatchRanges(
+        problems.size(), average_cost,
+        [&](std::int64_t begin, std::int64_t end) {
+          std::size_t bytes = 0;
+          for (std::int64_t index = begin; index < end; ++index) {
+            bytes =
+                std::max(bytes, problems[static_cast<std::size_t>(index)].plan->ScratchBytes(1));
+          }
+          return bytes;
+        },
+        execute);
   } else {
-    execute(0, static_cast<std::int64_t>(problems.size()));
+    execute(0, static_cast<std::int64_t>(problems.size()), nullptr);
   }
 }
 

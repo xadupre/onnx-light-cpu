@@ -314,12 +314,12 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
 }
 
 Tensor MatMulKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   return Compute(a, b, rt, nullptr, nullptr);
 }
 
 void MatMulKernel::Run(RuntimeContext &rt) {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(&rt);
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);
