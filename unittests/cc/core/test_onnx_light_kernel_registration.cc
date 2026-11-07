@@ -9,9 +9,7 @@
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
-#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
-#include "onnx_extensions/shapes/dispatch_table.h"
-#endif
+#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 
 #include <gtest/gtest.h>
 
@@ -605,10 +603,14 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
 // Collecting the inventory must never install, replace, or execute a kernel:
 // it must not mutate onnx-light's shared ``KernelDispatchTable`` at all.
 TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
-  rt_ns::RegisterKernelFn(
-      "ai.onnx", "Abs", sym_ns::Device::kCPU,
-      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
-         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  struct SentinelFactoryError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+  };
+  rt_ns::RegisterKernelFn("ai.onnx", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+                             const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> {
+                            throw SentinelFactoryError("Collection sentinel factory.");
+                          });
   const std::size_t before = rt_ns::KernelDispatchTable().size();
 
   const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
@@ -619,7 +621,7 @@ TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
   ASSERT_NE(factory, rt_ns::KernelDispatchTable().end());
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
-  EXPECT_EQ(factory->second(node, runtime, runtime.kernel_ctx()), nullptr);
+  EXPECT_THROW(factory->second(node, runtime, runtime.kernel_ctx()), SentinelFactoryError);
 }
 
 TEST(KernelRegistration, CollectionDoesNotRegisterMatMulMemoryEstimator) {
@@ -642,9 +644,7 @@ TEST(KernelRegistration, CollectionDoesNotRegisterMatMulMemoryEstimator) {
 }
 
 TEST(KernelRegistration, SupportAndOtherKernelRegistrationPreserveMatMulMemoryEstimator) {
-#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
-  ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
-#endif
+  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
   shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
                                          [](auto, const auto &, const auto &) {
                                            return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
