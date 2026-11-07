@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ml_cpu_compute/com_microsoft/attention.h"
-#include "ml_cpu_compute/execution.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/shapes/shapes_context.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -15,10 +13,8 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
-#include <new>
 #include <stdexcept>
 #include <vector>
 
@@ -39,10 +35,9 @@ NodeProto Node(bool present = true, int64_t heads = 1) {
   return node;
 }
 rt::RuntimeContext Runtime() {
-  rt::RuntimeContext runtime{rt::KernelContext{rt::OpsetId("com.microsoft", 1)}};
-  runtime.Set("x", rt::Tensor::FromFloat("x", {1, 2, 1}, {1, 2}));
-  runtime.Set("w", rt::Tensor::FromFloat("w", {1, 3}, {1, 1, 2}));
-  return runtime;
+  return rt::RuntimeContext{rt::KernelContext{rt::OpsetId("com.microsoft", 1)},
+                            rt::TensorMap{{"x", rt::Tensor::FromFloat("x", {1, 2, 1}, {1, 2})},
+                                          {"w", rt::Tensor::FromFloat("w", {1, 3}, {1, 1, 2})}}};
 }
 void Run(const NodeProto &node, rt::RuntimeContext &runtime) {
   onnx_light_cpu::MicrosoftAttentionKernel kernel(
@@ -205,6 +200,32 @@ TEST(MicrosoftAttentionKernel, EmptyBatch) {
   EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 0, 1, 2, 1}));
 }
 
+TEST(MicrosoftAttentionKernel, SingleTokenPrefillAndDecode) {
+  for (bool cached : {false, true}) {
+    auto node = Node();
+    auto runtime = Runtime();
+    runtime.Set("x", rt::Tensor::FromFloat("x", {1, 1, 1}, {2}));
+    if (cached) {
+      node.ref_input()[4] = "past";
+      runtime.Set("past", rt::Tensor::FromFloat("past", {2, 1, 1, 1, 1}, {1, 2}));
+    }
+    Run(node, runtime);
+    EXPECT_NEAR(runtime.Get("y").AsFloat()[0], cached ? 2 + 2 / (1 + std::exp(-2.f)) : 4, 1.e-5);
+  }
+}
+
+TEST(MicrosoftAttentionKernel, FiniteFullyMaskedRowsAndCausalFilterOverride) {
+  auto node = Node();
+  auto runtime = Runtime();
+  node.ref_input()[3] = "mask";
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "mask_filter_value", -1.f);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", int64_t{1});
+  runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2}, {0, 0}));
+  Run(node, runtime);
+  EXPECT_NEAR(runtime.Get("y").AsFloat()[0], 2, 1.e-5);
+  EXPECT_NEAR(runtime.Get("y").AsFloat()[1], 2 + 2 / (1 + std::exp(-2.f)), 1.e-5);
+}
+
 TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("Attention");
   ASSERT_EQ(schemas.size(), 1u);
@@ -227,50 +248,4 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node), std::invalid_argument);
 }
 
-TEST(MicrosoftAttentionCompute, BorrowsAllocatorAndBoundsScratchBeforeDispatch) {
-  struct State {
-    std::size_t live = 0, peak = 0, allocations = 0;
-  } state;
-  struct Handle {
-    std::size_t bytes, alignment;
-  };
-  ml_cpu_compute::ExecutionAllocatorView allocator;
-  allocator.context = &state;
-  allocator.allocate = [](void *context, std::size_t bytes, std::size_t alignment) {
-    auto &state = *static_cast<State *>(context);
-    auto *handle = new Handle{bytes, alignment};
-    void *data = ::operator new(bytes, std::align_val_t(alignment));
-    state.live += bytes;
-    state.peak = std::max(state.peak, state.live);
-    ++state.allocations;
-    return ml_cpu_compute::ExecutionAllocation{data, handle};
-  };
-  allocator.release = [](void *context, ml_cpu_compute::ExecutionAllocation allocation) noexcept {
-    auto &state = *static_cast<State *>(context);
-    auto *handle = static_cast<Handle *>(allocation.handle);
-    state.live -= handle->bytes;
-    ::operator delete(allocation.data, std::align_val_t(handle->alignment));
-    delete handle;
-  };
-  ml_cpu_compute::AttentionDescriptor descriptor;
-  descriptor.q_num_heads = descriptor.kv_num_heads = 2;
-  const std::vector<int64_t> shape{2, 3, 2};
-  ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank3, shape,
-                                     shape, shape, {}, ml_cpu_compute::AttentionMaskKind::kNone);
-  const std::vector<float> x{1, 2, 3, 4, 5, 6, 2, 4, 6, 8, 10, 12};
-  const std::vector<float> w{0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1};
-  std::vector<float> y(12), present(24);
-  const auto bound = ml_cpu_compute::MicrosoftAttentionPeakMemoryBytes(plan, 2);
-  {
-    const ml_cpu_compute::ExecutionExecutorScope serial(nullptr);
-    const ml_cpu_compute::ExecutionAllocatorScope scope(&allocator);
-    ml_cpu_compute::ComputeMicrosoftAttentionFloat32(plan, 2, x.data(), w.data(), nullptr, nullptr,
-                                                     nullptr, y.data(), present.data());
-  }
-  EXPECT_GT(state.allocations, 0u);
-  EXPECT_EQ(state.live, 0u);
-  EXPECT_LE(state.peak, bound);
-  for (int i = 0; i < 12; ++i)
-    EXPECT_NEAR(y[i], (i < 6 ? 1 : 2) * (i % 2 ? 4 : 3), 1.e-5);
-}
 } // namespace

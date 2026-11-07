@@ -71,13 +71,13 @@ void ComputeMicrosoftAttentionFloat32(const AttentionPlan &source_plan, std::siz
                 "MicrosoftAttention", "weight elements");
   if (rows && (!input || !weights || !output))
     throw std::invalid_argument("MicrosoftAttention: missing projection input/output buffer.");
-  if (plan.past_length && !past)
-    throw std::invalid_argument("MicrosoftAttention: missing past buffer.");
   const auto q_width =
       CheckedMultiply(plan.q_num_heads, plan.head_dim, "MicrosoftAttention", "Q width");
   const auto past_count =
       CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.head_dim},
                      "MicrosoftAttention", "past elements");
+  if (past_count && !past)
+    throw std::invalid_argument("MicrosoftAttention: missing past buffer.");
   const auto present_count =
       CheckedProduct({plan.batch, plan.kv_num_heads, plan.total_kv_length, plan.head_dim},
                      "MicrosoftAttention", "present elements");

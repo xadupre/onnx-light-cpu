@@ -85,6 +85,7 @@ _REGISTERED_KERNELS = registered_kernel_names()
 
 _TARGET_KERNELS = dict(_REGISTERED_KERNELS)
 _DOMAIN_SPECIFIC_TARGET_KERNELS = {
+    ("com.microsoft", "Attention"): _TARGET_KERNELS["com.microsoft::Attention"],
     ("ai.onnx", "LinearAttention"): _TARGET_KERNELS["LinearAttention"],
     (
         "com.microsoft",
@@ -102,6 +103,7 @@ _BENCHMARK_TYPE_SUFFIXES["QLinearMatMul"] = "(?:int8|uint8)"
 _BENCHMARK_TYPE_SUFFIXES["Sum"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
+_BENCHMARK_TYPE_SUFFIXES["com.microsoft::Attention"] = "(?:float|float32)"
 _BENCHMARK_TYPE_SUFFIXES["GatherBlockQuantized"] = "uint8"
 for _op_type in {
     "BatchNormalization",
@@ -119,6 +121,7 @@ for _op_type in {
 _BENCHMARK_TYPE_SUFFIXES["SimplifiedLayerNormalization"] = "(?:float32|float64|float16|bfloat16)"
 _BENCHMARK_TYPE_SUFFIXES["SkipSimplifiedLayerNormalization"] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
+    "com.microsoft::Attention": "ms_attention",
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "CausalConvWithState": "causal_conv",
     "GroupQueryAttention": "group_query_attention",

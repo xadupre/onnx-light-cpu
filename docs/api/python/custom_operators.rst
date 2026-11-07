@@ -108,7 +108,8 @@ The projection uses the existing runtime-dispatched GEMM; attention reuses
 the tiled ``ai.onnx::Attention`` compute engine without changing Microsoft's
 projection, mask or cache contract. Scratch is allocated through the
 runtime allocator, and memory profiling excludes outputs. Existing GEMM
-and attention tuning apply; no new tuning parameters or ABI are introduced.
+and attention blocking defaults, SIMD dispatch and executor parallelism apply;
+no new tuning parameters or ABI are introduced.
 No gradient or fusion is advertised.
 
 The contract follows `ONNX Runtime's Attention v1 schema

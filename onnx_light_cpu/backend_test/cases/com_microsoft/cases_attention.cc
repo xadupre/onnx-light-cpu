@@ -31,7 +31,7 @@ NodeProto Node(int64_t heads) {
 } // namespace
 
 void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
-  for (int variant = 0; variant < 9; ++variant) {
+  for (int variant = 0; variant < 10; ++variant) {
     auto node = Node(1);
     const bool causal = variant == 1 || variant == 7;
     if (causal)
@@ -41,13 +41,14 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
     if (variant == 7)
       node.ref_input()[4] = "past";
     const int64_t s = variant == 8 ? 0 : 2;
+    const int64_t b = variant == 9 ? 0 : 1;
     bt::Expect(
         registry, node, "test_cpu_ms_attention_float_mode_" + std::to_string(variant),
         {rt::DefaultOpset(13), rt::OpsetId(kMicrosoftDomain, 1)},
         [=]() -> bt::IoData {
           std::vector<Tensor> inputs{
-              Tensor::FromFloat("x", {1, s, 1},
-                                s ? std::vector<float>{1, 2} : std::vector<float>{}),
+              Tensor::FromFloat("x", {b, s, 1},
+                                b && s ? std::vector<float>{1, 2} : std::vector<float>{}),
               Tensor::FromFloat("w", {1, 3}, {1, 1, 2})};
           if (variant == 2)
             inputs.push_back(Tensor::FromInt32("mask", {1}, {1}));
@@ -62,7 +63,7 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
           if (variant == 7)
             inputs.push_back(Tensor::FromFloat("past", {2, 1, 1, 1, 1}, {0, 8}));
           std::vector<float> y;
-          if (s) {
+          if (b && s) {
             y = {2 + 2 / (1 + std::exp(-1.f)), 2 + 2 / (1 + std::exp(-2.f))};
             if (variant == 1)
               y[0] = 2;
@@ -74,12 +75,12 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
                        (1 + std::exp(2.f) + std::exp(4.f))};
           }
           const auto present = variant == 7 ? std::vector<float>{0, 1, 2, 8, 2, 4}
-                               : s          ? std::vector<float>{1, 2, 2, 4}
+                               : b && s     ? std::vector<float>{1, 2, 2, 4}
                                             : std::vector<float>{};
           return {
               std::move(inputs),
-              {Tensor::FromFloat("y", {1, s, 1}, y),
-               Tensor::FromFloat("present", {2, 1, 1, s + (variant == 7 ? 1 : 0), 1}, present)}};
+              {Tensor::FromFloat("y", {b, s, 1}, y),
+               Tensor::FromFloat("present", {2, b, 1, s + (variant == 7 ? 1 : 0), 1}, present)}};
         },
         "backend-test", bt::TestCaseTag::AI_RT);
   }
@@ -117,9 +118,9 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
         },
         "backend-test", bt::TestCaseTag::AI_RT);
   }
-  if (mode != TestMode::BENCHMARK)
-    return;
-  for (int64_t s : {128, 512}) {
+  const std::vector<int64_t> whisper_lengths =
+      mode == TestMode::BENCHMARK ? std::vector<int64_t>{128, 512} : std::vector<int64_t>{8, 32};
+  for (int64_t s : whisper_lengths) {
     auto node = Node(4);
     node.ref_input()[2] = "bias";
     bt::Expect(
