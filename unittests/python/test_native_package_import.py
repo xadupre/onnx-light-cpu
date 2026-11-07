@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checks that DLL discovery does not initialize the optional native runtime."""
+"""Checks native import origins and optional runtime discovery without loading binaries."""
 
 import os
 from pathlib import Path
@@ -10,11 +10,114 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-
 from onnx_light.ext_test_case import ExtTestCase
 
 
 class TestNativePackageImport(ExtTestCase):
+    def test_editable_finder_native_origins(self):
+        root = Path(__file__).resolve().parents[2]
+        script = dedent("""
+            import sys
+            from importlib import import_module
+            from importlib.machinery import EXTENSION_SUFFIXES
+            from importlib.util import spec_from_file_location
+            from pathlib import Path
+            from runpy import run_path
+
+            root = Path(sys.argv[1])
+            foreign = Path(sys.argv[2])
+            conflicting = sys.argv[3]
+            first = sys.argv[4]
+            source_selected = sys.argv[5] == "True"
+            local = root / "onnx_light_cpu" / "onnx_py"
+            names = ("onnx_light_cpu.onnx_py._cpukernels",
+                     "onnx_light_cpu.onnx_py._cpuregister")
+
+            class EditableFinder:
+                queries = []
+
+                @classmethod
+                def find_spec(cls, fullname, path=None, target=None):
+                    if fullname in names:
+                        cls.queries.append(fullname)
+                        directory = foreign if fullname == conflicting else local
+                        return spec_from_file_location(
+                            fullname,
+                            directory / (fullname.rsplit(".", 1)[1] + EXTENSION_SUFFIXES[0]),
+                        )
+                    return None
+
+            # Match an editable finder that takes precedence over PathFinder.
+            sys.meta_path.insert(0, EditableFinder)
+            sys.path.insert(0, str(root))
+            import_module("onnx_light_cpu.onnx_py")
+            assert not EditableFinder.queries, EditableFinder.queries
+            check_origins = run_path(
+                str(root / "unittests" / "python" / "native_import.py")
+            )["_check_native_import_origins"]
+            try:
+                if source_selected:
+                    check_origins(root)
+                    if conflicting:
+                        import_module(first)
+            except ImportError as exc:
+                assert conflicting and source_selected, str(exc)
+                message = str(exc)
+                assert conflicting in message, message
+                assert str(foreign) in message, message
+                assert str(local) in message, message
+                assert "editable-install finder" in message, message
+                assert "mixing native builds is not supported" in message, message
+            else:
+                assert not (conflicting and source_selected), "Conflict was not diagnosed"
+            if not source_selected:
+                assert not EditableFinder.queries, EditableFinder.queries
+            assert all(name not in sys.modules for name in names)
+            assert "onnx_light" not in sys.modules
+            """)
+        modules = (
+            "onnx_light_cpu.onnx_py._cpukernels",
+            "onnx_light_cpu.onnx_py._cpuregister",
+        )
+        with TemporaryDirectory() as temporary:
+            foreign = Path(temporary).resolve() / "site-packages" / "onnx_light_cpu" / "onnx_py"
+            for source_selected in (True, False):
+                env = os.environ.copy()
+                env.pop("PYTHONPATH", None)
+                if source_selected:
+                    env["PYTHONPATH"] = str(root)
+                for conflicting in ("", *modules):
+                    for cwd in (root, Path(temporary)):
+                        for first in modules:
+                            with self.subTest(
+                                source_selected=source_selected,
+                                conflicting=conflicting,
+                                cwd=str(cwd),
+                                first=first,
+                            ):
+                                result = subprocess.run(
+                                    [
+                                        sys.executable,
+                                        "-S",
+                                        "-c",
+                                        script,
+                                        str(root),
+                                        str(foreign),
+                                        conflicting,
+                                        first,
+                                        str(source_selected),
+                                    ],
+                                    cwd=cwd,
+                                    env=env,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                    check=False,
+                                )
+                                self.assertEqual(
+                                    result.returncode, 0, f"{result.stdout}\n{result.stderr}"
+                                )
+
     def test_optional_runtime_discovery(self):
         root = Path(__file__).resolve().parents[2]
         script = dedent("""
@@ -39,7 +142,7 @@ class TestNativePackageImport(ExtTestCase):
                 assert not hasattr(bindings, "_onnx_light_dll_handle")
             """)
         env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
+        env["PYTHONPATH"] = str(root)
         with TemporaryDirectory() as temporary:
             runtime = Path(temporary).resolve() / "runtime"
             for state in ("absent", "unbuilt", "built"):
