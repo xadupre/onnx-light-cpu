@@ -453,24 +453,6 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       ml_cpu_compute
       onnx_light::lib_onnx_core
       onnx_light::lib_onnx_kernels)
-  # The 0.2.5 release owns portable memory registration in lib_onnx_shape;
-  # newer onnx-light owns it in lib_onnx_kernels.
-  function(onnx_light_cpu_check_kernel_peak_memory)
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-    set(CMAKE_REQUIRED_LIBRARIES onnx_light::lib_onnx_kernels)
-    unset(ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY CACHE)
-    check_cxx_source_compiles(
-        "#include \"onnx_extensions/kernels/kernel_dispatch_table.h\"
-         int main() {
-           ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
-         }"
-        ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY)
-    if(ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY)
-      target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
-          ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY=1)
-    endif()
-  endfunction()
-  onnx_light_cpu_check_kernel_peak_memory()
   # Standalone consumers inherit the concrete Cast link dependency. Linux/macOS
   # build-tree consumers resolve it via CMake's target RPATH; Windows consumers
   # must place the onnx-light runtime DLL directory on their loader search path.

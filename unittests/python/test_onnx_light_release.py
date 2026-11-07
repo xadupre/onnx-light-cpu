@@ -97,10 +97,13 @@ def test_project_requires_minimum_runtime_on_all_platforms(
     assert str(selected[0].specifier) == f">={ONNX_LIGHT_VERSION}"
 
 
-def test_avx2_parity_uses_release_version():
+def test_avx2_parity_uses_onnx_light_main():
     workflow = (_ROOT / ".github" / "workflows" / "avx2_parity.yml").read_text(encoding="utf-8")
     assert 'onnx_light_source=$(mktemp -d "${RUNNER_TEMP}/onnx-light.XXXXXX")' in workflow
-    assert 'python tools/onnx_light_release.py clone "${onnx_light_source}"' in workflow
+    assert (
+        "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
+        '"${onnx_light_source}"'
+    ) in workflow
     assert 'python -m pip install -C wheel.py-api=cp312 "${onnx_light_source}"' in workflow
     assert (
         'echo "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=${onnx_light_source}" >> "${GITHUB_ENV}"'
@@ -150,10 +153,13 @@ find_package(onnx_light_cpu CONFIG REQUIRED)
         assert ONNX_LIGHT_VERSION in result.stdout
 
 
-def test_source_workflows_use_release_version():
+def test_source_workflows_use_onnx_light_main():
     for name in ("ci_core.yml", "docs.yml", "cpp_standalone.yml"):
         workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-        assert "python tools/onnx_light_release.py clone " in workflow, name
+        assert (
+            "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
+        ) in workflow, name
+        assert "python tools/onnx_light_release.py clone " not in workflow, name
         assert ONNX_LIGHT_VERSION not in workflow, name
 
 
@@ -164,9 +170,9 @@ def test_getting_started_uses_release_version():
 
 def test_current_documentation_uses_release_version():
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "minimum **onnx-light** version declared in `pyproject.toml`" in readme
+    assert "integration against **onnx-light main**" in readme
     cli_guide = (_ROOT / "docs" / "command_line.rst").read_text(encoding="utf-8")
-    assert "``onnx-light release`` job" in cli_guide
+    assert "``onnx-light main`` job" in cli_guide
 
 
 def test_release_wheel_names():

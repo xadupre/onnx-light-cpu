@@ -75,9 +75,11 @@ def test_pixi_environment_cache_requires_an_existing_lockfile():
     assert "cache: ${{ hashFiles('pixi.lock') != '' }}" in setup
 
 
-def test_documentation_does_not_replace_onnx_light_release():
-    assert "python tools/onnx_light_release.py clone /tmp/onnx-light" in _DOCS_WORKFLOW
-    assert "git clone --depth 1 --branch main" not in _DOCS_WORKFLOW
+def test_documentation_builds_onnx_light_main():
+    assert (
+        "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
+        "/tmp/onnx-light"
+    ) in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
     assert "--cpp-tests" not in _DOCS_WORKFLOW
@@ -91,19 +93,19 @@ def test_standalone_source_build_allows_time_for_both_projects():
     assert "- name: Build and install onnx-light-cpu\n" in standalone_job
 
 
-def test_standalone_source_build_uses_onnx_light_release():
+def test_standalone_source_build_uses_onnx_light_main():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
     assert (
-        'python tools/onnx_light_release.py clone "${RUNNER_TEMP}/onnx-light"' in standalone_job
+        "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
+        '"${RUNNER_TEMP}/onnx-light"' in standalone_job
     )
-    assert "git clone --depth 1 --branch main" not in standalone_job
 
 
 def test_onnx_light_build_workflows_install_cmake_four_or_newer():
     for name, build_command in (
-        ("ci_core.yml", "python tools/onnx_light_release.py clone"),
-        ("docs.yml", "python tools/onnx_light_release.py clone"),
-        ("cpp_standalone.yml", "python tools/onnx_light_release.py clone"),
+        ("ci_core.yml", "git clone --depth 1 --branch main"),
+        ("docs.yml", "git clone --depth 1 --branch main"),
+        ("cpp_standalone.yml", "git clone --depth 1 --branch main"),
         ("avx2_parity.yml", "python setup.py"),
     ):
         workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
@@ -311,7 +313,7 @@ def test_release_wheel_maps_the_core_windows_import_library():
     assert 'set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "${_import_lib_path}")' in release_block
 
 
-def test_onnx_light_release_integration_runs_on_every_supported_os():
+def test_onnx_light_main_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
     )[0]
@@ -320,9 +322,11 @@ def test_onnx_light_release_integration_runs_on_every_supported_os():
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
     assert source_job.count("matrix.python-abi == 'stable'") == 3
-    assert "name: onnx-light release (" in source_job
-    assert 'python tools/onnx_light_release.py clone "${onnx_light_source}"' in source_job
-    assert "git clone --depth 1 --branch main" not in source_job
+    assert "name: onnx-light main (" in source_job
+    assert (
+        "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
+        '"${onnx_light_source}"'
+    ) in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
     assert "--cpp-tests --onnx-light-source" in source_job
@@ -397,7 +401,7 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
     standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
     assert 'installed = version("onnx-light")' in standalone_job
-    assert "== (0, 2, 5)" in standalone_job
+    assert ">= (0, 2, 7)" in standalone_job
     assert 'find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None' in standalone_job
     assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
