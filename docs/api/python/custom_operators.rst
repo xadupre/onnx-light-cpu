@@ -214,7 +214,11 @@ Inputs are, in order: input, router logits, FC1 weights, FC1 scales,
 optional FC1 bias, FC2 weights, FC2 scales, optional FC2 bias, optional FC3
 weights, optional FC3 scales, optional FC3 bias, and three optional zero-point
 slots. FC3 weights and scales must appear together. Nonempty zero points,
-sparse mixer routing, and CUDA-prepacked weights are rejected.
+sparse mixer routing, and CUDA-prepacked weights are rejected by CPU execution.
+Shape inference accepts ``use_sparse_mixer=1`` with ``k=2`` for CUDA graph
+construction, including legacy FLOAT16/UINT8 split-expert exports with
+``block_size=32`` and ``weights_prepacked=0``. Global CPU kernel registration
+does not restrict this shape-inference support.
 
 ``expert_weight_bits`` supports **4 and 8**. INT4 stores adjacent last-axis
 values in low-then-high nibbles with implicit zero point 8; INT8 stores signed

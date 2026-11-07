@@ -639,6 +639,7 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
   const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
   const auto activation = GetStringAttribute(node, "activation_type", "relu");
   const auto normalize = GetGqaIntAttribute(node, "normalize_routing_weights", 0);
+  const auto sparse = GetGqaIntAttribute(node, "use_sparse_mixer", 0);
   const bool third = HasInput(node, 8);
   for (const auto &attribute : node.attribute()) {
     if (((attribute.name() == "activation_alpha" || attribute.name() == "activation_beta") &&
@@ -656,9 +657,8 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
       (activation == "swiglu" ? fusion != 1 : fusion != 0) || (third && fusion != 0) ||
       HasInput(node, 9) != third || (!third && HasInput(node, 10)) || HasInput(node, 11) ||
       HasInput(node, 12) || HasInput(node, 13) || HasInput(node, 14) ||
-      (!fp4 && (HasInput(node, 15) || HasInput(node, 16))) ||
-      GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0 ||
-      (!fp4 && GetGqaIntAttribute(node, "weights_prepacked", 0) != 0)) {
+      (!fp4 && (HasInput(node, 15) || HasInput(node, 16))) || (sparse != 0 && sparse != 1) ||
+      (sparse == 1 && k != 2) || (!fp4 && GetGqaIntAttribute(node, "weights_prepacked", 0) != 0)) {
     throw std::invalid_argument("ComputeShapeQMoE: unsupported quantization or attributes.");
   }
   const auto &shape = input.Shape();
