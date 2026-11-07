@@ -10,6 +10,7 @@
 
 #include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
+#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 #if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
 #include "onnx_extensions/shapes/dispatch_table.h"
 #endif
@@ -83,8 +84,8 @@ TEST(MatMulMemory, CpuOverrideSurvivesEveryLazyRegistrationOrder) {
       onnx_light_cpu::ComputePeakMemoryMatMul(sym_ns::Device::kCPU, MatMulNode(), shapes);
 #if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
   ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterShapeFunctions();
-  ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
 #endif
+  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
   onnx_light_cpu::RegisterAllKernels();
   onnx_light_cpu::RegisterAllKernels(onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
   onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();

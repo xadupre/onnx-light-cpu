@@ -57,7 +57,7 @@ jobs:
           python -m pip install "cmake>=4" nanobind scikit-build-core setuptools numpy ml_dtypes \
             onnxruntime openpyxl
           onnx_light_source=$(mktemp -d "${RUNNER_TEMP}/onnx-light.XXXXXX")
-          python tools/onnx_light_release.py clone "${onnx_light_source}"
+          git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
           python -m pip install -C wheel.py-api=cp312 "${onnx_light_source}"
           echo "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=${onnx_light_source}" >> "${GITHUB_ENV}"
           python - <<'PY'
