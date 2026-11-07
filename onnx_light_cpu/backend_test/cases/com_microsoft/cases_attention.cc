@@ -123,9 +123,12 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
   for (int64_t s : whisper_lengths) {
     auto node = Node(4);
     node.ref_input()[2] = "bias";
+    const std::string case_name =
+        mode == TestMode::BENCHMARK
+            ? "test_cpu_ms_attention_whisper_s" + std::to_string(s) + "_float32_benchmark"
+            : "test_cpu_ms_attention_whisper_float_s" + std::to_string(s);
     bt::Expect(
-        registry, node, "test_cpu_ms_attention_whisper_float_s" + std::to_string(s),
-        {rt::DefaultOpset(13), rt::OpsetId(kMicrosoftDomain, 1)},
+        registry, node, case_name, {rt::DefaultOpset(13), rt::OpsetId(kMicrosoftDomain, 1)},
         [=]() -> bt::IoData {
           std::vector<float> bias(96, 0.f);
           for (int i = 64; i < 96; ++i)

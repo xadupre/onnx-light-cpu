@@ -182,7 +182,8 @@ LightOpSchema MakeAttentionSchema() {
       "ONNX Runtime fused self-attention (bert_defs.cc Attention v1). This CPU subset supports "
       "FLOAT only: QKV = input @ weights + optional bias, softmax(scale*QK^T + masks + "
       "attention_bias) @ V. Q and K widths match; unequal V width is supported without cache. "
-      "Shared buffers, rotary embedding, and packed 3*B+2 masks are unsupported.",
+      "Shared buffers, active rotary modes, and packed 3*B+2 masks are unsupported; zero-valued "
+      "rotary attributes are accepted.",
       {{"input", "(B,S,I), I>0; empty B/S are supported.", "T"},
        {"weights", "(I,Q+K+V), positive Q/K/V widths divisible by num_heads.", "T"},
        {"bias", "Optional (Q+K+V) projection bias.", "T"},
@@ -209,8 +210,8 @@ LightOpSchema MakeAttentionSchema() {
        AttributeParam{"past_present_share_buffer", "Only 0 is supported.", AttributeType::INT,
                       false, int64_t{0}},
        AttributeParam{"do_rotary", "Only 0 is supported.", AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"rotary_embedding_dim", "Unsupported; must be omitted.", AttributeType::INT,
-                      false}},
+       AttributeParam{"rotary_embedding_dim", "Only 0 is supported.", AttributeType::INT, false,
+                      int64_t{0}}},
       false, true);
   schema.set_min_output(1);
   schema.set_max_output(2);

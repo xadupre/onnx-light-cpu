@@ -52,7 +52,7 @@ void MicrosoftAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
   };
   if (!Wired(node, 0) || !Wired(node, 1) || !Wired(node, 0, true) || node.input_size() > 7 ||
       node.output_size() > 2 || Wired(node, 6) || attr("past_present_share_buffer") != 0 ||
-      attr("do_rotary") != 0 || rt_ns::FindAttribute(node, "rotary_embedding_dim"))
+      attr("do_rotary") != 0 || attr("rotary_embedding_dim") != 0)
     fail("requires input, weights and output; shared buffers and rotary are unsupported.");
   const auto optional = [&](int slot) -> const Tensor * {
     return Wired(node, slot) ? &rt_ns::GetInput(node, slot, rt) : nullptr;

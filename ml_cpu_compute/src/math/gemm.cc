@@ -2628,26 +2628,26 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
 // directly, without a full-tensor widening buffer.
 void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                      std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
-                     float *Y) {
+                     float *Y, detail::GemmScratch *scratch) {
   const GemmImplementation kind = SelectGemmImplementation<float>();
   const GemmAlgorithm algorithm = SelectGemmAlgorithm(
       trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows<float>(kind));
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return GemmHalfPlanned<GemmAlgorithm::kDirect>(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A,
-                                                   B, Y, nullptr);
+                                                   B, Y, nullptr, nullptr, scratch);
   case GemmAlgorithm::kSkinnyM:
     return GemmHalfPlanned<GemmAlgorithm::kSkinnyM>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
-                                                    A, B, Y, nullptr);
+                                                    A, B, Y, nullptr, nullptr, scratch);
   case GemmAlgorithm::kSkinnyN:
     return GemmHalfPlanned<GemmAlgorithm::kSkinnyN>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
-                                                    A, B, Y, nullptr);
+                                                    A, B, Y, nullptr, nullptr, scratch);
   case GemmAlgorithm::kSplitK:
     return GemmHalfPlanned<GemmAlgorithm::kSplitK>(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A,
-                                                   B, Y, nullptr);
+                                                   B, Y, nullptr, nullptr, scratch);
   case GemmAlgorithm::kGeneral:
     return GemmHalfPlanned<GemmAlgorithm::kGeneral>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
-                                                    A, B, Y, nullptr);
+                                                    A, B, Y, nullptr, nullptr, scratch);
   }
 }
 
@@ -2757,25 +2757,31 @@ INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kSplitK);
 void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                  float alpha, const float *A, const float *B, float beta, const float *C,
                  float *Y) {
+  GemmFloat32(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, nullptr);
+}
+
+void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 float alpha, const float *A, const float *B, float beta, const float *C, float *Y,
+                 detail::GemmScratch *scratch) {
   const GemmImplementation kind = SelectGemmImplementation<float>();
   const GemmAlgorithm algorithm = detail::SelectGemmAlgorithm(
       trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows<float>(kind));
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return detail::GemmFloat32Planned<GemmAlgorithm::kDirect>(trans_a, trans_b, M, N, K, alpha, A,
-                                                              B, beta, C, Y);
+                                                              B, beta, C, Y, nullptr, scratch);
   case GemmAlgorithm::kSkinnyM:
     return detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyM>(trans_a, trans_b, M, N, K, alpha, A,
-                                                               B, beta, C, Y);
+                                                               B, beta, C, Y, nullptr, scratch);
   case GemmAlgorithm::kSkinnyN:
     return detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyN>(trans_a, trans_b, M, N, K, alpha, A,
-                                                               B, beta, C, Y);
+                                                               B, beta, C, Y, nullptr, scratch);
   case GemmAlgorithm::kSplitK:
     return detail::GemmFloat32Planned<GemmAlgorithm::kSplitK>(trans_a, trans_b, M, N, K, alpha, A,
-                                                              B, beta, C, Y);
+                                                              B, beta, C, Y, nullptr, scratch);
   case GemmAlgorithm::kGeneral:
     return detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(trans_a, trans_b, M, N, K, alpha, A,
-                                                               B, beta, C, Y);
+                                                               B, beta, C, Y, nullptr, scratch);
   }
 }
 
@@ -3099,7 +3105,11 @@ template void ApplyGemmEpilogue<double>(std::size_t, std::size_t, const GemmEpil
 void GemmFloat32WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                              std::size_t K, float alpha, const float *A, const float *B,
                              const GemmEpilogue<float> &epilogue, float *Y) {
-  GemmWithEpilogue(trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y, GemmFloat32);
+  GemmWithEpilogue(
+      trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y,
+      [](bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, float alpha,
+         const float *A, const float *B, float beta, const float *C,
+         float *Y) { GemmFloat32(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y); });
 }
 
 void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
@@ -3111,8 +3121,15 @@ void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::siz
 void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
                           std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
                           const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y) {
+  GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y, nullptr);
+}
+
+void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
+                          std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                          const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y,
+                          detail::GemmScratch *scratch) {
   ValidateGemmEpilogue(M, N, epilogue);
-  detail::GemmHalfToFloat(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, Y);
+  detail::GemmHalfToFloat(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, Y, scratch);
   ApplyGemmEpilogue(M, N, epilogue, Y);
 }
 

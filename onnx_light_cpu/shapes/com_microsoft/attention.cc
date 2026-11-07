@@ -80,7 +80,7 @@ void ComputeShapeMicrosoftAttention(shapes_ns::ShapesContext &ctx, const NodePro
   };
   if (!Wired(node, 0) || !Wired(node, 1) || !Wired(node, 0, true) || node.input_size() > 7 ||
       node.output_size() > 2 || Wired(node, 6) || attr("past_present_share_buffer") != 0 ||
-      attr("do_rotary") != 0 || rt_ns::FindAttribute(node, "rotary_embedding_dim"))
+      attr("do_rotary") != 0 || attr("rotary_embedding_dim") != 0)
     Fail("input/weights/output required; shared-buffer and rotary modes unsupported.");
   for (int slot = 0; slot < node.input_size(); ++slot) {
     if (!Wired(node, slot))

@@ -101,8 +101,9 @@ Packed past and present have shapes ``(2,B,N,P,H)`` and
 ``(2,B,N,P+S,H)``. Past requires a present output; present without past is
 supported, including Whisper encoder-state extraction. Cache requires equal
 Q/K/V widths. Empty batch/query inputs are supported, preserving existing
-past when S=0. FLOAT16/BFLOAT16, rotary attributes, shared cache buffers,
+past when S=0. FLOAT16/BFLOAT16, active rotary modes, shared cache buffers,
 ``past_sequence_length`` and packed ``3B+2`` masks are explicitly unsupported.
+Zero-valued ``do_rotary`` and ``rotary_embedding_dim`` attributes are accepted.
 
 The projection uses the existing runtime-dispatched GEMM; attention reuses
 the tiled ``ai.onnx::Attention`` compute engine without changing Microsoft's

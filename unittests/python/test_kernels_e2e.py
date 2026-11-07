@@ -870,16 +870,26 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif (record.domain, record.op_type) == (
-                "com.microsoft",
-                "Gelu",
-            ) or record.op_type in {
-                "MultiHeadAttention",
-                "ReduceSum",
-                "SimplifiedLayerNormalization",
-            }:
+            elif (
+                (record.domain, record.op_type)
+                == (
+                    "com.microsoft",
+                    "Gelu",
+                )
+                or record.op_type
+                in {
+                    "MultiHeadAttention",
+                    "ReduceSum",
+                    "SimplifiedLayerNormalization",
+                }
+                or (record.domain, record.op_type) == ("com.microsoft", "Attention")
+            ):
                 assert record.since_version == 1
-            elif record.op_type in {"Attention", "RMSNormalization", "RotaryEmbedding"}:
+            elif (record.domain, record.op_type) in {
+                ("ai.onnx", "Attention"),
+                ("ai.onnx", "RMSNormalization"),
+                ("ai.onnx", "RotaryEmbedding"),
+            }:
                 assert record.since_version == 23
             elif record.op_type == "LinearAttention" and record.domain != "com.microsoft":
                 assert record.since_version == 27
@@ -904,7 +914,10 @@ class TestBackendCases(ExtTestCase):
             else:
                 assert record.since_version is None
             if record.until_version is not None:
-                assert record.op_type in version_bounded_ops
+                assert record.op_type in version_bounded_ops or (
+                    record.domain,
+                    record.op_type,
+                ) == ("com.microsoft", "Attention")
                 assert isinstance(record.until_version, int)
                 assert record.until_version >= record.since_version
 

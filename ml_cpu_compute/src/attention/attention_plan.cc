@@ -14,6 +14,7 @@
 #endif
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/gemm/gemm_common.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "ml_cpu_compute/math/math.h"
 
@@ -65,8 +66,17 @@ public:
     return offset;
   }
 
-  std::size_t Size() const {
-    constexpr std::size_t alignment = alignof(std::max_align_t);
+  std::size_t AddBytes(std::size_t count, std::size_t alignment) {
+    const std::size_t remainder = bytes_ % alignment;
+    if (remainder != 0) {
+      bytes_ = CheckedAdd(bytes_, alignment - remainder, "Attention", "scratch layout");
+    }
+    const std::size_t offset = bytes_;
+    bytes_ = CheckedAdd(bytes_, count, "Attention", "worker scratch");
+    return offset;
+  }
+
+  std::size_t Size(std::size_t alignment = alignof(std::max_align_t)) const {
     const std::size_t remainder = bytes_ % alignment;
     return remainder == 0
                ? bytes_
@@ -927,22 +937,27 @@ void LoadKvRows(const AttentionPlan &plan, const typename Codec::Storage *curren
 template <typename Codec>
 void AttentionQkGemm(std::size_t rows, std::size_t columns, std::size_t head_dim, float scale,
                      const typename Codec::Storage *q, const typename Codec::Storage *k,
-                     float *scores, [[maybe_unused]] bool dense_rank4) {
+                     float *scores, [[maybe_unused]] bool dense_rank4,
+                     detail::GemmScratch *scratch) {
+  if (scratch != nullptr) {
+    scratch->used = 0;
+  }
   if constexpr (std::is_same_v<Codec, Float32Codec>) {
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
     if (dense_rank4 && rows >= 64 && columns >= 64 && head_dim >= 64 && head_dim <= 256) {
       // Size packed column panels from the actual tile depth, not the general GEMM KC.
       const GemmBlocking blocking{rows, columns, head_dim, kGemmAVX2MR, 16};
-      detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(
-          false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores, &blocking);
+      detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(false, true, rows, columns, head_dim,
+                                                          scale, q, k, 0.0f, nullptr, scores,
+                                                          &blocking, scratch);
       return;
     }
 #endif
-    GemmFloat32(false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores);
+    GemmFloat32(false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores, scratch);
   } else {
     const GemmEpilogue<float> epilogue;
     GemmHalfWithEpilogue(std::is_same_v<Codec, BFloat16Codec>, false, true, rows, columns, head_dim,
-                         scale, q, k, epilogue, scores);
+                         scale, q, k, epilogue, scores, scratch);
   }
 }
 
@@ -1535,7 +1550,10 @@ bool UseAvx2DenseRank4Gemm() {
 void AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t columns,
                         const float *scores, const float *values, const float *previous,
                         float *output, [[maybe_unused]] std::size_t output_stride,
-                        [[maybe_unused]] bool dense_rank4 = false) {
+                        [[maybe_unused]] bool dense_rank4, detail::GemmScratch *scratch) {
+  if (scratch != nullptr) {
+    scratch->used = 0;
+  }
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   if (dense_rank4 && dimension == 128 && rows >= 64 && columns >= 64 && columns <= 512) {
     AttentionValue128Float32_AVX2_FMA(rows, columns, scores, values, previous, output,
@@ -1557,7 +1575,7 @@ void AttentionValueGemm(std::size_t rows, std::size_t dimension, std::size_t col
   }
 #endif
   GemmFloat32(false, false, rows, dimension, columns, 1.0f, scores, values,
-              previous != nullptr ? 1.0f : 0.0f, previous, output);
+              previous != nullptr ? 1.0f : 0.0f, previous, output, scratch);
 }
 
 template <typename Codec>
@@ -1711,6 +1729,46 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       1, static_cast<std::int64_t>((total_tasks + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
   const auto ranges = MakeWorkerRanges(static_cast<std::int64_t>(total_tasks), schedule);
+
+  GemmPlanOptions<float> qk_options;
+  qk_options.trans_b = true;
+  qk_options.m = query_block;
+  qk_options.n = kv_block;
+  qk_options.k = plan.head_dim;
+  qk_options.alpha = plan.scale;
+  qk_options.maximum_participants = 1;
+  const GemmPlan<float> qk_scratch_plan(qk_options);
+  GemmPlanOptions<float> value_options;
+  value_options.m = query_block;
+  value_options.n = plan.v_head_dim;
+  value_options.k = kv_block;
+  value_options.maximum_participants = 1;
+  const GemmPlan<float> value_scratch_plan(value_options);
+  std::size_t gemm_worker_bytes =
+      std::max(qk_scratch_plan.ScratchBytes(1), value_scratch_plan.ScratchBytes(1));
+  if constexpr (!std::is_same_v<Codec, Float32Codec>) {
+    GemmHalfPlanOptions half_qk_options;
+    half_qk_options.is_bfloat16 = std::is_same_v<Codec, BFloat16Codec>;
+    half_qk_options.trans_b = true;
+    half_qk_options.m = query_block;
+    half_qk_options.n = kv_block;
+    half_qk_options.k = plan.head_dim;
+    half_qk_options.alpha = plan.scale;
+    half_qk_options.maximum_participants = 1;
+    const GemmHalfPlan half_qk_scratch_plan(half_qk_options);
+    gemm_worker_bytes = std::max(gemm_worker_bytes, half_qk_scratch_plan.ScratchBytes(1));
+  }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+  if (dense_rank4 && query_block >= 64 && kv_block >= 64 && plan.head_dim >= 64 &&
+      plan.head_dim <= 256) {
+    const GemmBlocking blocking{query_block, kv_block, plan.head_dim, kGemmAVX2MR, 16};
+    gemm_worker_bytes = std::max(
+        gemm_worker_bytes,
+        detail::GemmProductScratchBytes(GemmAlgorithm::kGeneral, false, true, query_block, kv_block,
+                                        plan.head_dim, blocking, sizeof(float), 1));
+  }
+#endif
+
   AttentionScratchLayout scratch_layout;
   const auto scores_offset =
       scratch_layout.Add<float>(CheckedProduct({query_block, kv_block}, "Attention", "score tile"));
@@ -1729,7 +1787,8 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       CheckedProduct({kv_block, plan.v_head_dim}, "Attention", "packed value tile"));
   const auto output_offset = scratch_layout.Add<float>(
       CheckedProduct({query_block, plan.v_head_dim}, "Attention", "output tile"));
-  const std::size_t worker_bytes = scratch_layout.Size();
+  const auto gemm_scratch_offset = scratch_layout.AddBytes(gemm_worker_bytes, 64);
+  const std::size_t worker_bytes = scratch_layout.Size(64);
   ExecutionBuffer scratch(
       CheckedMultiply(ranges.count, worker_bytes, "Attention", "tiled worker scratch"));
   auto *scratch_data = scratch.data();
@@ -1750,6 +1809,9 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                                                                 packed_k_offset);
         float *packed_v = WorkerScratch<float>(scratch_data, worker, worker_bytes, packed_v_offset);
         float *output = WorkerScratch<float>(scratch_data, worker, worker_bytes, output_offset);
+        auto *gemm_scratch_data =
+            WorkerScratch<std::byte>(scratch_data, worker, worker_bytes, gemm_scratch_offset);
+        detail::GemmScratch gemm_scratch{gemm_scratch_data, gemm_worker_bytes, 0};
 
         for (std::int64_t task = begin; task < end; ++task) {
           const std::size_t b = static_cast<std::size_t>(task) / tasks_per_batch;
@@ -1805,7 +1867,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             } else
 #endif
               AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
-                                     scores, dense_rank4);
+                                     scores, dense_rank4, &gemm_scratch);
             const float *v_block;
             if constexpr (std::is_same_v<Codec, Float32Codec>) {
               v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
@@ -2042,7 +2104,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               } else
 #endif
                 AttentionValueGemm(rows, plan.v_head_dim, columns, scores, v_block, nullptr,
-                                   destination, destination_stride, dense_rank4);
+                                   destination, destination_stride, dense_rank4, &gemm_scratch);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_dense_softmax_avx512) {
                 AttentionNormalizeRowsFloat32_AVX512(destination, denominators, rows,
@@ -2091,7 +2153,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
             // Fuse the running sum into GEMM while keeping its bias and output disjoint.
             AttentionValueGemm(rows, plan.v_head_dim, columns, scores, v_block, accumulator,
-                               product, plan.v_head_dim, dense_rank4);
+                               product, plan.v_head_dim, dense_rank4, &gemm_scratch);
             std::swap(accumulator, product);
           }
 

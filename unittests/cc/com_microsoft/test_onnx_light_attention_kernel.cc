@@ -47,6 +47,8 @@ void Run(const NodeProto &node, rt::RuntimeContext &runtime) {
 
 TEST(MicrosoftAttentionKernel, ProjectionSoftmaxAndPackedPresent) {
   auto node = Node();
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "do_rotary", int64_t{0});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "rotary_embedding_dim", int64_t{0});
   node.ref_input()[2] = "bias";
   auto runtime = Runtime();
   runtime.Set("bias", rt::Tensor::FromFloat("bias", {3}, {0, 0, 1}));
@@ -155,7 +157,7 @@ TEST(MicrosoftAttentionKernel, EmptyQueriesPreservePast) {
 }
 
 TEST(MicrosoftAttentionKernel, RejectsUnsupportedModesTypesAndShapes) {
-  for (int mode = 0; mode < 10; ++mode) {
+  for (int mode = 0; mode < 11; ++mode) {
     auto node = Node();
     auto runtime = Runtime();
     if (mode == 0)
@@ -187,6 +189,8 @@ TEST(MicrosoftAttentionKernel, RejectsUnsupportedModesTypesAndShapes) {
       node.ref_input()[4] = "past";
       runtime.Set("past", rt::Tensor::FromFloat("past", {2, 1, 1, 0, 1}, {}));
     }
+    if (mode == 10)
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "rotary_embedding_dim", int64_t{16});
     EXPECT_THROW(Run(node, runtime), std::invalid_argument) << mode;
   }
 }
@@ -196,7 +200,7 @@ TEST(MicrosoftAttentionKernel, EmptyBatch) {
   auto runtime = Runtime();
   runtime.Set("x", rt::Tensor::FromFloat("x", {0, 2, 1}, {}));
   node.ref_input()[4] = "past";
-  runtime.Set("past", rt::Tensor::FromFloat("past", {2, 0, 2, 1, 1}, {}));
+  runtime.Set("past", rt::Tensor::FromFloat("past", {2, 0, 1, 2, 1}, {}));
   Run(node, runtime);
   EXPECT_EQ(runtime.Get("y").shape, (rt::Shape{0, 2, 1}));
   EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 0, 1, 4, 1}));
@@ -233,6 +237,8 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   ASSERT_EQ(schemas.size(), 1u);
   EXPECT_EQ(schemas[0].since_version(), 1);
   auto node = Node(true, 4);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "do_rotary", int64_t{0});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "rotary_embedding_dim", int64_t{0});
   ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext shapes;
   shapes.Set("x",
              sym::SymTensor(nullptr, sym::TensorType::kFloat,
