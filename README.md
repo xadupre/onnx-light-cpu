@@ -106,8 +106,9 @@ PYTHONPATH=/path/to/onnx-light \
 When selecting an onnx-light-cpu checkout through `PYTHONPATH`, build its native
 extensions in place as well. An existing editable-install finder can override
 `PYTHONPATH` for native submodules even when Python files come from the checkout.
-The bindings diagnose this conflict with an `ImportError` naming the selected
-directory and the foreign extension, before loading either native module.
+The native import-order tests diagnose this conflict with an `ImportError` naming
+the selected directory and the foreign extension, before loading either native
+module. Normal package imports do not perform these origin checks.
 Use an environment without the conflicting installation; setting `PYTHONPATH`
 alone does not disable editable-install finders.
 

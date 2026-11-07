@@ -436,8 +436,13 @@ class TestExtensionImportOrder(ExtTestCase):
             import sys
             from importlib import import_module
             from pathlib import Path
+            from runpy import run_path
 
             root = Path(sys.argv[1])
+            # Diagnose editable-install overrides before loading either native build.
+            run_path(str(root / "unittests" / "python" / "test_native_package_import.py"))[
+                "_check_native_import_origins"
+            ](root)
             for name in sys.argv[2:]:
                 assert name not in sys.modules, f"{name} was loaded prematurely"
                 module = import_module(name)

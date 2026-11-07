@@ -5,12 +5,33 @@
 """Checks native import origins and optional runtime discovery without loading binaries."""
 
 import os
+from importlib.util import find_spec
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 from unittest import TestCase
+
+
+def _check_native_import_origins(root):
+    bindings_dir = (Path(root) / "onnx_light_cpu" / "onnx_py").resolve()
+    for module in ("_cpukernels", "_cpuregister"):
+        name = f"onnx_light_cpu.onnx_py.{module}"
+        spec = find_spec(name)
+        if (
+            spec is not None
+            and spec.origin is not None
+            and Path(spec.origin).resolve().parent != bindings_dir
+        ):
+            raise ImportError(
+                f"PYTHONPATH selects onnx-light-cpu from {bindings_dir}, but "
+                f"{name} was found at {spec.origin}; expected it in {bindings_dir}. "
+                "A conflicting installation or editable-install finder may be "
+                "overriding native imports. Use an environment without the conflicting "
+                "installation and build the selected checkout in place; "
+                "mixing native builds is not supported."
+            )
 
 
 class TestNativePackageImport(TestCase):
@@ -22,6 +43,7 @@ class TestNativePackageImport(TestCase):
             from importlib.machinery import EXTENSION_SUFFIXES
             from importlib.util import spec_from_file_location
             from pathlib import Path
+            from runpy import run_path
 
             root = Path(sys.argv[1])
             foreign = Path(sys.argv[2])
@@ -33,9 +55,12 @@ class TestNativePackageImport(TestCase):
                      "onnx_light_cpu.onnx_py._cpuregister")
 
             class EditableFinder:
+                queries = []
+
                 @classmethod
                 def find_spec(cls, fullname, path=None, target=None):
                     if fullname in names:
+                        cls.queries.append(fullname)
                         directory = foreign if fullname == conflicting else local
                         return spec_from_file_location(
                             fullname,
@@ -46,11 +71,16 @@ class TestNativePackageImport(TestCase):
             # Match an editable finder that takes precedence over PathFinder.
             sys.meta_path.insert(0, EditableFinder)
             sys.path.insert(0, str(root))
+            import_module("onnx_light_cpu.onnx_py")
+            assert not EditableFinder.queries, EditableFinder.queries
+            check_origins = run_path(
+                str(root / "unittests" / "python" / "test_native_package_import.py")
+            )["_check_native_import_origins"]
             try:
-                if conflicting and source_selected:
-                    import_module(first)
-                else:
-                    import_module("onnx_light_cpu.onnx_py")
+                if source_selected:
+                    check_origins(root)
+                    if conflicting:
+                        import_module(first)
             except ImportError as exc:
                 assert conflicting and source_selected, str(exc)
                 message = str(exc)
@@ -61,6 +91,8 @@ class TestNativePackageImport(TestCase):
                 assert "mixing native builds is not supported" in message, message
             else:
                 assert not (conflicting and source_selected), "Conflict was not diagnosed"
+            if not source_selected:
+                assert not EditableFinder.queries, EditableFinder.queries
             assert all(name not in sys.modules for name in names)
             assert "onnx_light" not in sys.modules
             """)
