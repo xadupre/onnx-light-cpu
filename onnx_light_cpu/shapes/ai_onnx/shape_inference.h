@@ -12,6 +12,12 @@
 
 namespace onnx_light_cpu {
 
+namespace detail {
+
+void RegisterBuiltinPeakMemoryFunctions();
+
+} // namespace detail
+
 /// CPU MatMul product scratch, excluding declared Y and input/prepared-weight storage.
 /// Without dtype/executor metadata this covers all supported dtypes and executor sizes.
 ONNX_LIGHT_NAMESPACE::core::shapes::PeakMemoryEstimate ComputePeakMemoryMatMul(

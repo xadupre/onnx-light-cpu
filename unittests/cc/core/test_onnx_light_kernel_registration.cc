@@ -9,7 +9,6 @@
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
-#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 
 #include <gtest/gtest.h>
 
@@ -644,7 +643,7 @@ TEST(KernelRegistration, CollectionDoesNotRegisterMatMulMemoryEstimator) {
 }
 
 TEST(KernelRegistration, SupportAndOtherKernelRegistrationPreserveMatMulMemoryEstimator) {
-  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
+  onnx_light_cpu::detail::RegisterBuiltinPeakMemoryFunctions();
   shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
                                          [](auto, const auto &, const auto &) {
                                            return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});

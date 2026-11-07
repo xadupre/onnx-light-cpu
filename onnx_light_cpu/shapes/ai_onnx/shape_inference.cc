@@ -8,7 +8,11 @@
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/shapes/shape_broadcast.h"
+#if defined(ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY)
 #include "onnx_extensions/kernels/kernel_dispatch_table.h"
+#elif defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+#include "onnx_extensions/shapes/dispatch_table.h"
+#endif
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
@@ -71,6 +75,14 @@ void CheckScaleBroadcast(shapes_ns::ShapesContext &ctx, const SymShape &x, const
 }
 
 } // namespace
+
+void detail::RegisterBuiltinPeakMemoryFunctions() {
+#if defined(ONNX_LIGHT_CPU_HAS_KERNEL_PEAK_MEMORY)
+  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
+#elif defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+  ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+#endif
+}
 
 shapes_ns::PeakMemoryEstimate ComputePeakMemoryMatMul(sym_ns::Device device,
                                                       const ONNX_LIGHT_NAMESPACE::NodeProto &node,
@@ -357,7 +369,7 @@ void RegisterExperimentalShapeAndMemoryFunctions() {
   std::call_once(once, [] {
     // Install lazy builtins before overriding them, so later generic registration
     // cannot replace CPU-specific allocation accounting.
-    ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
+    detail::RegisterBuiltinPeakMemoryFunctions();
     shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "Attention", sym_ns::Device::kCPU,
                                            ComputePeakMemoryAttention);
     shapes_ns::RegisterComputeShapeFn("ai.onnx", "RotaryEmbedding", ComputeShapeRotaryEmbedding);
@@ -372,7 +384,7 @@ void RegisterExperimentalShapeAndMemoryFunctions() {
 }
 
 void RegisterMatMulMemoryFunction() {
-  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
+  detail::RegisterBuiltinPeakMemoryFunctions();
   shapes_ns::RegisterComputePeakMemoryFn("ai.onnx", "MatMul", sym_ns::Device::kCPU,
                                          ComputePeakMemoryMatMul);
 }
