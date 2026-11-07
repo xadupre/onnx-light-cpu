@@ -5,6 +5,7 @@
 """Microsoft fused Attention and offline split Whisper generation regressions."""
 
 import importlib.util
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -97,7 +98,7 @@ class TestMicrosoftAttention(ExtTestCase):
                                 outputs,
                                 domain="com.microsoft",
                                 num_heads=2,
-                                unidirectional=int(with_past),
+                                unidirectional=int(with_past and mask_kind != "capacity"),
                                 **attributes,
                             )
                         ],
@@ -141,7 +142,10 @@ class TestMicrosoftAttention(ExtTestCase):
                     np.testing.assert_allclose(result, reference, rtol=3e-5, atol=3e-5)
 
     @unittest.skipUnless(
-        all(importlib.util.find_spec(name) for name in ("torch", "transformers", "modelbuilder")),
+        os.environ.get("ONNX_LIGHT_CPU_REQUIRE_WHISPER_EXPORT") == "1"
+        or all(
+            importlib.util.find_spec(name) for name in ("torch", "transformers", "modelbuilder")
+        ),
         "Offline Whisper export requires torch, transformers and the mbext modelbuilder source.",
     )
     def test_native_whisper_encoder_and_five_greedy_tokens(self):

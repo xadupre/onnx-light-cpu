@@ -195,9 +195,11 @@ TEST(MicrosoftAttentionKernel, EmptyBatch) {
   auto node = Node();
   auto runtime = Runtime();
   runtime.Set("x", rt::Tensor::FromFloat("x", {0, 2, 1}, {}));
+  node.ref_input()[4] = "past";
+  runtime.Set("past", rt::Tensor::FromFloat("past", {2, 0, 2, 1, 1}, {}));
   Run(node, runtime);
   EXPECT_EQ(runtime.Get("y").shape, (rt::Shape{0, 2, 1}));
-  EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 0, 1, 2, 1}));
+  EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 0, 1, 4, 1}));
 }
 
 TEST(MicrosoftAttentionKernel, SingleTokenPrefillAndDecode) {
@@ -232,9 +234,10 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   EXPECT_EQ(schemas[0].since_version(), 1);
   auto node = Node(true, 4);
   ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext shapes;
-  shapes.Set("x", SymTensor(nullptr, sym::TensorType::kFloat,
+  shapes.Set("x",
+             sym::SymTensor(nullptr, sym::TensorType::kFloat,
                             sym::SymShape({sym::SymDim("B"), sym::SymDim("S"), sym::SymDim(32)})));
-  shapes.Set("w", SymTensor(nullptr, sym::TensorType::kFloat, sym::SymShape({32, 96})));
+  shapes.Set("w", sym::SymTensor(nullptr, sym::TensorType::kFloat, sym::SymShape({32, 96})));
   onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node);
   const auto &y = shapes.Get("y").Shape();
   EXPECT_EQ(y[0].ToString(), "B");
@@ -244,7 +247,7 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMicrosoftAttention(
                 sym::Device::kCPU, node, {sym::SymShape({2, 3, 32}), sym::SymShape({32, 96})}),
             0);
-  shapes.Set("w", SymTensor(nullptr, sym::TensorType::kFloat, sym::SymShape({31, 96})));
+  shapes.Set("w", sym::SymTensor(nullptr, sym::TensorType::kFloat, sym::SymShape({31, 96})));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node), std::invalid_argument);
 }
 

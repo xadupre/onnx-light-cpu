@@ -36,6 +36,53 @@ constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
 
 [[noreturn]] void Fail(const char *message) { throw std::invalid_argument(message); }
 
+struct WorkerRanges {
+  std::size_t count;
+  std::int64_t block_size;
+};
+
+WorkerRanges MakeWorkerRanges(std::int64_t total, const ExecutionSchedule &schedule) {
+  if (total <= 0) {
+    return {0, 0};
+  }
+  const std::int64_t requested_blocks = ExecutionBlockCount(total, schedule);
+  const std::int64_t block_size = total / requested_blocks + (total % requested_blocks != 0);
+  const std::int64_t block_count = total / block_size + (total % block_size != 0);
+  return {static_cast<std::size_t>(block_count), block_size};
+}
+
+class AttentionScratchLayout {
+public:
+  template <typename T> std::size_t Add(std::size_t count) {
+    const std::size_t alignment = alignof(T);
+    const std::size_t remainder = bytes_ % alignment;
+    if (remainder != 0) {
+      bytes_ = CheckedAdd(bytes_, alignment - remainder, "Attention", "scratch layout");
+    }
+    const std::size_t offset = bytes_;
+    bytes_ = CheckedAdd(bytes_, CheckedByteSize(count, sizeof(T), "Attention", "worker scratch"),
+                        "Attention", "worker scratch");
+    return offset;
+  }
+
+  std::size_t Size() const {
+    constexpr std::size_t alignment = alignof(std::max_align_t);
+    const std::size_t remainder = bytes_ % alignment;
+    return remainder == 0
+               ? bytes_
+               : CheckedAdd(bytes_, alignment - remainder, "Attention", "scratch layout");
+  }
+
+private:
+  std::size_t bytes_ = 0;
+};
+
+template <typename T>
+T *WorkerScratch(void *data, std::size_t worker, std::size_t worker_bytes, std::size_t offset) {
+  auto *base = static_cast<std::byte *>(data) + worker * worker_bytes;
+  return reinterpret_cast<T *>(base + offset);
+}
+
 std::size_t ToSize(std::int64_t dimension, const char *what) {
   return CheckedDimension(dimension, "AttentionPlan", what);
 }
@@ -816,24 +863,23 @@ bool UseAvx2ShortAttentionTiles(const AttentionPlan &plan, const typename Codec:
 
 template <typename T>
 const T *PackRows(const T *source, std::size_t rows, std::size_t dimension, std::ptrdiff_t stride,
-                  std::vector<T> &scratch) {
+                  T *scratch) {
   if (stride == static_cast<std::ptrdiff_t>(dimension)) {
     return source;
   }
-  scratch.resize(rows * dimension);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
   if constexpr (std::is_same_v<T, float>) {
     static const bool has_avx512 = DetectSimdLevel() == SimdLevel::kAVX512;
     if (has_avx512) {
-      AttentionPackRowsFloat32_AVX512(source, scratch.data(), rows, dimension, stride);
-      return scratch.data();
+      AttentionPackRowsFloat32_AVX512(source, scratch, rows, dimension, stride);
+      return scratch;
     }
   }
 #endif
   for (std::size_t row = 0; row < rows; ++row) {
-    std::copy_n(source + row * stride, dimension, scratch.data() + row * dimension);
+    std::copy_n(source + row * stride, dimension, scratch + row * dimension);
   }
-  return scratch.data();
+  return scratch;
 }
 
 template <typename Codec>
@@ -1114,6 +1160,24 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   const ExecutionSchedule schedule{
       1, static_cast<std::int64_t>((total_rows + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
+  const auto ranges = MakeWorkerRanges(static_cast<std::int64_t>(total_rows), schedule);
+  AttentionScratchLayout scratch_layout;
+  const auto scores_offset = scratch_layout.Add<float>(block);
+  const auto q_fp32_offset =
+      scratch_layout.Add<float>(std::is_same_v<Codec, Float32Codec> ? 0 : plan.head_dim);
+  const auto accumulator_offset = scratch_layout.Add<float>(plan.v_head_dim);
+  const auto k_fp32_offset = scratch_layout.Add<float>(
+      std::is_same_v<Codec, Float32Codec>
+          ? 0
+          : CheckedProduct({conversion_block, plan.head_dim}, "Attention", "converted key tile"));
+  const auto v_fp32_offset = scratch_layout.Add<float>(
+      std::is_same_v<Codec, Float32Codec> ? 0
+                                          : CheckedProduct({conversion_block, plan.v_head_dim},
+                                                           "Attention", "converted value tile"));
+  const std::size_t worker_bytes = scratch_layout.Size();
+  ExecutionBuffer scratch(
+      CheckedMultiply(ranges.count, worker_bytes, "Attention", "streaming worker scratch"));
+  auto *scratch_data = scratch.data();
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   // Reuse the decode row routine for short query bursts as well as Q == 1.
@@ -1137,25 +1201,18 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // (many rows) exposes enough independent outer work to scale.
   ExecuteRanges(
       static_cast<std::int64_t>(total_rows), schedule, [&](std::int64_t begin, std::int64_t end) {
+        const std::size_t worker = static_cast<std::size_t>(begin / ranges.block_size);
+        float *scores = WorkerScratch<float>(scratch_data, worker, worker_bytes, scores_offset);
+        float *q_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, q_fp32_offset);
+        float *accumulator =
+            WorkerScratch<float>(scratch_data, worker, worker_bytes, accumulator_offset);
+        float *k_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, k_fp32_offset);
+        float *v_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, v_fp32_offset);
         // Peak temporary storage: one `Bc`-sized score tile, one
         // `head_dim`-sized FP32 query cache, and one `v_head_dim`
         // accumulator per worker (`Br == 1`). FP16 additionally retains up to
         // four converted KV blocks for short-context reuse; longer contexts
         // convert one block at a time. Never materialize the full score matrix.
-        thread_local std::vector<float> scores;
-        thread_local std::vector<float> q_fp32;
-        thread_local std::vector<float> accumulator;
-        thread_local std::vector<float> k_fp32;
-        thread_local std::vector<float> v_fp32;
-        scores.resize(block);
-        if constexpr (!std::is_same_v<Codec, Float32Codec>) {
-          q_fp32.resize(plan.head_dim);
-        }
-        accumulator.resize(plan.v_head_dim);
-        if constexpr (!std::is_same_v<Codec, Float32Codec>) {
-          k_fp32.resize(conversion_block * plan.head_dim);
-          v_fp32.resize(conversion_block * plan.v_head_dim);
-        }
         std::size_t converted_head = std::numeric_limits<std::size_t>::max();
 
         for (std::int64_t row = begin; row < end; ++row) {
@@ -1183,10 +1240,10 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           if constexpr (!std::is_same_v<Codec, Float32Codec>) {
             const std::size_t head = b * plan.kv_num_heads + kv_h;
             if (reuse_converted_head && converted_head != head) {
-              LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), 0, total_kv_length,
+              LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32, 0, total_kv_length,
                                 plan.head_dim, plan.k_strides.sequence,
                                 plan.past_k_strides.sequence);
-              LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32.data(), 0, total_kv_length,
+              LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32, 0, total_kv_length,
                                 plan.v_head_dim, plan.v_strides.sequence,
                                 plan.past_v_strides.sequence);
               converted_head = head;
@@ -1214,8 +1271,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             q_values = q_row;
           } else {
             // Convert once per row, not once per KV element.
-            LoadRows<Codec>(q_row, q_fp32.data(), 1, plan.head_dim, plan.head_dim);
-            q_values = q_fp32.data();
+            LoadRows<Codec>(q_row, q_fp32, 1, plan.head_dim, plan.head_dim);
+            q_values = q_fp32;
           }
 
           // Combined causal/`nonpad_kv_seqlen` bound: the last KV index
@@ -1253,7 +1310,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
 
           float m = plan.head_sink != nullptr ? plan.head_sink[h] : kNegativeInfinity;
           float l = plan.head_sink != nullptr ? 1.0f : 0.0f;
-          std::fill(accumulator.begin(), accumulator.end(), 0.0f);
+          std::fill_n(accumulator, plan.v_head_dim, 0.0f);
           bool any_valid = false;
 
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
@@ -1278,9 +1335,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             if (use_avx2_decode) {
               ComputeAttentionDecodeRowAVX2FMA<Codec>(
                   plan, q_values, k_head, v_head, past_k_head, past_v_head, mask_bool, mask_float,
-                  mask_row, has_softcap, kv_start, kv_limit, block, scores.data(),
-                  accumulator.data(), m, l, any_valid, k_fp32.data(), v_fp32.data(),
-                  reuse_converted_head);
+                  mask_row, has_softcap, kv_start, kv_limit, block, scores, accumulator, m, l,
+                  any_valid, k_fp32, v_fp32, reuse_converted_head);
               handled_by_avx2_decode = true;
             }
           }
@@ -1312,12 +1368,10 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
 
             if constexpr (!std::is_same_v<Codec, Float32Codec>) {
               if (!reuse_converted_head) {
-                LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), j0, count,
-                                  plan.head_dim, plan.k_strides.sequence,
-                                  plan.past_k_strides.sequence);
-                LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32.data(), j0, count,
-                                  plan.v_head_dim, plan.v_strides.sequence,
-                                  plan.past_v_strides.sequence);
+                LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32, j0, count, plan.head_dim,
+                                  plan.k_strides.sequence, plan.past_k_strides.sequence);
+                LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32, j0, count, plan.v_head_dim,
+                                  plan.v_strides.sequence, plan.past_v_strides.sequence);
               }
             }
             float block_max = kNegativeInfinity;
@@ -1350,7 +1404,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 if constexpr (std::is_same_v<Codec, Float32Codec>) {
                   k_values = k_row;
                 } else {
-                  k_values = k_fp32.data() + (reuse_converted_head ? j : jj) * plan.head_dim;
+                  k_values = k_fp32 + (reuse_converted_head ? j : jj) * plan.head_dim;
                 }
                 constexpr std::size_t kDotLanes = 8;
                 float partial[kDotLanes] = {};
@@ -1394,7 +1448,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             }
 
             if (m_new == kNegativeInfinity) {
-              std::fill_n(scores.begin(), count, 0.0f);
+              std::fill_n(scores, count, 0.0f);
             } else {
               for (std::size_t jj = 0; jj < count; ++jj) {
                 const float score = scores[jj];
@@ -1439,12 +1493,12 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
               accumulator[d] *= inv_l;
             }
-            detail::ConvertFloat32ToFloat16(accumulator.data(), y_row, plan.v_head_dim);
+            detail::ConvertFloat32ToFloat16(accumulator, y_row, plan.v_head_dim);
           } else if constexpr (std::is_same_v<Codec, BFloat16Codec>) {
             for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
               accumulator[d] *= inv_l;
             }
-            detail::ConvertFloat32ToBFloat16(accumulator.data(), y_row, plan.v_head_dim);
+            detail::ConvertFloat32ToBFloat16(accumulator, y_row, plan.v_head_dim);
           } else {
             for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
               y_row[d] = Codec::Store(accumulator[d] * inv_l);
@@ -1562,18 +1616,24 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const bool reuse_half_kv = !std::is_same_v<Codec, Float32Codec> && plan.group_size > 1 &&
                              shared_k_elements <= kMaximumSharedKvElements &&
                              shared_v_elements <= kMaximumSharedKvElements;
-  std::vector<typename Codec::Storage> shared_k;
-  std::vector<float> shared_v;
+  ExecutionBuffer shared_k_buffer(reuse_half_kv ? CheckedByteSize(shared_k_elements,
+                                                                  sizeof(typename Codec::Storage),
+                                                                  "Attention", "shared key scratch")
+                                                : 0);
+  ExecutionBuffer shared_v_buffer(
+      reuse_half_kv
+          ? CheckedByteSize(shared_v_elements, sizeof(float), "Attention", "shared value scratch")
+          : 0);
+  auto *shared_k = static_cast<typename Codec::Storage *>(shared_k_buffer.data());
+  auto *shared_v = static_cast<float *>(shared_v_buffer.data());
   if (reuse_half_kv) {
-    shared_k.resize(shared_k_elements);
-    shared_v.resize(shared_v_elements);
     for (std::size_t b = 0; b < plan.batch; ++b) {
       for (std::size_t h = 0; h < plan.kv_num_heads; ++h) {
         const std::size_t head = b * plan.kv_num_heads + h;
         const auto *k_head = k + b * plan.k_strides.batch + h * plan.k_strides.head;
         const auto *v_head = v + b * plan.v_strides.batch + h * plan.v_strides.head;
-        auto *packed_k = shared_k.data() + head * plan.kv_length * plan.head_dim;
-        auto *converted_v = shared_v.data() + head * plan.kv_length * plan.v_head_dim;
+        auto *packed_k = shared_k + head * plan.kv_length * plan.head_dim;
+        auto *converted_v = shared_v + head * plan.kv_length * plan.v_head_dim;
         for (std::size_t row = 0; row < plan.kv_length; ++row) {
           std::copy_n(k_head + row * plan.k_strides.sequence, plan.head_dim,
                       packed_k + row * plan.head_dim);
@@ -1650,25 +1710,46 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const ExecutionSchedule schedule{
       1, static_cast<std::int64_t>((total_tasks + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
+  const auto ranges = MakeWorkerRanges(static_cast<std::int64_t>(total_tasks), schedule);
+  AttentionScratchLayout scratch_layout;
+  const auto scores_offset =
+      scratch_layout.Add<float>(CheckedProduct({query_block, kv_block}, "Attention", "score tile"));
+  const auto accumulator_offset = scratch_layout.Add<float>(
+      CheckedProduct({query_block, plan.v_head_dim}, "Attention", "output tile"));
+  const auto product_offset = scratch_layout.Add<float>(
+      CheckedProduct({query_block, plan.v_head_dim}, "Attention", "output tile"));
+  const auto maxima_offset = scratch_layout.Add<float>(query_block);
+  const auto denominators_offset = scratch_layout.Add<float>(query_block);
+  const auto valid_offset = scratch_layout.Add<std::uint8_t>(query_block);
+  const auto packed_q_offset = scratch_layout.Add<typename Codec::Storage>(
+      CheckedProduct({query_block, plan.head_dim}, "Attention", "packed query tile"));
+  const auto packed_k_offset = scratch_layout.Add<typename Codec::Storage>(
+      CheckedProduct({kv_block, plan.head_dim}, "Attention", "packed key tile"));
+  const auto packed_v_offset = scratch_layout.Add<float>(
+      CheckedProduct({kv_block, plan.v_head_dim}, "Attention", "packed value tile"));
+  const auto output_offset = scratch_layout.Add<float>(
+      CheckedProduct({query_block, plan.v_head_dim}, "Attention", "output tile"));
+  const std::size_t worker_bytes = scratch_layout.Size();
+  ExecutionBuffer scratch(
+      CheckedMultiply(ranges.count, worker_bytes, "Attention", "tiled worker scratch"));
+  auto *scratch_data = scratch.data();
   ExecuteRanges(
       static_cast<std::int64_t>(total_tasks), schedule, [&](std::int64_t begin, std::int64_t end) {
-        thread_local std::vector<float> scores;
-        thread_local std::vector<float> accumulator;
-        thread_local std::vector<float> product;
-        thread_local std::vector<float> maxima;
-        thread_local std::vector<float> denominators;
-        thread_local std::vector<std::uint8_t> valid;
-        thread_local std::vector<typename Codec::Storage> packed_q;
-        thread_local std::vector<typename Codec::Storage> packed_k;
-        thread_local std::vector<float> packed_v;
-        thread_local std::vector<float> output;
-        scores.resize(query_block * kv_block);
-        maxima.resize(query_block);
-        denominators.resize(query_block);
-        valid.resize(query_block);
-        if constexpr (!std::is_same_v<Codec, Float32Codec>) {
-          packed_v.resize(kv_block * plan.v_head_dim);
-        }
+        const std::size_t worker = static_cast<std::size_t>(begin / ranges.block_size);
+        float *scores = WorkerScratch<float>(scratch_data, worker, worker_bytes, scores_offset);
+        float *accumulator =
+            WorkerScratch<float>(scratch_data, worker, worker_bytes, accumulator_offset);
+        float *product = WorkerScratch<float>(scratch_data, worker, worker_bytes, product_offset);
+        float *maxima = WorkerScratch<float>(scratch_data, worker, worker_bytes, maxima_offset);
+        float *denominators =
+            WorkerScratch<float>(scratch_data, worker, worker_bytes, denominators_offset);
+        auto *valid = WorkerScratch<std::uint8_t>(scratch_data, worker, worker_bytes, valid_offset);
+        auto *packed_q = WorkerScratch<typename Codec::Storage>(scratch_data, worker, worker_bytes,
+                                                                packed_q_offset);
+        auto *packed_k = WorkerScratch<typename Codec::Storage>(scratch_data, worker, worker_bytes,
+                                                                packed_k_offset);
+        float *packed_v = WorkerScratch<float>(scratch_data, worker, worker_bytes, packed_v_offset);
+        float *output = WorkerScratch<float>(scratch_data, worker, worker_bytes, output_offset);
 
         for (std::int64_t task = begin; task < end; ++task) {
           const std::size_t b = static_cast<std::size_t>(task) / tasks_per_batch;
@@ -1682,7 +1763,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               q + b * plan.q_strides.batch + h * plan.q_strides.head + q0 * plan.q_strides.sequence;
           const std::size_t kv_head = b * plan.kv_num_heads + kv_h;
           const typename Codec::Storage *k_head =
-              reuse_half_kv ? shared_k.data() + kv_head * plan.kv_length * plan.head_dim
+              reuse_half_kv ? shared_k + kv_head * plan.kv_length * plan.head_dim
                             : k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
           const std::ptrdiff_t k_stride =
               reuse_half_kv ? static_cast<std::ptrdiff_t>(plan.head_dim) : plan.k_strides.sequence;
@@ -1690,8 +1771,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
           const typename Codec::Storage *v_head =
               v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
           const float *converted_v_head =
-              reuse_half_kv ? shared_v.data() + kv_head * plan.kv_length * plan.v_head_dim
-                            : nullptr;
+              reuse_half_kv ? shared_v + kv_head * plan.kv_length * plan.v_head_dim : nullptr;
           typename Codec::Storage *y_block =
               y + b * plan.y_strides.batch + h * plan.y_strides.head + q0 * plan.y_strides.sequence;
           const std::ptrdiff_t mask_base =
@@ -1707,13 +1787,11 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
           const bool single_kv_block =
               task_kv_start < task_kv_limit && task_kv_limit - task_kv_start <= kv_block;
           if (!single_kv_block) {
-            accumulator.resize(rows * plan.v_head_dim);
-            product.resize(rows * plan.v_head_dim);
-            std::fill_n(accumulator.begin(), rows * plan.v_head_dim, 0.0f);
+            std::fill_n(accumulator, rows * plan.v_head_dim, 0.0f);
           }
-          std::fill_n(maxima.begin(), rows, kNegativeInfinity);
-          std::fill_n(denominators.begin(), rows, 0.0f);
-          std::fill_n(valid.begin(), rows, std::uint8_t{0});
+          std::fill_n(maxima, rows, kNegativeInfinity);
+          std::fill_n(denominators, rows, 0.0f);
+          std::fill_n(valid, rows, std::uint8_t{0});
 
           for (std::size_t j0 = task_kv_start; j0 < task_kv_limit; j0 += kv_block) {
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
@@ -1723,11 +1801,11 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             if (use_q8_avx512) {
               AttentionScoreQ8K128D64Float32_AVX512(reinterpret_cast<const float *>(q_block),
                                                     reinterpret_cast<const float *>(k_block),
-                                                    plan.scale, scores.data());
+                                                    plan.scale, scores);
             } else
 #endif
               AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
-                                     scores.data(), dense_rank4);
+                                     scores, dense_rank4);
             const float *v_block;
             if constexpr (std::is_same_v<Codec, Float32Codec>) {
               v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
@@ -1736,26 +1814,25 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               if (reuse_half_kv) {
                 v_block = converted_v_head + j0 * plan.v_head_dim;
               } else {
-                LoadRows<Codec>(v_head + j0 * plan.v_strides.sequence, packed_v.data(), columns,
+                LoadRows<Codec>(v_head + j0 * plan.v_strides.sequence, packed_v, columns,
                                 plan.v_head_dim, plan.v_strides.sequence);
-                v_block = packed_v.data();
+                v_block = packed_v;
               }
             }
 
             bool dense_softmax = false;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
             if (use_dense_softmax_avx2 && single_kv_block &&
-                AttentionAllFiniteFloat32_AVX2_FMA(scores.data(), rows * columns)) {
-              SoftmaxUnnormalizedFloat32_AVX2_FMA(scores.data(), denominators.data(), rows,
-                                                  columns);
-              std::fill_n(valid.begin(), rows, std::uint8_t{1});
+                AttentionAllFiniteFloat32_AVX2_FMA(scores, rows * columns)) {
+              SoftmaxUnnormalizedFloat32_AVX2_FMA(scores, denominators, rows, columns);
+              std::fill_n(valid, rows, std::uint8_t{1});
               dense_softmax = true;
             }
 #endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
             if (use_dense_softmax_avx512) {
-              AttentionSoftmaxRowsFloat32_AVX512(scores.data(), denominators.data(), rows, columns);
-              std::fill_n(valid.begin(), rows, std::uint8_t{1});
+              AttentionSoftmaxRowsFloat32_AVX512(scores, denominators, rows, columns);
+              std::fill_n(valid, rows, std::uint8_t{1});
               dense_softmax = true;
             }
 #endif
@@ -1763,7 +1840,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               if (dense_softmax) {
                 continue;
               }
-              float *score_row = scores.data() + i * columns;
+              float *score_row = scores + i * columns;
               const std::size_t query = q0 + i;
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
               if (use_avx2_softmax) {
@@ -1800,7 +1877,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                 maxima[i] = result.maximum;
                 valid[i] = 1;
                 if (!single_kv_block && result.correction != 1.0f) {
-                  AttentionScaleFloat32_AVX2_FMA(accumulator.data() + i * plan.v_head_dim,
+                  AttentionScaleFloat32_AVX2_FMA(accumulator + i * plan.v_head_dim,
                                                  result.correction, plan.v_head_dim);
                 }
                 continue;
@@ -1829,7 +1906,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                 maxima[i] = result.maximum;
                 valid[i] = 1;
                 if (!single_kv_block) {
-                  float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+                  float *accumulator_row = accumulator + i * plan.v_head_dim;
                   for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                     accumulator_row[d] *= result.correction;
                   }
@@ -1858,7 +1935,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                 maxima[i] = result.maximum;
                 valid[i] = 1;
                 if (!single_kv_block) {
-                  float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+                  float *accumulator_row = accumulator + i * plan.v_head_dim;
                   for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                     accumulator_row[d] *= result.correction;
                   }
@@ -1911,7 +1988,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                       : (maxima[i] == kNegativeInfinity ? 0.0f : std::exp(maxima[i] - new_max));
               denominators[i] *= correction;
               if (!single_kv_block) {
-                float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+                float *accumulator_row = accumulator + i * plan.v_head_dim;
                 for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                   accumulator_row[d] *= correction;
                 }
@@ -1947,30 +2024,28 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                   destination_stride = output_sequence_stride;
                 } else if (plan.y_strides.sequence !=
                            static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
-                  output.resize(rows * plan.v_head_dim);
-                  destination = output.data();
+                  destination = output;
                 }
               } else {
-                output.resize(rows * plan.v_head_dim);
-                destination = output.data();
+                destination = output;
               }
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_q8_avx512) {
-                AttentionProbabilityValueQ8K128D64Float32_AVX512(scores.data(), v_block,
-                                                                 destination, destination_stride);
+                AttentionProbabilityValueQ8K128D64Float32_AVX512(scores, v_block, destination,
+                                                                 destination_stride);
               } else if (use_avx512_strided_value) {
                 for (std::size_t row = 0; row < rows; row += 8) {
                   AttentionProbabilityValueQ8K128D64Float32_AVX512(
-                      scores.data() + row * columns, v_block,
-                      destination + row * destination_stride, destination_stride);
+                      scores + row * columns, v_block, destination + row * destination_stride,
+                      destination_stride);
                 }
               } else
 #endif
-                AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block, nullptr,
+                AttentionValueGemm(rows, plan.v_head_dim, columns, scores, v_block, nullptr,
                                    destination, destination_stride, dense_rank4);
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
               if (use_dense_softmax_avx512) {
-                AttentionNormalizeRowsFloat32_AVX512(destination, denominators.data(), rows,
+                AttentionNormalizeRowsFloat32_AVX512(destination, denominators, rows,
                                                      plan.v_head_dim, destination_stride);
               } else
 #endif
@@ -2015,9 +2090,9 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             }
 
             // Fuse the running sum into GEMM while keeping its bias and output disjoint.
-            AttentionValueGemm(rows, plan.v_head_dim, columns, scores.data(), v_block,
-                               accumulator.data(), product.data(), plan.v_head_dim, dense_rank4);
-            accumulator.swap(product);
+            AttentionValueGemm(rows, plan.v_head_dim, columns, scores, v_block, accumulator,
+                               product, plan.v_head_dim, dense_rank4);
+            std::swap(accumulator, product);
           }
 
           if (single_kv_block) {
@@ -2026,7 +2101,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
           for (std::size_t i = 0; i < rows; ++i) {
             auto *y_row = y_block + i * plan.y_strides.sequence;
             const float scale = valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
-            float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+            float *accumulator_row = accumulator + i * plan.v_head_dim;
             if constexpr (std::is_same_v<Codec, Float32Codec>) {
               for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                 y_row[d] = accumulator_row[d] * scale;

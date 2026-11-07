@@ -275,6 +275,14 @@ jobs:
               env.write(f"{variable}={value}\n")
           PY
 
+      - name: Set up Whisper export dependencies
+        if: runner.os == 'Linux' && matrix.python-abi == 'stable'
+        shell: bash
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
+          pip install transformers==5.22.1 scipy==1.18.1
+          git clone --depth 1 --branch main https://github.com/xadupre/mbext.git "${RUNNER_TEMP}/mbext"
+
       - name: Build extension and run C++ tests via setup.py
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -300,6 +308,13 @@ jobs:
 
       - name: Run onnx-light integration tests
         run: python -m pytest unittests
+
+      - name: Run required Whisper Attention parity test
+        if: runner.os == 'Linux' && matrix.python-abi == 'stable'
+        env:
+          ONNX_LIGHT_CPU_REQUIRE_WHISPER_EXPORT: "1"
+          PYTHONPATH: ${{ github.workspace }}:${{ runner.temp }}/mbext
+        run: python -m pytest unittests/python/test_microsoft_attention.py -k native_whisper
 
       - name: Detect benchmark changes
         id: benchmark_changes

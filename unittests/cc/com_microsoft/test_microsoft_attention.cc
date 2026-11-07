@@ -152,4 +152,101 @@ TEST(MicrosoftAttentionCompute, BorrowsAllocatorAndBoundsScratchBeforeDispatch) 
   for (int i = 0; i < 12; ++i)
     EXPECT_NEAR(y[i], (i < 6 ? 1 : 2) * (i % 2 ? 4 : 3), 1.e-5);
 }
+
+TEST(MicrosoftAttentionCompute, AttentionWorkerScratchUsesAllocatorBeforeDispatch) {
+  struct State {
+    std::size_t live = 0, allocations = 0, largest_pre_dispatch_allocation = 0;
+    std::size_t pre_dispatch_allocations = 0, allocations_during_dispatch = 0, dispatches = 0;
+    bool dispatching = false;
+  } state;
+  struct Handle {
+    std::size_t bytes, alignment;
+  };
+  ml_cpu_compute::ExecutionAllocatorView allocator;
+  allocator.context = &state;
+  allocator.allocate = [](void *context, std::size_t bytes, std::size_t alignment) {
+    auto &state = *static_cast<State *>(context);
+    auto *handle = new Handle{bytes, alignment};
+    void *data = ::operator new(bytes, std::align_val_t(alignment));
+    state.live += bytes;
+    if (state.dispatching) {
+      ++state.allocations_during_dispatch;
+    } else {
+      ++state.pre_dispatch_allocations;
+      state.largest_pre_dispatch_allocation =
+          std::max(state.largest_pre_dispatch_allocation, bytes);
+    }
+    ++state.allocations;
+    return ml_cpu_compute::ExecutionAllocation{data, handle};
+  };
+  allocator.release = [](void *context, ml_cpu_compute::ExecutionAllocation allocation) noexcept {
+    auto &state = *static_cast<State *>(context);
+    auto *handle = static_cast<Handle *>(allocation.handle);
+    state.live -= handle->bytes;
+    ::operator delete(allocation.data, std::align_val_t(handle->alignment));
+    delete handle;
+  };
+  ml_cpu_compute::ExecutionExecutorView executor;
+  executor.context = &state;
+  executor.effective_threads = 4;
+  executor.run_blocks = [](void *context, std::int64_t num_blocks, void *task_context,
+                           ml_cpu_compute::ExecutionBlockFn task) {
+    auto &state = *static_cast<State *>(context);
+    ++state.dispatches;
+    state.dispatching = true;
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+    state.dispatching = false;
+  };
+
+  ml_cpu_compute::AttentionDescriptor descriptor;
+  descriptor.q_num_heads = descriptor.kv_num_heads = 2;
+  const std::vector<std::int64_t> shape{1, 128, 64};
+  const ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank3,
+                                           shape, shape, shape, {},
+                                           ml_cpu_compute::AttentionMaskKind::kNone);
+  const std::vector<float> q(128 * 64), k(128 * 64), v(128 * 64);
+  std::vector<float> y(128 * 64);
+  ml_cpu_compute::AttentionExecutionInfo tiled_info;
+  ml_cpu_compute::AttentionDescriptor cached_descriptor;
+  cached_descriptor.q_num_heads = cached_descriptor.kv_num_heads = 2;
+  cached_descriptor.has_past_key = cached_descriptor.has_past_value = true;
+  const std::vector<std::int64_t> cached_shape{4, 8, 64}, past_shape{4, 2, 1024, 32};
+  const ml_cpu_compute::AttentionPlan cached_plan(
+      cached_descriptor, ml_cpu_compute::AttentionLayout::kRank3, cached_shape, cached_shape,
+      cached_shape, {}, ml_cpu_compute::AttentionMaskKind::kNone, past_shape, past_shape);
+  const std::vector<float> cached_q(4 * 8 * 64), cached_k(4 * 8 * 64), cached_v(4 * 8 * 64);
+  const std::vector<float> past_k(4 * 2 * 1024 * 32), past_v(4 * 2 * 1024 * 32);
+  std::vector<float> cached_y(4 * 8 * 64);
+  ml_cpu_compute::AttentionExecutionInfo streaming_info;
+  std::size_t tiled_pre_dispatch_allocations = 0, tiled_dispatch_allocations = 0;
+  std::size_t tiled_workspace_bytes = 0, streaming_dispatch_allocations = 0;
+  {
+    const ml_cpu_compute::ExecutionExecutorScope executor_scope(&executor);
+    const ml_cpu_compute::ExecutionAllocatorScope allocator_scope(&allocator);
+    ml_cpu_compute::ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr,
+                                                     y.data(), nullptr, nullptr, nullptr,
+                                                     &tiled_info);
+    tiled_pre_dispatch_allocations = state.pre_dispatch_allocations;
+    tiled_dispatch_allocations = state.allocations_during_dispatch;
+    tiled_workspace_bytes = state.largest_pre_dispatch_allocation;
+    ml_cpu_compute::ComputeAttentionFloat32Streaming(
+        cached_plan, cached_q.data(), cached_k.data(), cached_v.data(), nullptr, cached_y.data(),
+        past_k.data(), past_v.data(), nullptr, &streaming_info);
+    streaming_dispatch_allocations = state.allocations_during_dispatch - tiled_dispatch_allocations;
+  }
+  EXPECT_EQ(tiled_info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+  EXPECT_EQ(streaming_info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
+  EXPECT_EQ(tiled_pre_dispatch_allocations, 1u);
+  EXPECT_EQ(state.pre_dispatch_allocations - tiled_pre_dispatch_allocations, 1u);
+  EXPECT_GT(tiled_dispatch_allocations, 0u);
+  EXPECT_EQ(streaming_dispatch_allocations, 0u);
+  EXPECT_EQ(state.dispatches, 2u);
+  EXPECT_EQ(state.live, 0u);
+  EXPECT_GE(tiled_workspace_bytes, 2 * (plan.head_dim + 1) * sizeof(float));
+  EXPECT_TRUE(std::all_of(y.begin(), y.end(), [](float value) { return value == 0.0f; }));
+  EXPECT_TRUE(
+      std::all_of(cached_y.begin(), cached_y.end(), [](float value) { return value == 0.0f; }));
+}
 } // namespace
