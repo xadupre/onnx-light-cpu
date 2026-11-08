@@ -27,8 +27,8 @@ bool Wired(const NodeProto &node, int slot, bool output = false) {
   return output ? node.output_size() > slot && !node.output(slot).empty()
                 : node.input_size() > slot && !node.input(slot).empty();
 }
-void Fail(const char *message) {
-  throw std::invalid_argument(std::string("ComputeShapeMicrosoftAttention: ") + message);
+void Fail(const char *message, const char *context = "ComputeShapeMicrosoftAttention") {
+  throw std::invalid_argument(std::string(context) + ": " + message);
 }
 SymDim Equal(shapes_ns::ShapesContext &ctx, const SymDim &a, const SymDim &b) {
   if (a.IsInt() && b.IsInt()) {
@@ -38,10 +38,12 @@ SymDim Equal(shapes_ns::ShapesContext &ctx, const SymDim &a, const SymDim &b) {
     ctx.AddConstraint(a.ToString(), b.ToString());
   return a.IsInt() ? a : b.IsInt() ? b : a;
 }
-SymDim Divide(const SymDim &a, int64_t divisor) {
+SymDim Divide(const SymDim &a, int64_t divisor,
+              const char *context = "ComputeShapeMicrosoftAttention") {
   if (a.IsInt()) {
     if (a.AsInt() <= 0 || a.AsInt() % divisor)
-      Fail("hidden width must be a positive multiple of heads (and three if QKV omitted).");
+      Fail("hidden width must be a positive multiple of heads (and three if QKV omitted).",
+           context);
     return SymDim(a.AsInt() / divisor);
   }
   return divisor == 1 ? a : SymDim("(" + a.ToString() + ")/" + std::to_string(divisor));
@@ -55,21 +57,22 @@ SymDim Add(const SymDim &a, const SymDim &b) {
   return SymDim("(" + a.ToString() + ")+(" + b.ToString() + ")");
 }
 std::pair<SymDim, SymDim> Widths(const NodeProto &node, const SymDim &width,
-                                 shapes_ns::ShapesContext *ctx) {
+                                 shapes_ns::ShapesContext *ctx,
+                                 const char *context = "ComputeShapeMicrosoftAttention") {
   if (const auto *sizes = rt_ns::FindAttribute(node, "qkv_hidden_sizes")) {
     if (sizes->ints().size() != 3 || sizes->ints(0) <= 0 || sizes->ints(1) != sizes->ints(0) ||
         sizes->ints(2) <= 0)
-      Fail("qkv_hidden_sizes must be positive [Q,Q,V].");
+      Fail("qkv_hidden_sizes must be positive [Q,Q,V].", context);
     const auto sum = ml_cpu_compute::CheckedIndexAdd(
         ml_cpu_compute::CheckedIndexMultiply(2, sizes->ints(0), "MicrosoftAttention", "QK"),
         sizes->ints(2), "MicrosoftAttention", "QKV");
     if (ctx)
       Equal(*ctx, width, SymDim(sum));
     else if (!width.IsInt() || width.AsInt() != sum)
-      Fail("weights width disagrees with qkv_hidden_sizes.");
+      Fail("weights width disagrees with qkv_hidden_sizes.", context);
     return {SymDim(sizes->ints(0)), SymDim(sizes->ints(2))};
   }
-  const auto q = Divide(width, 3);
+  const auto q = Divide(width, 3, context);
   return {q, q};
 }
 } // namespace
@@ -188,6 +191,7 @@ void ComputeShapeMicrosoftAttention(shapes_ns::ShapesContext &ctx, const NodePro
 shapes_ns::PeakMemoryEstimate
 ComputePeakMemoryMicrosoftAttention(sym_ns::Device, const NodeProto &node,
                                     const std::vector<SymShape> &shapes) {
+  constexpr const char *context = "ComputePeakMemoryMicrosoftAttention";
   if (shapes.size() < 2 || shapes[0].Rank() != 3 || shapes[1].Rank() != 2)
     return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "Attention");
   if (Wired(node, 4) && (shapes.size() <= 4 || shapes[4].Rank() != 5))
@@ -200,17 +204,17 @@ ComputePeakMemoryMicrosoftAttention(sym_ns::Device, const NodeProto &node,
       if (!dim.IsInt())
         return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "Attention");
       if (dim.AsInt() < 0)
-        Fail("memory dimensions must be nonnegative.");
+        Fail("memory dimensions must be nonnegative.", context);
     }
   }
   const auto b = shapes[0][0].AsInt(), s = shapes[0][1].AsInt();
-  const auto [q, v] = Widths(node, shapes[1][1], nullptr);
+  const auto [q, v] = Widths(node, shapes[1][1], nullptr, context);
   const auto heads = rt_ns::GetAttributeIntOrDefault(node, "num_heads", 0);
   if (heads <= 0)
-    Fail("invalid head count.");
-  const auto h = Divide(q, heads).AsInt();
+    Fail("invalid head count.", context);
+  const auto h = Divide(q, heads, context).AsInt();
   if (shapes[0][2].AsInt() <= 0)
-    Fail("input hidden width must be positive.");
+    Fail("input hidden width must be positive.", context);
   const auto p = Wired(node, 4) ? shapes.at(4)[3].AsInt() : 0;
   const auto t = ml_cpu_compute::CheckedIndexAdd(p, s, "MicrosoftAttention", "total length");
   const bool additive = Wired(node, 3) || Wired(node, 5) ||

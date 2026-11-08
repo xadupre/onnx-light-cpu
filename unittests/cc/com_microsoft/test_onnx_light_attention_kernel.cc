@@ -16,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -39,7 +40,7 @@ rt::RuntimeContext Runtime() {
                             rt::TensorMap{{"x", rt::Tensor::FromFloat("x", {1, 2, 1}, {1, 2})},
                                           {"w", rt::Tensor::FromFloat("w", {1, 3}, {1, 1, 2})}}};
 }
-void Run(const NodeProto &node, rt::RuntimeContext &runtime) {
+void RunAttention(const NodeProto &node, rt::RuntimeContext &runtime) {
   onnx_light_cpu::MicrosoftAttentionKernel kernel(
       node, rt::KernelContext{rt::OpsetId("com.microsoft", 1)});
   kernel.Run(runtime);
@@ -52,7 +53,7 @@ TEST(MicrosoftAttentionKernel, ProjectionSoftmaxAndPackedPresent) {
   node.ref_input()[2] = "bias";
   auto runtime = Runtime();
   runtime.Set("bias", rt::Tensor::FromFloat("bias", {3}, {0, 0, 1}));
-  Run(node, runtime);
+  RunAttention(node, runtime);
   const auto &y = runtime.Get("y");
   ASSERT_EQ(y.shape, (rt::Shape{1, 2, 1}));
   EXPECT_NEAR(y.AsFloat()[0], 3 + 2 / (1 + std::exp(-1.f)), 1.e-5);
@@ -78,7 +79,7 @@ TEST(MicrosoftAttentionKernel, MasksLengthsStartsAndAllRawRanks) {
       runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2, 2}, {1, 0, 1, 0}));
     else
       runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 1, 3, 3}, {1, 0, 0, 1, 0, 0, 1, 0, 0}));
-    Run(node, runtime);
+    RunAttention(node, runtime);
     EXPECT_NEAR(runtime.Get("y").AsFloat()[0], mode == 1 ? 4 : 2, 1.e-5) << mode;
     EXPECT_NEAR(runtime.Get("y").AsFloat()[1], mode == 1 ? 4 : 2, 1.e-5) << mode;
   }
@@ -90,7 +91,7 @@ TEST(MicrosoftAttentionKernel, CausalCachedChunkAndFourDimensionalMaskOffset) {
     node.ref_input()[4] = "past";
     ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", int64_t{masked ? 0 : 1});
     auto runtime = Runtime();
-    runtime.Set("x", rt::Tensor::FromFloat("x", {1, 2, 1}, {0, 0}));
+    runtime.Put("x", rt::Tensor::FromFloat("x", {1, 2, 1}, {0, 0}), rt::RuntimeEventKind::kInput);
     runtime.Set("bias", rt::Tensor::FromFloat("bias", {3}, {0, 1, 2}));
     node.ref_input()[2] = "bias";
     runtime.Set("past", rt::Tensor::FromFloat("past", {2, 1, 1, 1, 1}, {7, 8}));
@@ -98,7 +99,7 @@ TEST(MicrosoftAttentionKernel, CausalCachedChunkAndFourDimensionalMaskOffset) {
       node.ref_input()[3] = "mask";
       runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 1, 3, 3}, {1, 1, 1, 0, 1, 0, 0, 0, 1}));
     }
-    Run(node, runtime);
+    RunAttention(node, runtime);
     EXPECT_NEAR(runtime.Get("y").AsFloat()[0], masked ? 2 : 5, 1.e-5);
     EXPECT_NEAR(runtime.Get("y").AsFloat()[1], masked ? 2 : 4, 1.e-5);
     const std::vector<float> expected{7, 1, 1, 8, 2, 2};
@@ -113,9 +114,9 @@ TEST(MicrosoftAttentionKernel, UnequalValueWidthAndAttentionBias) {
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "qkv_hidden_sizes", std::vector<int64_t>{1, 1, 2});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "scale", 0.f);
   auto runtime = Runtime();
-  runtime.Set("w", rt::Tensor::FromFloat("w", {1, 4}, {1, 1, 2, 3}));
+  runtime.Put("w", rt::Tensor::FromFloat("w", {1, 4}, {1, 1, 2, 3}), rt::RuntimeEventKind::kInput);
   runtime.Set("ab", rt::Tensor::FromFloat("ab", {1, 1, 2, 2}, {0, std::log(3.f), 0, 0}));
-  Run(node, runtime);
+  RunAttention(node, runtime);
   ASSERT_EQ(runtime.Get("y").shape, (rt::Shape{1, 2, 2}));
   const std::vector<float> expected{3.5f, 5.25f, 3, 4.5f};
   for (int i = 0; i < 4; ++i)
@@ -125,11 +126,13 @@ TEST(MicrosoftAttentionKernel, UnequalValueWidthAndAttentionBias) {
 TEST(MicrosoftAttentionKernel, MultiHeadProjectionStrides) {
   auto node = Node(true, 2);
   auto runtime = Runtime();
-  runtime.Set("x", rt::Tensor::FromFloat("x", {2, 2, 2}, {0, 0, 0, 0, 0, 0, 0, 0}));
-  runtime.Set("w", rt::Tensor::FromFloat("w", {2, 6}, std::vector<float>(12, 0)));
+  runtime.Put("x", rt::Tensor::FromFloat("x", {2, 2, 2}, {0, 0, 0, 0, 0, 0, 0, 0}),
+              rt::RuntimeEventKind::kInput);
+  runtime.Put("w", rt::Tensor::FromFloat("w", {2, 6}, std::vector<float>(12, 0)),
+              rt::RuntimeEventKind::kInput);
   node.ref_input()[2] = "bias";
   runtime.Set("bias", rt::Tensor::FromFloat("bias", {6}, {0, 0, 1, 2, 3, 4}));
-  Run(node, runtime);
+  RunAttention(node, runtime);
   for (int i = 0; i < 8; ++i)
     EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[i], i % 2 ? 4 : 3);
   const auto &present = runtime.Get("present");
@@ -143,12 +146,12 @@ TEST(MicrosoftAttentionKernel, EmptyQueriesPreservePast) {
   for (bool past : {false, true}) {
     auto node = Node();
     auto runtime = Runtime();
-    runtime.Set("x", rt::Tensor::FromFloat("x", {1, 0, 1}, {}));
+    runtime.Put("x", rt::Tensor::FromFloat("x", {1, 0, 1}, {}), rt::RuntimeEventKind::kInput);
     if (past) {
       node.ref_input()[4] = "past";
       runtime.Set("past", rt::Tensor::FromFloat("past", {2, 1, 1, 1, 1}, {3, 4}));
     }
-    Run(node, runtime);
+    RunAttention(node, runtime);
     EXPECT_EQ(runtime.Get("y").shape, (rt::Shape{1, 0, 1}));
     EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 1, 1, past ? 1 : 0, 1}));
     if (past)
@@ -169,11 +172,13 @@ TEST(MicrosoftAttentionKernel, RejectsUnsupportedModesTypesAndShapes) {
       runtime.Set("past_sequence_length", rt::Tensor::FromInt32("past_sequence_length", {}, {0}));
     }
     if (mode == 3)
-      runtime.Set("w", rt::Tensor::FromFloat("w", {1, 4}, {1, 1, 1, 1}));
+      runtime.Put("w", rt::Tensor::FromFloat("w", {1, 4}, {1, 1, 1, 1}),
+                  rt::RuntimeEventKind::kInput);
     if (mode == 4)
-      runtime.Set("w", rt::Tensor::FromFloat("w", {2, 3}, std::vector<float>(6, 1)));
+      runtime.Put("w", rt::Tensor::FromFloat("w", {2, 3}, std::vector<float>(6, 1)),
+                  rt::RuntimeEventKind::kInput);
     if (mode == 5)
-      runtime.Set("x", rt::MakeFloat16Tensor("x", {1, 2, 1}, {1, 2}));
+      runtime.Put("x", rt::MakeFloat16Tensor("x", {1, 2, 1}, {1, 2}), rt::RuntimeEventKind::kInput);
     if (mode == 6) {
       node.ref_input()[3] = "mask";
       runtime.Set("mask", rt::Tensor::FromInt32("mask", {5}, std::vector<int32_t>(5, 1)));
@@ -191,17 +196,17 @@ TEST(MicrosoftAttentionKernel, RejectsUnsupportedModesTypesAndShapes) {
     }
     if (mode == 10)
       ONNX_LIGHT_NAMESPACE::AddAttribute(node, "rotary_embedding_dim", int64_t{16});
-    EXPECT_THROW(Run(node, runtime), std::invalid_argument) << mode;
+    EXPECT_THROW(RunAttention(node, runtime), std::invalid_argument) << mode;
   }
 }
 
 TEST(MicrosoftAttentionKernel, EmptyBatch) {
   auto node = Node();
   auto runtime = Runtime();
-  runtime.Set("x", rt::Tensor::FromFloat("x", {0, 2, 1}, {}));
+  runtime.Put("x", rt::Tensor::FromFloat("x", {0, 2, 1}, {}), rt::RuntimeEventKind::kInput);
   node.ref_input()[4] = "past";
   runtime.Set("past", rt::Tensor::FromFloat("past", {2, 0, 1, 2, 1}, {}));
-  Run(node, runtime);
+  RunAttention(node, runtime);
   EXPECT_EQ(runtime.Get("y").shape, (rt::Shape{0, 2, 1}));
   EXPECT_EQ(runtime.Get("present").shape, (rt::Shape{2, 0, 1, 4, 1}));
 }
@@ -210,12 +215,12 @@ TEST(MicrosoftAttentionKernel, SingleTokenPrefillAndDecode) {
   for (bool cached : {false, true}) {
     auto node = Node();
     auto runtime = Runtime();
-    runtime.Set("x", rt::Tensor::FromFloat("x", {1, 1, 1}, {2}));
+    runtime.Put("x", rt::Tensor::FromFloat("x", {1, 1, 1}, {2}), rt::RuntimeEventKind::kInput);
     if (cached) {
       node.ref_input()[4] = "past";
       runtime.Set("past", rt::Tensor::FromFloat("past", {2, 1, 1, 1, 1}, {1, 2}));
     }
-    Run(node, runtime);
+    RunAttention(node, runtime);
     EXPECT_NEAR(runtime.Get("y").AsFloat()[0], cached ? 2 + 2 / (1 + std::exp(-2.f)) : 4, 1.e-5);
   }
 }
@@ -227,7 +232,7 @@ TEST(MicrosoftAttentionKernel, FiniteFullyMaskedRowsAndCausalFilterOverride) {
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "mask_filter_value", -1.f);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", int64_t{1});
   runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2}, {0, 0}));
-  Run(node, runtime);
+  RunAttention(node, runtime);
   EXPECT_NEAR(runtime.Get("y").AsFloat()[0], 2, 1.e-5);
   EXPECT_NEAR(runtime.Get("y").AsFloat()[1], 2 + 2 / (1 + std::exp(-2.f)), 1.e-5);
 }
@@ -251,10 +256,40 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   EXPECT_EQ(y[2].AsInt(), 32);
   EXPECT_EQ(shapes.Get("present").Shape()[4].AsInt(), 8);
   EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMicrosoftAttention(
-                sym::Device::kCPU, node, {sym::SymShape({2, 3, 32}), sym::SymShape({32, 96})}),
+                sym::Device::kCPU, node, {sym::SymShape({2, 3, 32}), sym::SymShape({32, 96})})
+                .worst_case.AsInt(),
             0);
   shapes.Set("w", sym::SymTensor(nullptr, sym::TensorType::kFloat, sym::SymShape({31, 96})));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node), std::invalid_argument);
+}
+
+TEST(MicrosoftAttentionKernel, ValidationErrorsIdentifyShapeOrPeakMemoryEntryPoint) {
+  for (int mode = 0; mode < 5; ++mode) {
+    auto node = Node(false, mode == 0 ? 0 : mode == 4 ? 2 : 1);
+    const std::vector<sym::SymShape> inputs{sym::SymShape({1, 2, 1}),
+                                            sym::SymShape({1, mode == 2 ? 4 : 3})};
+    if (mode == 1)
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "qkv_hidden_sizes", std::vector<int64_t>{1, 2, 1});
+    if (mode == 3)
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "qkv_hidden_sizes", std::vector<int64_t>{1, 1, 2});
+    try {
+      onnx_light_cpu::ComputePeakMemoryMicrosoftAttention(sym::Device::kCPU, node, inputs);
+      FAIL() << "Expected invalid peak-memory inputs, mode " << mode;
+    } catch (const std::invalid_argument &error) {
+      EXPECT_EQ(std::string(error.what()).find("ComputePeakMemoryMicrosoftAttention: "), 0u)
+          << error.what();
+    }
+    ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext shapes;
+    shapes.Set("x", sym::SymTensor(nullptr, sym::TensorType::kFloat, inputs[0]));
+    shapes.Set("w", sym::SymTensor(nullptr, sym::TensorType::kFloat, inputs[1]));
+    try {
+      onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node);
+      FAIL() << "Expected invalid shape inputs, mode " << mode;
+    } catch (const std::invalid_argument &error) {
+      EXPECT_EQ(std::string(error.what()).find("ComputeShapeMicrosoftAttention: "), 0u)
+          << error.what();
+    }
+  }
 }
 
 } // namespace
