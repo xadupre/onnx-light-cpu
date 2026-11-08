@@ -201,14 +201,14 @@ TEST(MicrosoftAttentionCompute, AttentionWorkerScratchUsesAllocatorBeforeDispatc
   };
 
   ml_cpu_compute::AttentionDescriptor descriptor;
-  descriptor.q_num_heads = descriptor.kv_num_heads = 2;
-  const std::vector<std::int64_t> shape{1, 128, 64};
-  const std::vector<std::int64_t> value_shape{1, 128, 1024};
+  descriptor.q_num_heads = descriptor.kv_num_heads = 1;
+  const std::vector<std::int64_t> shape{1, 300, 1};
+  const std::vector<std::int64_t> value_shape{1, 300, 128};
   const ml_cpu_compute::AttentionPlan plan(descriptor, ml_cpu_compute::AttentionLayout::kRank3,
                                            shape, shape, value_shape, {},
                                            ml_cpu_compute::AttentionMaskKind::kNone);
-  const std::vector<float> q(128 * 64), k(128 * 64), v(128 * 1024);
-  std::vector<float> y(128 * 1024);
+  const std::vector<float> q(300), k(300), v(300 * 128);
+  std::vector<float> y(300 * 128);
   ml_cpu_compute::AttentionExecutionInfo tiled_info;
   ml_cpu_compute::AttentionDescriptor cached_descriptor;
   cached_descriptor.q_num_heads = cached_descriptor.kv_num_heads = 2;
@@ -238,6 +238,7 @@ TEST(MicrosoftAttentionCompute, AttentionWorkerScratchUsesAllocatorBeforeDispatc
     streaming_dispatch_allocations = state.allocations_during_dispatch - tiled_dispatch_allocations;
   }
   EXPECT_EQ(tiled_info.path, ml_cpu_compute::AttentionExecutionPath::kTiled);
+  EXPECT_EQ(tiled_info.query_tile, 128u);
   EXPECT_EQ(streaming_info.path, ml_cpu_compute::AttentionExecutionPath::kStreaming);
   EXPECT_EQ(tiled_pre_dispatch_allocations, 1u);
   EXPECT_EQ(state.pre_dispatch_allocations - tiled_pre_dispatch_allocations, 1u);

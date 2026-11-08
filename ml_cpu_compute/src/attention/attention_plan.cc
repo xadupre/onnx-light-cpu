@@ -1737,37 +1737,46 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   qk_options.k = plan.head_dim;
   qk_options.alpha = plan.scale;
   qk_options.maximum_participants = 1;
-  const GemmPlan<float> qk_scratch_plan(qk_options);
   GemmPlanOptions<float> value_options;
-  value_options.m = query_block;
   value_options.n = plan.v_head_dim;
-  value_options.k = kv_block;
   value_options.maximum_participants = 1;
-  const GemmPlan<float> value_scratch_plan(value_options);
-  std::size_t gemm_worker_bytes =
-      std::max(qk_scratch_plan.ScratchBytes(1), value_scratch_plan.ScratchBytes(1));
-  if constexpr (!std::is_same_v<Codec, Float32Codec>) {
-    GemmHalfPlanOptions half_qk_options;
-    half_qk_options.is_bfloat16 = std::is_same_v<Codec, BFloat16Codec>;
-    half_qk_options.trans_b = true;
-    half_qk_options.m = query_block;
-    half_qk_options.n = kv_block;
-    half_qk_options.k = plan.head_dim;
-    half_qk_options.alpha = plan.scale;
-    half_qk_options.maximum_participants = 1;
-    const GemmHalfPlan half_qk_scratch_plan(half_qk_options);
-    gemm_worker_bytes = std::max(gemm_worker_bytes, half_qk_scratch_plan.ScratchBytes(1));
-  }
-#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
-  if (dense_rank4 && query_block >= 64 && kv_block >= 64 && plan.head_dim >= 64 &&
-      plan.head_dim <= 256) {
-    const GemmBlocking blocking{query_block, kv_block, plan.head_dim, kGemmAVX2MR, 16};
+  value_options.k = kv_block;
+  std::size_t gemm_worker_bytes = 0;
+  const auto include_gemm_scratch = [&](std::size_t rows) {
+    qk_options.m = rows;
+    value_options.m = rows;
+    const GemmPlan<float> qk_scratch_plan(qk_options);
+    const GemmPlan<float> value_scratch_plan(value_options);
     gemm_worker_bytes = std::max(
-        gemm_worker_bytes,
-        detail::GemmProductScratchBytes(GemmAlgorithm::kGeneral, false, true, query_block, kv_block,
-                                        plan.head_dim, blocking, sizeof(float), 1));
-  }
+        {gemm_worker_bytes, qk_scratch_plan.ScratchBytes(1), value_scratch_plan.ScratchBytes(1)});
+    if constexpr (!std::is_same_v<Codec, Float32Codec>) {
+      GemmHalfPlanOptions half_qk_options;
+      half_qk_options.is_bfloat16 = std::is_same_v<Codec, BFloat16Codec>;
+      half_qk_options.trans_b = true;
+      half_qk_options.m = rows;
+      half_qk_options.n = kv_block;
+      half_qk_options.k = plan.head_dim;
+      half_qk_options.alpha = plan.scale;
+      half_qk_options.maximum_participants = 1;
+      const GemmHalfPlan half_qk_scratch_plan(half_qk_options);
+      gemm_worker_bytes = std::max(gemm_worker_bytes, half_qk_scratch_plan.ScratchBytes(1));
+    }
+#ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
+    if (dense_rank4 && rows >= 64 && kv_block >= 64 && plan.head_dim >= 64 &&
+        plan.head_dim <= 256) {
+      const GemmBlocking blocking{rows, kv_block, plan.head_dim, kGemmAVX2MR, 16};
+      gemm_worker_bytes = std::max(
+          gemm_worker_bytes,
+          detail::GemmProductScratchBytes(GemmAlgorithm::kGeneral, false, true, rows, kv_block,
+                                          plan.head_dim, blocking, sizeof(float), 1));
+    }
 #endif
+  };
+  include_gemm_scratch(query_block);
+  const std::size_t tail_rows = plan.q_length % query_block;
+  if (tail_rows != 0) {
+    include_gemm_scratch(tail_rows);
+  }
 
   AttentionScratchLayout scratch_layout;
   const auto scores_offset =
