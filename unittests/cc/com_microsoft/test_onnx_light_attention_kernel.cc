@@ -263,6 +263,24 @@ TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMicrosoftAttention(shapes, node), std::invalid_argument);
 }
 
+TEST(MicrosoftAttentionKernel, CausalOnlyPeakMemoryExcludesAdditiveMask) {
+  const std::vector<sym::SymShape> inputs{sym::SymShape({1, 128, 64}), sym::SymShape({64, 192})};
+  auto causal_node = Node(false);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(causal_node, "unidirectional", int64_t{1});
+  const auto causal_bytes =
+      onnx_light_cpu::ComputePeakMemoryMicrosoftAttention(sym::Device::kCPU, causal_node, inputs)
+          .worst_case.AsInt();
+
+  auto masked_node = Node(false);
+  masked_node.ref_input()[5] = "attention_bias";
+  ONNX_LIGHT_NAMESPACE::AddAttribute(masked_node, "unidirectional", int64_t{1});
+  const auto masked_bytes =
+      onnx_light_cpu::ComputePeakMemoryMicrosoftAttention(sym::Device::kCPU, masked_node, inputs)
+          .worst_case.AsInt();
+
+  EXPECT_LT(causal_bytes, masked_bytes);
+}
+
 TEST(MicrosoftAttentionKernel, ValidationErrorsIdentifyShapeOrPeakMemoryEntryPoint) {
   for (int mode = 0; mode < 5; ++mode) {
     auto node = Node(false, mode == 0 ? 0 : mode == 4 ? 2 : 1);

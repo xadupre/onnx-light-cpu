@@ -27,6 +27,46 @@ from onnx_light_cpu import (
 
 
 class TestMicrosoftAttention(ExtTestCase):
+    def test_causal_attention_without_mask_matches_upstream(self):
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        feeds = {
+            "input": np.array([[[1, 0], [0, 1], [1, 1]]], dtype=np.float32),
+            "weights": np.array([[1, 0, 0, 1, 1, 0], [0, 1, 1, 0, 0, 1]], dtype=np.float32),
+        }
+        model = helper.make_model(
+            helper.make_graph(
+                [
+                    helper.make_node(
+                        "Attention",
+                        ["input", "weights", "", "", ""],
+                        ["output"],
+                        domain="com.microsoft",
+                        num_heads=1,
+                        unidirectional=1,
+                    )
+                ],
+                "microsoft-attention-causal",
+                [
+                    helper.make_tensor_value_info(name, TensorProto.FLOAT, value.shape)
+                    for name, value in feeds.items()
+                ],
+                [helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 3, 2])],
+            ),
+            opset_imports=[helper.make_opsetid("com.microsoft", 1)],
+            ir_version=10,
+        )
+        expected = onnxruntime.InferenceSession(
+            model.SerializeToString(),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        ).run(None, feeds)
+        session = ReferenceEvaluator(model)
+        register_kernel_for_session(session, "com.microsoft", "Attention")
+        actual = session.run(None, feeds)
+        np.testing.assert_allclose(actual[0], expected[0], rtol=3e-5, atol=3e-5)
+
     def test_projection_and_present_match_upstream(self):
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = 1

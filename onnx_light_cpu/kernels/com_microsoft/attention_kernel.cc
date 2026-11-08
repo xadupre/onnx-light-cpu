@@ -13,7 +13,6 @@
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include <cmath>
-#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -131,8 +130,9 @@ void MicrosoftAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
   ml_cpu_compute::AttentionDescriptor descriptor;
   descriptor.q_num_heads = descriptor.kv_num_heads = heads;
   descriptor.scale = scale;
+  descriptor.is_causal = causal;
   descriptor.has_past_key = descriptor.has_past_value = past != nullptr;
-  const bool additive = mask || ab || causal;
+  const bool additive = mask || ab;
   descriptor.has_attn_mask = additive;
   const std::vector<int64_t> qs{b, s, q}, vs{b, s, v}, ms{b, heads, s, t};
   const std::vector<int64_t> ps =
@@ -169,8 +169,6 @@ void MicrosoftAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
         allowed = raw[(batch * m + p + query) * m + key] > 0;
       }
       float value = allowed ? 0.f : filter;
-      if (causal && key > p + query)
-        value = std::numeric_limits<float>::lowest();
       if (ab)
         value += attention_bias[((ab->shape[0] == 1 ? 0 : batch) * ab->shape[1] +
                                  (ab->shape[1] == 1 ? 0 : head)) *

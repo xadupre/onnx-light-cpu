@@ -217,10 +217,10 @@ ComputePeakMemoryMicrosoftAttention(sym_ns::Device, const NodeProto &node,
     Fail("input hidden width must be positive.", context);
   const auto p = Wired(node, 4) ? shapes.at(4)[3].AsInt() : 0;
   const auto t = ml_cpu_compute::CheckedIndexAdd(p, s, "MicrosoftAttention", "total length");
-  const bool additive = Wired(node, 3) || Wired(node, 5) ||
-                        rt_ns::GetAttributeIntOrDefault(node, "unidirectional", 0);
+  const bool additive = Wired(node, 3) || Wired(node, 5);
   ml_cpu_compute::AttentionDescriptor descriptor;
   descriptor.q_num_heads = descriptor.kv_num_heads = heads;
+  descriptor.is_causal = rt_ns::GetAttributeIntOrDefault(node, "unidirectional", 0) != 0;
   descriptor.has_past_key = descriptor.has_past_value = Wired(node, 4);
   descriptor.has_attn_mask = additive;
   const std::vector<int64_t> qs{b, s, q.AsInt()}, vs{b, s, v.AsInt()}, ms{b, heads, s, t};

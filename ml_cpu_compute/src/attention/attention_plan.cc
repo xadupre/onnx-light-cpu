@@ -39,17 +39,16 @@ constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
 
 struct WorkerRanges {
   std::size_t count;
-  std::int64_t block_size;
 };
 
 WorkerRanges MakeWorkerRanges(std::int64_t total, const ExecutionSchedule &schedule) {
   if (total <= 0) {
-    return {0, 0};
+    return {0};
   }
   const std::int64_t requested_blocks = ExecutionBlockCount(total, schedule);
   const std::int64_t block_size = total / requested_blocks + (total % requested_blocks != 0);
   const std::int64_t block_count = total / block_size + (total % block_size != 0);
-  return {static_cast<std::size_t>(block_count), block_size};
+  return {static_cast<std::size_t>(block_count)};
 }
 
 class AttentionScratchLayout {
@@ -1214,15 +1213,20 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // worker (no parallel overhead) when there is little work -- always the
   // case for short-query/decode invocations -- while a prefill invocation
   // (many rows) exposes enough independent outer work to scale.
-  ExecuteRanges(
-      static_cast<std::int64_t>(total_rows), schedule, [&](std::int64_t begin, std::int64_t end) {
-        const std::size_t worker = static_cast<std::size_t>(begin / ranges.block_size);
-        float *scores = WorkerScratch<float>(scratch_data, worker, worker_bytes, scores_offset);
-        float *q_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, q_fp32_offset);
+  ExecuteRangesWithIndex(
+      static_cast<std::int64_t>(total_rows), schedule,
+      [&](std::int64_t begin, std::int64_t end, std::int64_t range_index) {
+        const std::size_t scratch_index = static_cast<std::size_t>(range_index);
+        float *scores =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, scores_offset);
+        float *q_fp32 =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, q_fp32_offset);
         float *accumulator =
-            WorkerScratch<float>(scratch_data, worker, worker_bytes, accumulator_offset);
-        float *k_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, k_fp32_offset);
-        float *v_fp32 = WorkerScratch<float>(scratch_data, worker, worker_bytes, v_fp32_offset);
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, accumulator_offset);
+        float *k_fp32 =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, k_fp32_offset);
+        float *v_fp32 =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, v_fp32_offset);
         // Peak temporary storage: one `Bc`-sized score tile, one
         // `head_dim`-sized FP32 query cache, and one `v_head_dim`
         // accumulator per worker (`Br == 1`). FP16 additionally retains up to
@@ -1801,25 +1805,32 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   ExecutionBuffer scratch(
       CheckedMultiply(ranges.count, worker_bytes, "Attention", "tiled worker scratch"));
   auto *scratch_data = scratch.data();
-  ExecuteRanges(
-      static_cast<std::int64_t>(total_tasks), schedule, [&](std::int64_t begin, std::int64_t end) {
-        const std::size_t worker = static_cast<std::size_t>(begin / ranges.block_size);
-        float *scores = WorkerScratch<float>(scratch_data, worker, worker_bytes, scores_offset);
+  ExecuteRangesWithIndex(
+      static_cast<std::int64_t>(total_tasks), schedule,
+      [&](std::int64_t begin, std::int64_t end, std::int64_t range_index) {
+        const std::size_t scratch_index = static_cast<std::size_t>(range_index);
+        float *scores =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, scores_offset);
         float *accumulator =
-            WorkerScratch<float>(scratch_data, worker, worker_bytes, accumulator_offset);
-        float *product = WorkerScratch<float>(scratch_data, worker, worker_bytes, product_offset);
-        float *maxima = WorkerScratch<float>(scratch_data, worker, worker_bytes, maxima_offset);
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, accumulator_offset);
+        float *product =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, product_offset);
+        float *maxima =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, maxima_offset);
         float *denominators =
-            WorkerScratch<float>(scratch_data, worker, worker_bytes, denominators_offset);
-        auto *valid = WorkerScratch<std::uint8_t>(scratch_data, worker, worker_bytes, valid_offset);
-        auto *packed_q = WorkerScratch<typename Codec::Storage>(scratch_data, worker, worker_bytes,
-                                                                packed_q_offset);
-        auto *packed_k = WorkerScratch<typename Codec::Storage>(scratch_data, worker, worker_bytes,
-                                                                packed_k_offset);
-        float *packed_v = WorkerScratch<float>(scratch_data, worker, worker_bytes, packed_v_offset);
-        float *output = WorkerScratch<float>(scratch_data, worker, worker_bytes, output_offset);
-        auto *gemm_scratch_data =
-            WorkerScratch<std::byte>(scratch_data, worker, worker_bytes, gemm_scratch_offset);
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, denominators_offset);
+        auto *valid =
+            WorkerScratch<std::uint8_t>(scratch_data, scratch_index, worker_bytes, valid_offset);
+        auto *packed_q = WorkerScratch<typename Codec::Storage>(scratch_data, scratch_index,
+                                                                worker_bytes, packed_q_offset);
+        auto *packed_k = WorkerScratch<typename Codec::Storage>(scratch_data, scratch_index,
+                                                                worker_bytes, packed_k_offset);
+        float *packed_v =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, packed_v_offset);
+        float *output =
+            WorkerScratch<float>(scratch_data, scratch_index, worker_bytes, output_offset);
+        auto *gemm_scratch_data = WorkerScratch<std::byte>(scratch_data, scratch_index,
+                                                           worker_bytes, gemm_scratch_offset);
         detail::GemmScratch gemm_scratch{gemm_scratch_data, gemm_worker_bytes, 0};
 
         for (std::int64_t task = begin; task < end; ++task) {

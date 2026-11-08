@@ -225,9 +225,11 @@ inline int64_t ExecutionBlockCount(int64_t total, const ExecutionSchedule &sched
   return std::min(max_threads, std::max<int64_t>(useful_blocks, 1));
 }
 
+// As ExecuteRanges, with a unique, stable block index for each callback in this
+// invocation. The index identifies a dispatched range, not a worker thread.
 template <typename Fn>
-void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t block_multiple,
-                   Fn fn) {
+void ExecuteRangesWithIndex(int64_t total, const ExecutionSchedule &schedule,
+                            int64_t block_multiple, Fn fn) {
   if (total <= 0) {
     return;
   }
@@ -235,7 +237,7 @@ void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t blo
   int64_t num_blocks = ExecutionBlockCount(total, schedule);
   if (executor == nullptr || num_blocks <= 1) {
     detail::ExecutionRegionScope region;
-    fn(0, total);
+    fn(0, total, int64_t{0});
     return;
   }
 
@@ -250,7 +252,7 @@ void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t blo
       return;
     }
     detail::ExecutionRegionScope region;
-    fn(begin, std::min(begin + block, total));
+    fn(begin, std::min(begin + block, total), index);
   };
   using Callable = decltype(run_block);
   executor->run_blocks(
@@ -258,8 +260,20 @@ void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t blo
       [](void *context, int64_t block_index) { (*static_cast<Callable *>(context))(block_index); });
 }
 
+template <typename Fn>
+void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t block_multiple,
+                   Fn fn) {
+  ExecuteRangesWithIndex(total, schedule, block_multiple,
+                         [&fn](int64_t begin, int64_t end, int64_t) { fn(begin, end); });
+}
+
 template <typename Fn> void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, Fn fn) {
   ExecuteRanges(total, schedule, int64_t{1}, std::move(fn));
+}
+
+template <typename Fn>
+void ExecuteRangesWithIndex(int64_t total, const ExecutionSchedule &schedule, Fn fn) {
+  ExecuteRangesWithIndex(total, schedule, int64_t{1}, std::move(fn));
 }
 
 inline int64_t ExecutionCostedBlockCount(int64_t total, const ExecutionWorkCost &cost,

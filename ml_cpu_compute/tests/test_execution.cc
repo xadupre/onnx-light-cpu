@@ -17,6 +17,7 @@ namespace {
 
 using ml_cpu_compute::CurrentExecutionExecutor;
 using ml_cpu_compute::ExecuteRanges;
+using ml_cpu_compute::ExecuteRangesWithIndex;
 using ml_cpu_compute::ExecutionBlockCount;
 using ml_cpu_compute::ExecutionBlockFn;
 using ml_cpu_compute::ExecutionExecutorScope;
@@ -97,6 +98,27 @@ TEST(Execution, InjectedExecutorOwnsParallelDispatch) {
     EXPECT_EQ(hit.load(std::memory_order_relaxed), 1);
   }
   EXPECT_EQ(ml_cpu_compute::CurrentExecutionExecutor(), nullptr);
+}
+
+TEST(Execution, IndexedRangesHaveUniqueStableIndices) {
+  InlineExecutor executor;
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  std::vector<std::atomic<int>> hits(4);
+  {
+    ExecutionExecutorScope scope(&view);
+    ExecuteRangesWithIndex(1000000, ml_cpu_compute::ExecutionSchedule{1, 1, 4},
+                           [&hits](int64_t begin, int64_t end, int64_t index) {
+                             EXPECT_EQ(index, begin / 250000);
+                             EXPECT_LT(index, static_cast<int64_t>(hits.size()));
+                             hits[static_cast<std::size_t>(index)].fetch_add(
+                                 1, std::memory_order_relaxed);
+                             EXPECT_GT(end, begin);
+                           });
+  }
+  EXPECT_EQ(executor.dispatches, 1);
+  for (const auto &hit : hits) {
+    EXPECT_EQ(hit.load(std::memory_order_relaxed), 1);
+  }
 }
 
 TEST(Execution, SmallInjectedWorkRemainsInline) {
