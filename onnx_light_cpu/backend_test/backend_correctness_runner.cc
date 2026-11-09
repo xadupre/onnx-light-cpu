@@ -18,6 +18,7 @@
 #include "onnx_proto/onnx_helper.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <optional>
@@ -88,6 +89,36 @@ std::optional<rt_ns::DataType> TensorType(const GraphProto &graph, const std::st
                    [&name](const TensorProto &tensor) { return tensor.name() == name; });
   if (initializer != graph.initializer().end()) {
     return static_cast<rt_ns::DataType>(initializer->data_type());
+  }
+  return std::nullopt;
+}
+
+std::optional<std::size_t> TensorRank(const GraphProto &graph, const std::string &name) {
+  const auto value_rank = [&name](const auto &values) -> std::optional<std::size_t> {
+    const auto found =
+        std::find_if(values.begin(), values.end(), [&name](const ValueInfoProto &value) {
+          return value.name() == name && value.has_type() && value.type().has_tensor_type() &&
+                 value.type().tensor_type().has_shape();
+        });
+    if (found == values.end()) {
+      return std::nullopt;
+    }
+    return found->type().tensor_type().shape().dim().size();
+  };
+  if (const auto rank = value_rank(graph.input())) {
+    return rank;
+  }
+  if (const auto rank = value_rank(graph.value_info())) {
+    return rank;
+  }
+  if (const auto rank = value_rank(graph.output())) {
+    return rank;
+  }
+  const auto initializer =
+      std::find_if(graph.initializer().begin(), graph.initializer().end(),
+                   [&name](const TensorProto &tensor) { return tensor.name() == name; });
+  if (initializer != graph.initializer().end()) {
+    return initializer->dims().size();
   }
   return std::nullopt;
 }
@@ -167,6 +198,20 @@ bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
           rt_ns::GetAttributeStringOrDefault(node, "reduction", "none") != "none") {
         reason = "ScatterND supports only reduction='none'";
         return false;
+      }
+    }
+  }
+  if (kernel.domain == "ai.onnx" && kernel.op_type == "Gemm") {
+    for (const NodeProto &node : graph.node()) {
+      if (ONNX_LIGHT_NAMESPACE::NormaliseDomain(node.domain()) != kernel.domain ||
+          node.op_type() != kernel.op_type) {
+        continue;
+      }
+      for (std::size_t i = 0; i < std::min<std::size_t>(2, node.input().size()); ++i) {
+        if (const auto rank = TensorRank(graph, node.input(i)); rank && *rank != 2) {
+          reason = "Gemm supports only 2-D inputs A and B";
+          return false;
+        }
       }
     }
   }

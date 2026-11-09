@@ -431,9 +431,25 @@ TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessC
     ASSERT_NE(skipped, report.skipped.end()) << name;
     EXPECT_EQ(skipped->reason, "ScatterND supports only reduction='none'") << name;
   }
+  for (const std::string &name :
+       {"test_cc_gemm_linear_vector_no_bias", "test_cc_gemm_linear_vector_bias",
+        "test_cc_gemm_linear_rank3_no_bias", "test_cc_gemm_linear_rank3_bias",
+        "test_cc_gemm_linear_rank4_no_bias", "test_cc_gemm_linear_rank4_bias",
+        "test_cc_gemm_linear_empty_batch_no_bias", "test_cc_gemm_linear_empty_batch_bias",
+        "test_cc_gemm_linear_empty_features_no_bias", "test_cc_gemm_linear_empty_features_bias",
+        "test_cc_gemm_high_rank_transpose"}) {
+    const auto skipped =
+        std::find_if(report.skipped.begin(), report.skipped.end(), [&name](const auto &result) {
+          return result.op_type == "Gemm" && result.case_name == name;
+        });
+    ASSERT_NE(skipped, report.skipped.end()) << name;
+    EXPECT_EQ(skipped->reason, "Gemm supports only 2-D inputs A and B") << name;
+  }
   for (const auto &skipped : report.skipped) {
     EXPECT_FALSE(skipped.op_type == "ScatterND" &&
                  skipped.case_name.rfind("test_cpu_scatternd_", 0) == 0)
+        << skipped.case_name << ": " << skipped.reason;
+    EXPECT_FALSE(skipped.op_type == "Gemm" && skipped.case_name.rfind("test_cpu_gemm_", 0) == 0)
         << skipped.case_name << ": " << skipped.reason;
   }
 }
