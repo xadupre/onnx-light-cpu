@@ -42,6 +42,7 @@ def optimize_generation_logits(model: ModelProto) -> ModelProto:
         return result
 
     infos = {value.name: value for value in (*graph.input, *graph.value_info)}
+    graph_inputs = {value.name: value for value in graph.input}
     weights = {value.name: value for value in graph.initializer}
     outputs = {value.name for value in graph.output}
     consumers: dict[str, list[int]] = {}
@@ -54,9 +55,9 @@ def optimize_generation_logits(model: ModelProto) -> ModelProto:
             producers[name] = index
 
     def shape(name):
-        if name in weights:
+        if name in weights and name not in graph_inputs:
             return list(weights[name].dims)
-        value = infos.get(name)
+        value = graph_inputs.get(name, infos.get(name))
         if value is None or not value.type.tensor_type.HasField("shape"):
             return None
         return [
@@ -95,7 +96,9 @@ def optimize_generation_logits(model: ModelProto) -> ModelProto:
         hidden, weight = projection.input
         hshape, wshape, pshape = shape(hidden), shape(weight), shape(positions)
         ptype = None
-        if positions in weights:
+        if positions in graph_inputs:
+            ptype = graph_inputs[positions].type.tensor_type.elem_type
+        elif positions in weights:
             ptype = weights[positions].data_type
         elif positions in infos:
             ptype = infos[positions].type.tensor_type.elem_type

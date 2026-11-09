@@ -50,6 +50,8 @@ weight. Positions must have shape ``[B, 1, 1]`` and INT64 dtype. Selection keeps
 the singleton token axis and the original element type. Floating-point GEMM
 implementations can use different accumulation orders, so comparisons use
 dtype-appropriate tolerances, not bitwise equality.
+For overridable initializers, the proof uses the declared graph input shape,
+not the shape of the default initializer.
 
 The full MatMul result must have exactly one consumer, that GatherND, and must
 not be a graph output. Otherwise preparation leaves the graph unchanged. It
@@ -126,3 +128,32 @@ bytes for ``S=128, V=32000``. The projection performs 128 times less matrix
 arithmetic; neither prefill nor projection latency is promised to improve
 128-fold. Keep these results separate from the existing all-token ASV result,
 prepacking work, and activation-fusion work.
+
+An illustrative synthetic run on 2026-11-09 (ORT 1.31.1, one thread, two warmups,
+ten measured calls) gave:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Output/projection mode
+     - Prefill proxy (ms)
+     - Projection (ms)
+     - Logits bytes
+   * - All tokens
+     - 38.41
+     - 38.05
+     - 16,384,000
+   * - Selection after projection
+     - 39.00
+     - 38.27
+     - 128,000
+   * - Selection before projection
+     - 2.30
+     - 2.16
+     - 128,000
+
+These are shared-runner observations, not performance gates. Accelerated CPU
+measurements were unavailable in that environment: the released onnx-light
+0.2.6 wheel lacked APIs required to build this checkout against its runtime.
+Run the default two-backend command with a matching onnx-light build to collect
+that comparison; no accelerated CPU or full TinyLLM latency is claimed here.

@@ -169,6 +169,28 @@ class TestGenerationLogits(ExtTestCase):
                 "If", ["condition"], ["other"], then_branch=branch, else_branch=branch
             )
         )
+        model.graph.initializer.append(numpy_helper.from_array(np.array(True), "condition"))
+        model.graph.output.append(
+            helper.make_tensor_value_info("other", TensorProto.FLOAT, ["B", "S", 17])
+        )
+        checker.check_model(model)
+        self.assertEqual(
+            optimize_generation_logits(model).SerializeToString(), model.SerializeToString()
+        )
+
+    def test_overridable_initializers_require_input_shape_proof(self):
+        model = make_model()
+        model.graph.input.append(helper.make_tensor_value_info("weight", TensorProto.FLOAT, None))
+        self.assertEqual(
+            optimize_generation_logits(model).SerializeToString(), model.SerializeToString()
+        )
+        model = make_model()
+        model.graph.initializer.append(
+            numpy_helper.from_array(np.array([[[0]]], dtype=np.int64), "positions")
+        )
+        model.graph.input[1].CopyFrom(
+            helper.make_tensor_value_info("positions", TensorProto.INT64, ["B", 1, "index_rank"])
+        )
         self.assertEqual(
             optimize_generation_logits(model).SerializeToString(), model.SerializeToString()
         )
