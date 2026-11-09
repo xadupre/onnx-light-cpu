@@ -137,6 +137,7 @@ jobs:
               "test_exp_log_parity_benchmark.py",
               "test_gemm_parity_benchmark.py",
               "test_gather_block_quantized.py",
+              "test_generation_logits.py",
               "test_microsoft_gelu.py",
               "test_microsoft_attention.py",
               "test_integer_gemm_parity_benchmark.py",
