@@ -21,7 +21,6 @@ Python API
    :maxdepth: 1
 
    registration
-   generation
    kernel_inventory
    custom_operators
    processor_performance

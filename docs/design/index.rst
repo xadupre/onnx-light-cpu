@@ -17,4 +17,5 @@ selection, benchmarks, and the main kernel families.
     parallel_execution
     kernel_selection
     benchmark_methodology
+    generation_logits
     kernels/index
