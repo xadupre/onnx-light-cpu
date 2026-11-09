@@ -35,6 +35,9 @@ namespace onnx_light_cpu {
 /// consumed directly as a scalar, row, column, or matrix view without
 /// materializing an expanded ``M x N`` tensor. FP16/BF16 narrowing is combined
 /// with the bias epilogue.
+/// From opset 29, A may have rank >= 1: transA swaps only its final two axes
+/// (and is ignored for vectors), B remains rank 2, and the output preserves
+/// A's effective leading dimensions. C broadcasts against that full shape.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   /// Constructs the kernel and eagerly allocates the immutable-plan cache so no
@@ -116,7 +119,7 @@ private:
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *c, float alpha, float beta,
           bool trans_a, bool trans_b, ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt,
-          GemmPlanCache *cache, const Tuning &tuning);
+          GemmPlanCache *cache, const Tuning &tuning, int64_t opset);
 };
 
 /// Registers the onnx-light-cpu ``Gemm`` kernel into onnx-light's shared

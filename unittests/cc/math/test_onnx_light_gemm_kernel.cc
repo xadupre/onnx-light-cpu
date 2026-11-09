@@ -6,13 +6,17 @@
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/tensor_compare.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
+#include "onnx_extensions/kernels/kernels/math/include_math_kernels.h"
 
 #include <gtest/gtest.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -328,6 +332,167 @@ TEST(OnnxLightGemmKernel, Float64Matmul) {
   EXPECT_DOUBLE_EQ(py[1], 22.0);
   EXPECT_DOUBLE_EQ(py[2], 43.0);
   EXPECT_DOUBLE_EQ(py[3], 50.0);
+}
+
+rt_ns::Tensor GemmTensor(rt_ns::DataType dtype, const rt_ns::Shape &shape,
+                         const std::vector<float> &values) {
+  switch (dtype) {
+  case rt_ns::DataType::DOUBLE:
+    return rt_ns::Tensor::FromDouble("", shape, std::vector<double>(values.begin(), values.end()));
+  case rt_ns::DataType::FLOAT16:
+    return rt_ns::MakeFloat16Tensor("", shape, values);
+  case rt_ns::DataType::BFLOAT16:
+    return rt_ns::MakeBfloat16Tensor("", shape, values);
+  default:
+    return rt_ns::Tensor::FromFloat("", shape, values);
+  }
+}
+
+void CheckGemm29(const rt_ns::Tensor &a, const rt_ns::Tensor &b, const rt_ns::Tensor *c,
+                 bool trans_a, bool trans_b, float beta = 0.5f) {
+  const rt_ns::KernelContext ctx(rt_ns::DefaultOpset(29));
+  const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Gemm reference(ctx);
+  onnx_light_cpu::GemmKernel kernel(ctx);
+  const auto expected = reference(a, b, c, 0.25f, beta, trans_a, trans_b);
+  const auto actual = c != nullptr ? kernel(a, b, *c, 0.25f, beta, trans_a, trans_b)
+                                   : kernel(a, b, 0.25f, trans_a, trans_b);
+  EXPECT_EQ(actual.shape, expected.shape);
+  const auto comparison = rt_ns::CompareTensors(actual, expected, 0, 0, true);
+  EXPECT_TRUE(comparison.close) << comparison.message;
+
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Gemm");
+  node.add_input("A");
+  node.add_input("B");
+  if (c != nullptr) {
+    node.add_input("C");
+  }
+  node.add_output("Y");
+  for (const auto &[name, value] : {std::pair{"transA", trans_a}, std::pair{"transB", trans_b}}) {
+    auto *attribute = node.add_attribute();
+    attribute->set_name(name);
+    attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
+    attribute->set_i(value);
+  }
+  for (const auto &[name, value] : {std::pair{"alpha", 0.25f}, std::pair{"beta", beta}}) {
+    auto *attribute = node.add_attribute();
+    attribute->set_name(name);
+    attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::FLOAT);
+    attribute->set_f(value);
+  }
+  rt_ns::RuntimeContext runtime(ctx);
+  runtime.Set("A", a);
+  runtime.Set("B", b);
+  if (c != nullptr) {
+    runtime.Set("C", *c);
+  }
+  kernel.set_node(node);
+  for (int run = 0; run < 2; ++run) {
+    kernel.Run(runtime);
+    EXPECT_EQ(runtime.Get("Y").shape, expected.shape);
+    const auto cached = rt_ns::CompareTensors(runtime.Get("Y"), expected, 0, 0, true);
+    EXPECT_TRUE(cached.close) << cached.message;
+  }
+}
+
+TEST(OnnxLightGemmKernel, Opset29VectorAndHighRankBroadcastTranspose) {
+  for (const auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                           rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const bool trans_a : {false, true}) {
+      for (const bool trans_b : {false, true}) {
+        const auto b =
+            GemmTensor(dtype, {2, 2},
+                       trans_b ? std::vector<float>{2, 1, 3, 4} : std::vector<float>{2, 3, 1, 4});
+        const auto vector = GemmTensor(dtype, {2}, {1, 2});
+        const auto vector_bias = GemmTensor(dtype, {2}, {2, 4});
+        CheckGemm29(vector, b, nullptr, trans_a, trans_b);
+        CheckGemm29(vector, b, &vector_bias, trans_a, trans_b);
+        for (const bool rank4 : {false, true}) {
+          const rt_ns::Shape shape =
+              rank4 ? (trans_a ? rt_ns::Shape{2, 2, 2, 3} : rt_ns::Shape{2, 2, 3, 2})
+                    : (trans_a ? rt_ns::Shape{2, 2, 3} : rt_ns::Shape{2, 3, 2});
+          std::vector<float> input_values(shape.product());
+          for (std::size_t i = 0; i < input_values.size(); ++i) {
+            input_values[i] = static_cast<float>(i + 1);
+          }
+          const auto a = GemmTensor(dtype, shape, input_values);
+          CheckGemm29(a, b, nullptr, trans_a, trans_b);
+          for (const auto &bias_shape :
+               {rt_ns::Shape{}, rt_ns::Shape{2}, rt_ns::Shape{3, 1}, rt_ns::Shape{1, 3, 2},
+                rank4 ? rt_ns::Shape{2, 1, 1, 2} : rt_ns::Shape{2, 1, 2},
+                rank4 ? rt_ns::Shape{1, 2, 1, 2} : rt_ns::Shape{2, 3, 1},
+                rank4 ? rt_ns::Shape{2, 2, 3, 2} : rt_ns::Shape{2, 3, 2}}) {
+            std::vector<float> values(bias_shape.product());
+            for (std::size_t i = 0; i < values.size(); ++i) {
+              values[i] = static_cast<float>(2 * i);
+            }
+            const auto c = GemmTensor(dtype, bias_shape, values);
+            CheckGemm29(a, b, &c, trans_a, trans_b);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightGemmKernel, Opset29EmptyDimensions) {
+  for (const auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                           rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const bool trans_a : {false, true}) {
+      for (const bool trans_b : {false, true}) {
+        for (const auto &shape : {rt_ns::Shape{0}, rt_ns::Shape{2, 3, 0}, rt_ns::Shape{0, 3, 2},
+                                  rt_ns::Shape{2, 0, 2}, rt_ns::Shape{2, 3, 2}}) {
+          auto stored_shape = shape;
+          if (trans_a && shape.size() > 1) {
+            std::swap(stored_shape[shape.size() - 2], stored_shape.back());
+          }
+          const int64_t k = shape.back();
+          const auto input =
+              GemmTensor(dtype, stored_shape, std::vector<float>(shape.product(), 1));
+          for (const int64_t n : {0, 2}) {
+            const auto b = GemmTensor(dtype, trans_b ? rt_ns::Shape{n, k} : rt_ns::Shape{k, n},
+                                      std::vector<float>(k * n, 2));
+            const auto c = GemmTensor(dtype, {n}, std::vector<float>(n, 2));
+            CheckGemm29(input, b, nullptr, trans_a, trans_b);
+            CheckGemm29(input, b, &c, trans_a, trans_b);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightGemmKernel, Opset29ValidationAndZeroBeta) {
+  const rt_ns::KernelContext ctx(rt_ns::DefaultOpset(29));
+  onnx_light_cpu::GemmKernel kernel(ctx);
+  const auto a = rt_ns::Tensor::FromFloat("", {2}, {1, 2});
+  const auto b = rt_ns::Tensor::FromFloat("", {2, 2}, {2, 3, 1, 4});
+  const auto c = rt_ns::Tensor::FromFloat(
+      "", {2}, {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()});
+  CheckGemm29(a, b, &c, true, false, 0);
+  for (int64_t opset : {13, 18, 28}) {
+    onnx_light_cpu::GemmKernel old_kernel(rt_ns::KernelContext{rt_ns::DefaultOpset(opset)});
+    EXPECT_THROW(old_kernel(a, b, 1, false, false), std::invalid_argument);
+  }
+  const auto scalar = rt_ns::Tensor::FromFloat("", {}, {1});
+  const auto batched_b = rt_ns::Tensor::FromFloat("", {1, 2, 2}, {2, 3, 1, 4});
+  const auto bad_k = rt_ns::Tensor::FromFloat("", {3, 2}, std::vector<float>(6));
+  EXPECT_THROW(kernel(scalar, b, 1, false, false), std::invalid_argument);
+  EXPECT_THROW(kernel(a, batched_b, 1, false, false), std::invalid_argument);
+  EXPECT_THROW(kernel(a, bad_k, 1, false, false), std::invalid_argument);
+  for (const auto &shape : {rt_ns::Shape{1, 2}, rt_ns::Shape{3}}) {
+    const auto bad_bias = rt_ns::Tensor::FromFloat("", shape, std::vector<float>(shape.product()));
+    EXPECT_THROW(kernel(a, b, bad_bias, 1, 0, false, false), std::invalid_argument);
+  }
+  auto short_input = a;
+  short_input.shape = {2, 3, 2};
+  EXPECT_THROW(kernel(short_input, b, 1, false, false), std::invalid_argument);
+  auto negative = a;
+  negative.shape = {-1, 2};
+  EXPECT_THROW(kernel(negative, b, 1, false, false), std::invalid_argument);
+  auto overflowing = a;
+  overflowing.shape = {std::numeric_limits<int64_t>::max(), 2, 2};
+  EXPECT_THROW(kernel(overflowing, b, 1, false, false), std::invalid_argument);
 }
 
 } // namespace

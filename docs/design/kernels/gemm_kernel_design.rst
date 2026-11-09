@@ -11,6 +11,23 @@ performance gates, and remaining work are tracked in the
 :doc:`Gemm, MatMul, and Attention roadmap
 <../../next_steps/2026/2026_08_gemm_matmul>`.
 
+Runtime operand contract
+------------------------
+
+Before opset 29, ``Gemm`` requires two-dimensional ``A`` and ``B``.
+For onnx-light's opset-29 rank-N contract, ``A`` may have rank one or
+higher, while ``B`` remains a matrix. ``transA`` swaps only the final two
+axes of ``A`` and is a no-op for a vector. The output retains the effective
+leading dimensions of ``A`` and replaces its final contraction dimension
+with the output width of ``op(B)``.
+
+The adapter applies the existing GEMM plan to each final-axis matrix,
+sharing ``B`` without materializing transposed inputs or expanded bias.
+``C`` broadcasts right-aligned against the full output shape; its shape
+and dtype are validated even when ``beta`` is zero. Empty output dimensions
+produce empty tensors, whereas an empty contraction produces zeros plus
+the optional scaled bias.
+
 Kernel selection decision tree
 -------------------------------
 

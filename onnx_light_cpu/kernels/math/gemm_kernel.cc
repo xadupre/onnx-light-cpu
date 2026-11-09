@@ -236,34 +236,30 @@ void GemmKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 
 namespace {
 
-// Returns the two matrix dimensions of a 2-D ``Gemm`` operand, throwing when
-// the tensor is not rank 2.
-void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t &cols) {
-  if (t.shape.size() != 2) {
-    throw std::invalid_argument(std::string("onnx_light_cpu::GemmKernel: input ") + name +
-                                " must be a 2-D matrix.");
+void ValidateTensor(const Tensor &tensor) {
+  const int64_t count =
+      ml_cpu_compute::CheckedShapeIndexProduct(tensor.shape, "GemmKernel", "tensor shape");
+  const std::size_t bytes = rt_ns::PackedByteSize(tensor.data_type, count);
+  if (tensor.size_bytes() != bytes || (bytes != 0 && tensor.bytes() == nullptr)) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::GemmKernel: tensor payload does not match its shape.");
   }
-  rows = ml_cpu_compute::CheckedDimension(t.shape[0], "GemmKernel", name);
-  cols = ml_cpu_compute::CheckedDimension(t.shape[1], "GemmKernel", name);
 }
 
 // Resolves ONNX unidirectional broadcasting without materializing C.
-ml_cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
+ml_cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, const Shape &output) {
   const std::size_t rank = c.shape.size();
-  std::size_t c_rows = 1;
-  std::size_t c_cols = 1;
-  if (rank == 1) {
-    c_cols = static_cast<std::size_t>(c.shape[0]);
-  } else if (rank == 2) {
-    c_rows = static_cast<std::size_t>(c.shape[0]);
-    c_cols = static_cast<std::size_t>(c.shape[1]);
-  } else if (rank != 0) {
-    throw std::invalid_argument("onnx_light_cpu::GemmKernel: bias C must have rank 0, 1 or 2.");
+  if (rank > output.size()) {
+    throw std::invalid_argument("onnx_light_cpu::GemmKernel: bias C rank exceeds output rank.");
   }
-  if (!(c_rows == M || c_rows == 1) || !(c_cols == N || c_cols == 1)) {
-    throw std::invalid_argument(
-        "onnx_light_cpu::GemmKernel: bias C is not broadcastable to the output shape.");
+  for (std::size_t i = 0; i < rank; ++i) {
+    if (c.shape[i] != 1 && c.shape[i] != output[output.size() - rank + i]) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::GemmKernel: bias C is not broadcastable to the output shape.");
+    }
   }
+  const int64_t c_rows = rank >= 2 ? c.shape[rank - 2] : 1;
+  const int64_t c_cols = rank >= 1 ? c.shape[rank - 1] : 1;
   if (c_rows == 1 && c_cols == 1) {
     return ml_cpu_compute::GemmBroadcast::kScalar;
   }
@@ -276,6 +272,27 @@ ml_cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, 
   return ml_cpu_compute::GemmBroadcast::kMatrix;
 }
 
+// Each final-axis matrix uses the same GEMM plan, with a broadcast view of C.
+std::size_t BiasBatchOffset(const Tensor &c, const Shape &output, std::size_t batch) {
+  if (c.shape.size() <= 2) {
+    return 0;
+  }
+  std::size_t offset = 0;
+  std::size_t stride = static_cast<std::size_t>(c.shape[c.shape.size() - 2]) *
+                       static_cast<std::size_t>(c.shape.back());
+  for (std::size_t axis = output.size() - 2; axis-- > output.size() - c.shape.size();) {
+    const std::size_t coordinate = batch % static_cast<std::size_t>(output[axis]);
+    batch /= static_cast<std::size_t>(output[axis]);
+    const std::size_t dimension =
+        static_cast<std::size_t>(c.shape[axis - (output.size() - c.shape.size())]);
+    if (dimension != 1) {
+      offset += coordinate * stride;
+    }
+    stride *= dimension;
+  }
+  return offset;
+}
+
 } // namespace
 
 // Shared implementation for the ``Run`` and both ``operator()`` overloads.
@@ -285,7 +302,7 @@ ml_cpu_compute::GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, 
 // blocking, and thread count on every run (Roadmap PR06.4).
 Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, float alpha,
                            float beta, bool trans_a, bool trans_b, RuntimeContext *rt,
-                           GemmPlanCache *cache, const Tuning &tuning) {
+                           GemmPlanCache *cache, const Tuning &tuning, int64_t opset) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::GemmKernel: A and B must share the same dtype.");
   }
@@ -293,22 +310,47 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     throw std::invalid_argument("onnx_light_cpu::GemmKernel: bias C dtype must match A and B.");
   }
 
-  std::size_t a_rows = 0, a_cols = 0, b_rows = 0, b_cols = 0;
-  Require2D(a, "A", a_rows, a_cols);
-  Require2D(b, "B", b_rows, b_cols);
-
-  const std::size_t M = trans_a ? a_cols : a_rows;
-  const std::size_t K = trans_a ? a_rows : a_cols;
-  const std::size_t K_b = trans_b ? b_cols : b_rows;
-  const std::size_t N = trans_b ? b_rows : b_cols;
+  if (a.shape.empty() || (opset < 29 && a.shape.size() != 2)) {
+    throw std::invalid_argument("onnx_light_cpu::GemmKernel: A must have rank 2 before opset 29, "
+                                "rank at least 1 otherwise.");
+  }
+  if (b.shape.size() != 2) {
+    throw std::invalid_argument("onnx_light_cpu::GemmKernel: B must be a 2-D matrix.");
+  }
+  ValidateTensor(a);
+  ValidateTensor(b);
+  Shape out_shape = a.shape;
+  trans_a = trans_a && a.shape.size() > 1;
+  if (trans_a) {
+    std::swap(out_shape[out_shape.size() - 2], out_shape.back());
+  }
+  const std::size_t M = out_shape.size() > 1
+                            ? ml_cpu_compute::CheckedDimension(out_shape[out_shape.size() - 2],
+                                                               "GemmKernel", "A rows")
+                            : 1;
+  const std::size_t K =
+      ml_cpu_compute::CheckedDimension(out_shape.back(), "GemmKernel", "A columns");
+  const std::size_t K_b =
+      ml_cpu_compute::CheckedDimension(b.shape[trans_b ? 1 : 0], "GemmKernel", "B depth");
+  const std::size_t N =
+      ml_cpu_compute::CheckedDimension(b.shape[trans_b ? 0 : 1], "GemmKernel", "B width");
   if (K != K_b) {
     throw std::invalid_argument(
         "onnx_light_cpu::GemmKernel: inner dimensions of A and B mismatch.");
   }
 
-  const Shape out_shape{static_cast<std::int64_t>(M), static_cast<std::int64_t>(N)};
-  const std::size_t output_elements =
-      ml_cpu_compute::CheckedMultiply(M, N, "GemmKernel", "output element count");
+  out_shape.back() = static_cast<int64_t>(N);
+  const std::size_t output_elements = ml_cpu_compute::CheckedDimension(
+      ml_cpu_compute::CheckedShapeIndexProduct(out_shape, "GemmKernel", "output element count"),
+      "GemmKernel", "output element count");
+  const std::size_t matrix_elements =
+      ml_cpu_compute::CheckedMultiply(M, N, "GemmKernel", "matrix element count");
+  const std::size_t batches = matrix_elements == 0 ? 0 : output_elements / matrix_elements;
+  ml_cpu_compute::GemmBroadcast bias_layout = ml_cpu_compute::GemmBroadcast::kNone;
+  if (c != nullptr) {
+    ValidateTensor(*c);
+    bias_layout = ResolveBiasLayout(*c, out_shape);
+  }
   const bool has_bias = c != nullptr && beta != 0.0f;
 
   switch (static_cast<DataType>(a.data_type)) {
@@ -334,14 +376,20 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     ml_cpu_compute::GemmEpilogue<float> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsFloat();
-      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
+      epilogue.bias_layout = bias_layout;
       epilogue.beta = beta;
     }
     const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(output_elements, sizeof(float),
                                                                 "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
-    plan->Execute(a.AsFloat(), b.AsFloat(), epilogue, y.AsFloat());
+    for (std::size_t batch = 0; batch < batches; ++batch) {
+      if (has_bias) {
+        epilogue.bias = c->AsFloat() + BiasBatchOffset(*c, out_shape, batch);
+      }
+      plan->Execute(K == 0 ? a.AsFloat() : a.AsFloat() + batch * M * K, b.AsFloat(), epilogue,
+                    y.AsFloat() + batch * matrix_elements);
+    }
     return y;
   }
   case DataType::DOUBLE: {
@@ -367,14 +415,20 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     ml_cpu_compute::GemmEpilogue<double> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsDouble();
-      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
+      epilogue.bias_layout = bias_layout;
       epilogue.beta = static_cast<double>(beta);
     }
     const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(output_elements, sizeof(double),
                                                                 "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
-    plan->Execute(a.AsDouble(), b.AsDouble(), epilogue, y.AsDouble());
+    for (std::size_t batch = 0; batch < batches; ++batch) {
+      if (has_bias) {
+        epilogue.bias = c->AsDouble() + BiasBatchOffset(*c, out_shape, batch);
+      }
+      plan->Execute(K == 0 ? a.AsDouble() : a.AsDouble() + batch * M * K, b.AsDouble(), epilogue,
+                    y.AsDouble() + batch * matrix_elements);
+    }
     return y;
   }
   case DataType::FLOAT16:
@@ -411,11 +465,6 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     }
 
     ml_cpu_compute::GemmEpilogue<float> epilogue;
-    ml_cpu_compute::GemmBroadcast bias_layout = ml_cpu_compute::GemmBroadcast::kNone;
-    if (has_bias) {
-      bias_layout = ResolveBiasLayout(*c, M, N);
-    }
-
     const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(
         output_elements, sizeof(std::uint16_t), "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
@@ -424,16 +473,20 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
         has_bias ? ml_cpu_compute::GemmOutputConversion::kNone
                  : (is_bfloat16 ? ml_cpu_compute::GemmOutputConversion::kBFloat16
                                 : ml_cpu_compute::GemmOutputConversion::kFloat16);
-    epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     rt_ns::detail::TemporaryTypedBuffer<float> y_f32(
-        output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
+        batches == 0 ? 0 : matrix_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
         "Gemm FP32 workspace");
-    plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
-    if (has_bias) {
-      ml_cpu_compute::GemmAddHalfBiasConvertFloat32(
-          y_f32.data(), reinterpret_cast<const std::uint16_t *>(c->bytes()),
-          reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), M, N, beta, bias_layout,
-          is_bfloat16);
+    for (std::size_t batch = 0; batch < batches; ++batch) {
+      auto *output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes()) + batch * matrix_elements;
+      epilogue.converted_output = output;
+      plan->Execute(K == 0 ? a_bits : a_bits + batch * M * K, b_bits, epilogue, y_f32.data());
+      if (has_bias) {
+        ml_cpu_compute::GemmAddHalfBiasConvertFloat32(
+            y_f32.data(),
+            reinterpret_cast<const std::uint16_t *>(c->bytes()) +
+                BiasBatchOffset(*c, out_shape, batch),
+            output, M, N, beta, bias_layout, is_bfloat16);
+      }
     }
     return y;
   }
@@ -447,13 +500,14 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &c, float alpha,
                               float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
   const RuntimeExecutionScope execution_scope(rt);
-  return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr, tuning_);
+  return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr, tuning_, ctx_.opset.version);
 }
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, bool trans_a,
                               bool trans_b, RuntimeContext *rt) const {
   const RuntimeExecutionScope execution_scope(rt);
-  return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr, tuning_);
+  return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr, tuning_,
+                 ctx_.opset.version);
 }
 
 void GemmKernel::Run(RuntimeContext &rt) {
@@ -468,7 +522,8 @@ void GemmKernel::Run(RuntimeContext &rt) {
   const float beta = rt_ns::GetAttributeFloatOrDefault(node, "beta", 1.0f);
   const bool trans_a = rt_ns::GetAttributeIntOrDefault(node, "transA", 0) != 0;
   const bool trans_b = rt_ns::GetAttributeIntOrDefault(node, "transB", 0) != 0;
-  Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get(), tuning_);
+  Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get(), tuning_,
+                     ctx_.opset.version);
   rt_ns::SetOutput(node, 0, std::move(y), rt);
 }
 
