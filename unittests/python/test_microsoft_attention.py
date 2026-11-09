@@ -14,7 +14,7 @@ import numpy as np
 import onnxruntime
 
 from onnx_light.ext_test_case import ExtTestCase
-from onnx_light.onnx import TensorProto, helper, load
+from onnx_light.onnx import TensorProto, helper, load, numpy_helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu import (
     clear_used_kernel_names,
@@ -26,11 +26,32 @@ from onnx_light_cpu import (
 )
 
 
+def _run_upstream(model, feeds):
+    """Keep bias-free CPU coverage while avoiding ORT 1.31's null bias dereference."""
+    ort_model = type(model)()
+    ort_model.CopyFrom(model)
+    node = ort_model.graph.node[0]
+    inputs = list(node.input)
+    if not inputs[2]:
+        inputs[2] = "ort_zero_bias"
+        node.input.clear()
+        node.input.extend(inputs)
+        weights = feeds[inputs[1]]
+        ort_model.graph.initializer.append(
+            numpy_helper.from_array(np.zeros(weights.shape[1], dtype=weights.dtype), inputs[2])
+        )
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    return onnxruntime.InferenceSession(
+        ort_model.SerializeToString(),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
+    ).run(None, feeds)
+
+
 class TestMicrosoftAttention(ExtTestCase):
     def test_finite_causal_mask_matches_upstream(self):
-        options = onnxruntime.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
         for length, mask_rank, with_bias in (
             (2, 1, False),
             (2, 2, False),
@@ -88,20 +109,13 @@ class TestMicrosoftAttention(ExtTestCase):
                     opset_imports=[helper.make_opsetid("com.microsoft", 1)],
                     ir_version=10,
                 )
-                expected = onnxruntime.InferenceSession(
-                    model.SerializeToString(),
-                    sess_options=options,
-                    providers=["CPUExecutionProvider"],
-                ).run(None, feeds)
+                expected = _run_upstream(model, feeds)
                 session = ReferenceEvaluator(model)
                 register_kernel_for_session(session, "com.microsoft", "Attention")
                 actual = session.run(None, feeds)
                 np.testing.assert_allclose(actual[0], expected[0], rtol=3e-5, atol=3e-5)
 
     def test_causal_attention_without_mask_matches_upstream(self):
-        options = onnxruntime.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
         feeds = {
             "input": np.array([[[1, 0], [0, 1], [1, 1]]], dtype=np.float32),
             "weights": np.array([[1, 0, 0, 1, 1, 0], [0, 1, 1, 0, 0, 1]], dtype=np.float32),
@@ -128,20 +142,13 @@ class TestMicrosoftAttention(ExtTestCase):
             opset_imports=[helper.make_opsetid("com.microsoft", 1)],
             ir_version=10,
         )
-        expected = onnxruntime.InferenceSession(
-            model.SerializeToString(),
-            sess_options=options,
-            providers=["CPUExecutionProvider"],
-        ).run(None, feeds)
+        expected = _run_upstream(model, feeds)
         session = ReferenceEvaluator(model)
         register_kernel_for_session(session, "com.microsoft", "Attention")
         actual = session.run(None, feeds)
         np.testing.assert_allclose(actual[0], expected[0], rtol=3e-5, atol=3e-5)
 
     def test_projection_and_present_match_upstream(self):
-        options = onnxruntime.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
         rng = np.random.default_rng(42)
         for with_bias, with_past, with_present, mask_kind, with_attention_bias in (
             (False, False, False, "", False),
@@ -235,11 +242,7 @@ class TestMicrosoftAttention(ExtTestCase):
                     opset_imports=[helper.make_opsetid("com.microsoft", 1)],
                     ir_version=10,
                 )
-                expected = onnxruntime.InferenceSession(
-                    model.SerializeToString(),
-                    sess_options=options,
-                    providers=["CPUExecutionProvider"],
-                ).run(None, feeds)
+                expected = _run_upstream(model, feeds)
                 session = ReferenceEvaluator(model)
                 register_kernel_for_session(session, "com.microsoft", "Attention")
                 actual = session.run(None, feeds)
