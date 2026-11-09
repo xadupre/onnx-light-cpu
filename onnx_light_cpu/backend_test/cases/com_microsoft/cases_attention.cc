@@ -17,14 +17,15 @@ namespace bt = ONNX_LIGHT_NAMESPACE::core::backend_test;
 namespace rt = ONNX_LIGHT_NAMESPACE::core::runtime;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
 using rt::Tensor;
-NodeProto Node(int64_t heads) {
+NodeProto Node(int64_t heads, bool present = true) {
   NodeProto node;
   node.set_domain(kMicrosoftDomain);
   node.set_op_type("Attention");
   for (const char *name : {"x", "w", "", "", "", ""})
     node.add_input(name);
   node.add_output("y");
-  node.add_output("present");
+  if (present)
+    node.add_output("present");
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "num_heads", heads);
   return node;
 }
@@ -85,12 +86,11 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
         "backend-test", bt::TestCaseTag::AI_RT);
   }
   for (bool unequal : {false, true}) {
-    auto node = Node(1);
+    auto node = Node(1, !unequal);
     node.ref_input()[2] = "bias";
     node.ref_input()[5] = "attention_bias";
     const int64_t width = unequal ? 4 : 3;
     if (unequal) {
-      node.ref_output().pop_back();
       ONNX_LIGHT_NAMESPACE::AddAttribute(node, "qkv_hidden_sizes", std::vector<int64_t>{1, 1, 2});
     }
     ONNX_LIGHT_NAMESPACE::AddAttribute(node, "scale", 0.f);
@@ -103,9 +103,13 @@ void RegisterCpuMicrosoftAttentionCases(std::vector<TestCase> &registry, TestMod
           bias[2] = 1;
           if (unequal)
             bias[3] = 2;
+          const float first = 3 * std::exp(1.f) / (1 + 3 * std::exp(1.f));
+          const float second = 1 / (1 + std::exp(-2.f));
           std::vector<Tensor> outputs{Tensor::FromFloat(
               "y", {1, 2, unequal ? 2 : 1},
-              unequal ? std::vector<float>{4.5f, 7.25f, 4, 6.5f} : std::vector<float>{4.5f, 4})};
+              unequal
+                  ? std::vector<float>{3 + 2 * first, 5 + 3 * first, 3 + 2 * second, 5 + 3 * second}
+                  : std::vector<float>{3 + 2 * first, 3 + 2 * second})};
           if (!unequal)
             outputs.push_back(Tensor::FromFloat("present", {2, 1, 1, 2, 1}, {1, 2, 3, 5}));
           return {{Tensor::FromFloat("x", {1, 2, 1}, {1, 2}),

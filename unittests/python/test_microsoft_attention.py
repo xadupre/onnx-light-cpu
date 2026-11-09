@@ -27,6 +27,77 @@ from onnx_light_cpu import (
 
 
 class TestMicrosoftAttention(ExtTestCase):
+    def test_finite_causal_mask_matches_upstream(self):
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        for length, mask_rank, with_bias in (
+            (2, 1, False),
+            (2, 2, False),
+            (2, 3, False),
+            (2, 2, True),
+            (32, 2, False),
+            (2, 0, False),
+            (32, 0, False),
+        ):
+            with self.subTest(length=length, rank=mask_rank, bias=with_bias):
+                maximum = np.finfo(np.float32).max
+                feeds = {
+                    "input": np.zeros((1, length, 2), dtype=np.float32),
+                    "weights": np.array([[1, 0, 1], [0, maximum, 2]], dtype=np.float32),
+                }
+                feeds["input"][0, :2] = np.eye(2, dtype=np.float32)
+                inputs = ["input", "weights", "", "mask" if mask_rank else "", ""]
+                if mask_rank:
+                    feeds["weights"][...] = [[0, 0, 1], [0, 0, 2]]
+                    shape = {1: (1,), 2: (1, length), 3: (1, length, length)}[mask_rank]
+                    feeds["mask"] = np.zeros(shape, dtype=np.int32)
+                if with_bias:
+                    inputs.append("attention_bias")
+                    feeds["attention_bias"] = np.full(
+                        (1, 1, length, length), maximum, dtype=np.float32
+                    )
+                model = helper.make_model(
+                    helper.make_graph(
+                        [
+                            helper.make_node(
+                                "Attention",
+                                inputs,
+                                ["output"],
+                                domain="com.microsoft",
+                                num_heads=1,
+                                unidirectional=1,
+                                mask_filter_value=float(-maximum),
+                            )
+                        ],
+                        "microsoft-attention-finite-causal",
+                        [
+                            helper.make_tensor_value_info(
+                                name,
+                                TensorProto.INT32 if name == "mask" else TensorProto.FLOAT,
+                                value.shape,
+                            )
+                            for name, value in feeds.items()
+                        ],
+                        [
+                            helper.make_tensor_value_info(
+                                "output", TensorProto.FLOAT, [1, length, 1]
+                            )
+                        ],
+                    ),
+                    opset_imports=[helper.make_opsetid("com.microsoft", 1)],
+                    ir_version=10,
+                )
+                expected = onnxruntime.InferenceSession(
+                    model.SerializeToString(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                ).run(None, feeds)
+                session = ReferenceEvaluator(model)
+                register_kernel_for_session(session, "com.microsoft", "Attention")
+                actual = session.run(None, feeds)
+                np.testing.assert_allclose(actual[0], expected[0], rtol=3e-5, atol=3e-5)
+
     def test_causal_attention_without_mask_matches_upstream(self):
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = 1
@@ -80,9 +151,8 @@ class TestMicrosoftAttention(ExtTestCase):
             (True, False, True, "start", False),
             (True, True, True, "padding", False),
             (True, False, True, "query", False),
-            (True, True, True, "capacity", False),
             (True, False, True, "", True),
-            (True, True, True, "padding", True),
+            (True, False, True, "padding", True),
             (False, False, False, "zero_scale", False),
             (True, True, True, "zero_filter", False),
         ):
@@ -116,11 +186,7 @@ class TestMicrosoftAttention(ExtTestCase):
                 elif mask_kind == "start":
                     feeds["mask"] = np.array([3, 3, 0, 1], dtype=np.int32)
                 elif mask_kind:
-                    shape = {
-                        "padding": (2, total),
-                        "query": (2, 3, total),
-                        "capacity": (2, 1, 8, 8),
-                    }[mask_kind]
+                    shape = {"padding": (2, total), "query": (2, 3, total)}[mask_kind]
                     feeds["mask"] = np.ones(shape, dtype=np.int32)
                     feeds["mask"][..., total - 1] = 0
                 if with_attention_bias:
@@ -138,7 +204,7 @@ class TestMicrosoftAttention(ExtTestCase):
                                 outputs,
                                 domain="com.microsoft",
                                 num_heads=2,
-                                unidirectional=int(with_past and mask_kind != "capacity"),
+                                unidirectional=int(with_past),
                                 **attributes,
                             )
                         ],

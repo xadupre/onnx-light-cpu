@@ -28,6 +28,8 @@ GemmPlan<float> ProjectionPlan(const AttentionPlan &plan, std::size_t input_hidd
 }
 AttentionPlan ProjectedPlan(const AttentionPlan &source) {
   auto plan = source;
+  plan.finite_causal_mask = plan.causal;
+  plan.causal = false;
   const auto width = Width(plan);
   const auto batch_stride =
       CheckedMultiply(plan.q_length, width, "MicrosoftAttention", "projection batch stride");

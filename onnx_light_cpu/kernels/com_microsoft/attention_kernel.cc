@@ -13,6 +13,7 @@
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -123,16 +124,16 @@ void MicrosoftAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
       (ab->shape.size() != 4 || (ab->shape[0] != 1 && ab->shape[0] != b) ||
        (ab->shape[1] != 1 && ab->shape[1] != heads) || ab->shape[2] != s || ab->shape[3] != t))
     fail("attention_bias must be [1 or B,1 or N,S,T].");
-  const auto scale = rt_ns::GetAttributeFloatOrDefault(node, "scale", 1.f / std::sqrt(float(h)));
+  const auto scale = rt_ns::GetAttributeFloatOrDefault(node, "scale", 0.f);
   const auto filter = rt_ns::GetAttributeFloatOrDefault(node, "mask_filter_value", -10000.f);
   if (!std::isfinite(scale) || !std::isfinite(filter))
     fail("scale and mask_filter_value must be finite.");
   ml_cpu_compute::AttentionDescriptor descriptor;
   descriptor.q_num_heads = descriptor.kv_num_heads = heads;
-  descriptor.scale = scale;
-  descriptor.is_causal = causal;
-  descriptor.has_past_key = descriptor.has_past_value = past != nullptr;
+  descriptor.scale = scale == 0.f ? 1.f / std::sqrt(float(h)) : scale;
   const bool additive = mask || ab;
+  descriptor.is_causal = causal && !additive;
+  descriptor.has_past_key = descriptor.has_past_value = past != nullptr;
   descriptor.has_attn_mask = additive;
   const std::vector<int64_t> qs{b, s, q}, vs{b, s, v}, ms{b, heads, s, t};
   const std::vector<int64_t> ps =
@@ -169,6 +170,8 @@ void MicrosoftAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
         allowed = raw[(batch * m + p + query) * m + key] > 0;
       }
       float value = allowed ? 0.f : filter;
+      if (causal && key > p + query)
+        value = std::numeric_limits<float>::lowest();
       if (ab)
         value += attention_bias[((ab->shape[0] == 1 ? 0 : batch) * ab->shape[1] +
                                  (ab->shape[1] == 1 ? 0 : head)) *

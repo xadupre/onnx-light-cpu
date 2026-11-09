@@ -118,7 +118,9 @@ TEST(MicrosoftAttentionKernel, UnequalValueWidthAndAttentionBias) {
   runtime.Set("ab", rt::Tensor::FromFloat("ab", {1, 1, 2, 2}, {0, std::log(3.f), 0, 0}));
   RunAttention(node, runtime);
   ASSERT_EQ(runtime.Get("y").shape, (rt::Shape{1, 2, 2}));
-  const std::vector<float> expected{3.5f, 5.25f, 3, 4.5f};
+  const float first = 3 * std::exp(1.f) / (1 + 3 * std::exp(1.f));
+  const float second = 1 / (1 + std::exp(-2.f));
+  const std::vector<float> expected{2 + 2 * first, 3 + 3 * first, 2 + 2 * second, 3 + 3 * second};
   for (int i = 0; i < 4; ++i)
     EXPECT_NEAR(runtime.Get("y").AsFloat()[i], expected[i], 1.e-5);
 }
@@ -235,6 +237,35 @@ TEST(MicrosoftAttentionKernel, FiniteFullyMaskedRowsAndCausalFilterOverride) {
   RunAttention(node, runtime);
   EXPECT_NEAR(runtime.Get("y").AsFloat()[0], 2, 1.e-5);
   EXPECT_NEAR(runtime.Get("y").AsFloat()[1], 2 + 2 / (1 + std::exp(-2.f)), 1.e-5);
+}
+
+TEST(MicrosoftAttentionKernel, LowestFiniteCausalMaskOverridesPaddingBeforeAttentionBias) {
+  for (int rank : {1, 2, 3}) {
+    for (bool biased : {false, true}) {
+      auto node = Node(false);
+      auto runtime = Runtime();
+      node.ref_input()[3] = "mask";
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", int64_t{1});
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "mask_filter_value",
+                                         std::numeric_limits<float>::lowest());
+      runtime.Put("w", rt::Tensor::FromFloat("w", {1, 3}, {0, 0, 1}), rt::RuntimeEventKind::kInput);
+      if (rank == 1)
+        runtime.Set("mask", rt::Tensor::FromInt32("mask", {1}, {0}));
+      else if (rank == 2)
+        runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2}, {0, 0}));
+      else
+        runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2, 2}, {0, 0, 0, 0}));
+      if (biased) {
+        node.ref_input()[5] = "ab";
+        runtime.Set(
+            "ab", rt::Tensor::FromFloat("ab", {1, 1, 2, 2},
+                                        std::vector<float>(4, std::numeric_limits<float>::max())));
+      }
+      RunAttention(node, runtime);
+      EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 1.5f);
+      EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[1], 1.5f);
+    }
+  }
 }
 
 TEST(MicrosoftAttentionKernel, SchemaSymbolicShapeAndScratchMemory) {

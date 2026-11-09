@@ -498,6 +498,9 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
                 mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
             additive_bias = mask_float[index];
           }
+          if (plan.finite_causal_mask && static_cast<std::int64_t>(j) > window_center) {
+            additive_bias += std::numeric_limits<float>::lowest();
+          }
           const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
           row_has_unmasked_key |= !IsMaskFilterValue(bias);
 
@@ -1203,8 +1206,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
-      plan.head_sink == nullptr && plan.q_length <= 16 && has_avx2_fma &&
-      (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
+      !plan.finite_causal_mask && plan.head_sink == nullptr && plan.q_length <= 16 &&
+      has_avx2_fma && (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
   // Runtime-owned outer schedule: one task per (batch, head, query-row)
@@ -1406,6 +1409,10 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 const std::ptrdiff_t index =
                     mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
                 additive_bias = mask_float[index];
+              }
+              if (plan.finite_causal_mask &&
+                  static_cast<std::int64_t>(j) > WindowCenter(i, causal_offset)) {
+                additive_bias += std::numeric_limits<float>::lowest();
               }
               const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
 
@@ -1670,21 +1677,22 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 #endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX2_FMA
   const bool use_avx2_softmax =
-      simd == SimdLevel::kAVX2 && CpuSupportsFma() && plan.softcap == 0.0f &&
-      plan.left_window_size < 0 && plan.right_window_size < 0 &&
+      !plan.finite_causal_mask && simd == SimdLevel::kAVX2 && CpuSupportsFma() &&
+      plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0 &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
   const bool use_dense_softmax_avx2 = use_avx2_softmax &&
                                       plan.mask_kind == AttentionMaskKind::kNone && !plan.causal &&
                                       nonpad_kv_seqlen == nullptr;
 #endif
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
-  const bool use_bounded_avx512 =
-      simd == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
-      plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0;
+  const bool use_bounded_avx512 = !plan.finite_causal_mask && simd == SimdLevel::kAVX512 &&
+                                  plan.mask_kind == AttentionMaskKind::kNone &&
+                                  plan.softcap == 0.0f && plan.left_window_size < 0 &&
+                                  plan.right_window_size < 0;
   const bool use_masked_avx512 =
-      simd == SimdLevel::kAVX512 && plan.mask_kind != AttentionMaskKind::kNone &&
-      plan.mask_strides.kv == 1 && !plan.causal && plan.softcap == 0.0f &&
-      plan.left_window_size < 0 && plan.right_window_size < 0;
+      !plan.finite_causal_mask && simd == SimdLevel::kAVX512 &&
+      plan.mask_kind != AttentionMaskKind::kNone && plan.mask_strides.kv == 1 && !plan.causal &&
+      plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0;
   const bool use_q8_avx512 = std::is_same_v<Codec, Float32Codec> && use_bounded_avx512 &&
                              !plan.causal && nonpad_kv_seqlen == nullptr && plan.past_length == 0 &&
                              plan.q_length == 8 && plan.total_kv_length == 128 &&
@@ -2052,6 +2060,9 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                   const std::ptrdiff_t index =
                       mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
                   additive_bias = mask_float[index];
+                }
+                if (plan.finite_causal_mask && static_cast<std::int64_t>(j) > window_center) {
+                  additive_bias += std::numeric_limits<float>::lowest();
                 }
                 valid[i] |= static_cast<std::uint8_t>(allowed && !IsMaskFilterValue(additive_bias));
                 float score = score_row[jj];

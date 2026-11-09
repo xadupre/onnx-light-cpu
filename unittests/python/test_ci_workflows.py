@@ -321,7 +321,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
         assert f"os: {os_name}" in source_job
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
-    assert source_job.count("matrix.python-abi == 'stable'") == 3
+    assert source_job.count("matrix.python-abi == 'stable'") == 5
     assert "name: onnx-light main (" in source_job
     assert (
         "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "

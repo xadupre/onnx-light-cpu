@@ -78,6 +78,26 @@ TEST(MicrosoftAttentionCompute, RejectsMissingPointersBeforeDispatch) {
                std::invalid_argument);
 }
 
+TEST(MicrosoftAttentionCompute, ImplicitFiniteCausalMaskAcrossStreamingAndTiledPaths) {
+  for (int64_t length : {2, 32}) {
+    AttentionDescriptor descriptor;
+    descriptor.q_num_heads = descriptor.kv_num_heads = 1;
+    descriptor.is_causal = true;
+    const std::vector<int64_t> shape{1, length, 1};
+    const AttentionPlan plan(descriptor, AttentionLayout::kRank3, shape, shape, shape, {},
+                             AttentionMaskKind::kNone);
+    std::vector<float> x(length * 2, 0.f), y(length);
+    x[0] = 1;
+    x[3] = 1;
+    const std::vector<float> w{1, 0, 1, 0, std::numeric_limits<float>::max(), 2};
+    ml_cpu_compute::ComputeMicrosoftAttentionFloat32(plan, 2, x.data(), w.data(), nullptr, nullptr,
+                                                     nullptr, y.data(), nullptr);
+    EXPECT_FLOAT_EQ(y[0], 1.5f);
+    EXPECT_FLOAT_EQ(y[1], 1.5f);
+    EXPECT_NEAR(y.back(), 3.f / length, 1.e-6);
+  }
+}
+
 TEST(MicrosoftAttentionCompute, EmptyQueriesAndBatchPreservePackedCache) {
   for (int64_t batch : {0, 1}) {
     AttentionDescriptor descriptor;
