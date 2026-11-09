@@ -183,6 +183,9 @@ struct AttentionPlan {
 
   float scale = 1.0f;
   bool causal = false;
+  /// Implicit finite causal bias for Microsoft Attention; unlike ``causal``,
+  /// future keys participate with the lowest finite FLOAT bias, without a dense mask.
+  bool finite_causal_mask = false;
   /// Bottom-right causal offset used when no per-batch offset (derived from
   /// ``nonpad_kv_seqlen``) is supplied at compute time: query in-block index
   /// ``i`` attends key ``j`` iff ``j <= i + causal_offset``. Equals

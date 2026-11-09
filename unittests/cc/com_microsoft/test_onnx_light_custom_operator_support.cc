@@ -633,8 +633,10 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 }
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
-  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 14U);
+  const auto all_schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
+  ASSERT_EQ(all_schemas.size(), 15U);
+  EXPECT_EQ(all_schemas[0].name(), "Attention");
+  const std::vector schemas(all_schemas.begin() + 1, all_schemas.end());
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
@@ -694,6 +696,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
     bool has_gradient;
   };
   const std::vector<Expected> expected = {
+      {"com.microsoft", "Attention", "", false},
       {"com.microsoft", "BiasGelu", "onnx_light_cpu::BiasGeluFusionPattern", true},
       {"com.microsoft", "CDist", "onnx_light_cpu::CDistFusionPattern", true},
       {"com.microsoft", "CausalConvWithState", "", false},
@@ -717,10 +720,10 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       return record.domain == entry.domain && record.op_type == entry.op_type;
     });
     ASSERT_NE(actual, support.end()) << entry.domain << ":" << entry.op_type;
-    EXPECT_EQ(actual->shape_inference_function,
-              std::string("onnx_light_cpu::ComputeShape") + entry.op_type);
+    const auto name = actual->op_type == "Attention" ? "MicrosoftAttention" : entry.op_type;
+    EXPECT_EQ(actual->shape_inference_function, std::string("onnx_light_cpu::ComputeShape") + name);
     EXPECT_EQ(actual->peak_memory_function,
-              std::string("onnx_light_cpu::ComputePeakMemory") + entry.op_type);
+              std::string("onnx_light_cpu::ComputePeakMemory") + name);
     const std::vector<std::string> fusions =
         entry.fusion[0] ? std::vector<std::string>{entry.fusion} : std::vector<std::string>{};
     EXPECT_EQ(actual->fusion_patterns, fusions);

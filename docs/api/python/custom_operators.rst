@@ -75,6 +75,49 @@ Microsoft normalization cast elimination
    rewritten. In particular, this optimization never changes that adapter's
    domain.
 
+Microsoft Attention
+~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::Attention`` v1 implements fused self-attention for FLOAT
+input ``(B,S,I)`` and weights ``(I,Q+K+V)``, with optional projection
+bias ``(Q+K+V)``. ``num_heads=N`` is required. Without
+``qkv_hidden_sizes=[Q,K,V]``, the projection width is split equally into
+three parts. Q and K must have equal positive widths, and all three widths
+must be divisible by N. The output is ``(B,S,V)``.
+
+Optional int32 masks are exclusive ends ``(B)``, ends followed by inclusive
+starts ``(2B)``, binary ``(B,T)`` / ``(B,S,T)``, or ``(B,1,M,M)``
+with M >= T (rows P through P+S are selected), where T=P+S.
+The 4D mask requires ``unidirectional=0``. Length/start indices must satisfy
+``0 <= start <= end <= T``; raw mask values greater than zero are unmasked.
+Optional additive attention bias broadcasts from ``(1 or B,1 or N,S,T)``.
+``scale`` defaults to ``1/sqrt(Q/N)``; ``mask_filter_value`` defaults to
+``-10000``; ``unidirectional=1`` overwrites future mask positions with the
+lowest finite FLOAT value at offset P, matching the upstream CPU behavior.
+Scale and mask penalties must be finite. Finite mask penalties preserve
+ordinary softmax behavior even when all keys are masked.
+
+Packed past and present have shapes ``(2,B,N,P,H)`` and
+``(2,B,N,P+S,H)``. Past requires a present output; present without past is
+supported, including Whisper encoder-state extraction. Cache requires equal
+Q/K/V widths. Empty batch/query inputs are supported, preserving existing
+past when S=0. FLOAT16/BFLOAT16, active rotary modes, shared cache buffers,
+``past_sequence_length`` and packed ``3B+2`` masks are explicitly unsupported.
+Zero-valued ``do_rotary`` and ``rotary_embedding_dim`` attributes are accepted.
+
+The projection uses the existing runtime-dispatched GEMM; attention reuses
+the tiled ``ai.onnx::Attention`` compute engine without changing Microsoft's
+projection, mask or cache contract. Scratch is allocated through the
+runtime allocator, and memory profiling excludes outputs. Existing GEMM
+and attention blocking defaults, SIMD dispatch and executor parallelism apply;
+no new tuning parameters or ABI are introduced.
+No gradient or fusion is advertised.
+
+The contract follows `ONNX Runtime's Attention v1 schema
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/graph/contrib_ops/bert_defs.cc>`_.
+Focused C++ and backend TEST/BENCHMARK cases cover projection, masks,
+causal cache, unequal value width and Whisper-sized ``(32,96)`` weights.
+
 Microsoft MultiHeadAttention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

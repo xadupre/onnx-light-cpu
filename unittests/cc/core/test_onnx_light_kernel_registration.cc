@@ -99,6 +99,13 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        15,
        std::nullopt},
       {"com.microsoft",
+       "Attention",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::MicrosoftAttention",
+       {rt_ns::DataType::FLOAT},
+       1,
+       1},
+      {"com.microsoft",
        "BiasGelu",
        sym_ns::Device::kCPU,
        "onnx_light_cpu::BiasGelu",
@@ -564,6 +571,7 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
 
   EXPECT_EQ(microsoft_names(optimized),
             (std::vector<std::pair<std::string, std::string>>{
+                {"Attention", "onnx_light_cpu::MicrosoftAttention"},
                 {"BiasGelu", "onnx_light_cpu::BiasGelu"},
                 {"CDist", "onnx_light_cpu::CDist"},
                 {"CausalConvWithState", "onnx_light_cpu::CausalConvWithState"},
@@ -581,6 +589,7 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
                  "onnx_light_cpu::SkipSimplifiedLayerNormalization"}}));
   EXPECT_EQ(microsoft_names(naive),
             (std::vector<std::pair<std::string, std::string>>{
+                {"Attention", "onnx_light_cpu::MicrosoftAttention"},
                 {"BiasGelu", "onnx_light_cpu::NaiveBiasGelu"},
                 {"CDist", "onnx_light_cpu::NaiveCDist"},
                 {"CausalConvWithState", "onnx_light_cpu::NaiveCausalConvWithState"},

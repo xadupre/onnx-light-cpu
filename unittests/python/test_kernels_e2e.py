@@ -85,6 +85,7 @@ _REGISTERED_KERNELS = registered_kernel_names()
 
 _TARGET_KERNELS = dict(_REGISTERED_KERNELS)
 _DOMAIN_SPECIFIC_TARGET_KERNELS = {
+    ("com.microsoft", "Attention"): _TARGET_KERNELS["com.microsoft::Attention"],
     ("ai.onnx", "LinearAttention"): _TARGET_KERNELS["LinearAttention"],
     (
         "com.microsoft",
@@ -102,6 +103,7 @@ _BENCHMARK_TYPE_SUFFIXES["QLinearMatMul"] = "(?:int8|uint8)"
 _BENCHMARK_TYPE_SUFFIXES["Sum"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
+_BENCHMARK_TYPE_SUFFIXES["com.microsoft::Attention"] = "(?:float|float32)"
 _BENCHMARK_TYPE_SUFFIXES["GatherBlockQuantized"] = "uint8"
 for _op_type in {
     "BatchNormalization",
@@ -119,6 +121,7 @@ for _op_type in {
 _BENCHMARK_TYPE_SUFFIXES["SimplifiedLayerNormalization"] = "(?:float32|float64|float16|bfloat16)"
 _BENCHMARK_TYPE_SUFFIXES["SkipSimplifiedLayerNormalization"] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
+    "com.microsoft::Attention": "ms_attention",
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "CausalConvWithState": "causal_conv",
     "GroupQueryAttention": "group_query_attention",
@@ -872,16 +875,26 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif (record.domain, record.op_type) == (
-                "com.microsoft",
-                "Gelu",
-            ) or record.op_type in {
-                "MultiHeadAttention",
-                "ReduceSum",
-                "SimplifiedLayerNormalization",
-            }:
+            elif (
+                (record.domain, record.op_type)
+                == (
+                    "com.microsoft",
+                    "Gelu",
+                )
+                or record.op_type
+                in {
+                    "MultiHeadAttention",
+                    "ReduceSum",
+                    "SimplifiedLayerNormalization",
+                }
+                or (record.domain, record.op_type) == ("com.microsoft", "Attention")
+            ):
                 assert record.since_version == 1
-            elif record.op_type in {"Attention", "RMSNormalization", "RotaryEmbedding"}:
+            elif (record.domain, record.op_type) in {
+                ("ai.onnx", "Attention"),
+                ("ai.onnx", "RMSNormalization"),
+                ("ai.onnx", "RotaryEmbedding"),
+            }:
                 assert record.since_version == 23
             elif record.op_type == "LinearAttention" and record.domain != "com.microsoft":
                 assert record.since_version == 27
@@ -906,7 +919,10 @@ class TestBackendCases(ExtTestCase):
             else:
                 assert record.since_version is None
             if record.until_version is not None:
-                assert record.op_type in version_bounded_ops
+                assert record.op_type in version_bounded_ops or (
+                    record.domain,
+                    record.op_type,
+                ) == ("com.microsoft", "Attention")
                 assert isinstance(record.until_version, int)
                 assert record.until_version >= record.since_version
 

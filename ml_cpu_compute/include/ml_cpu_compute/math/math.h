@@ -15,6 +15,10 @@
 
 namespace ml_cpu_compute {
 
+namespace detail {
+struct GemmScratch;
+}
+
 /// Logical layout of a tensor broadcast over an ``M x N`` GEMM output.
 enum class GemmBroadcast {
   kNone,
@@ -277,6 +281,10 @@ void LogBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t 
 /// rows of ``Y`` using the executor supplied by the embedding runtime.
 void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                  float alpha, const float *A, const float *B, float beta, const float *C, float *Y);
+/// As above, borrowing the caller's exclusive preallocated scratch slice.
+void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 float alpha, const float *A, const float *B, float beta, const float *C, float *Y,
+                 detail::GemmScratch *scratch);
 
 /// Computes float32 GEMM and applies broadcast bias, residual, and activation
 /// through one typed epilogue. Full-matrix bias without other post-operations
@@ -307,6 +315,11 @@ void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::siz
 void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
                           std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
                           const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y);
+/// As above, borrowing the caller's exclusive preallocated scratch slice.
+void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
+                          std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                          const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y,
+                          detail::GemmScratch *scratch);
 
 /// The four ONNX Float8 storage formats accepted by
 /// :cpp:func:`GemmFloat8WithEpilogue`.

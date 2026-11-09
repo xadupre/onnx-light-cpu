@@ -321,7 +321,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
         assert f"os: {os_name}" in source_job
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
-    assert source_job.count("matrix.python-abi == 'stable'") == 3
+    assert source_job.count("matrix.python-abi == 'stable'") == 5
     assert "name: onnx-light main (" in source_job
     assert (
         "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
@@ -437,6 +437,7 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
         "test_moe.py",
+        "test_microsoft_attention.py",
         "test_qmoe.py",
         "test_tanh.py",
         "test_tree_ensemble_parity_benchmark.py",
@@ -445,6 +446,15 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
         assert f'"{filename}"' in standalone_job
         assert exclusion not in source_job
     assert "run: python -m pytest unittests" in source_job
+    assert "Set up Whisper export dependencies" in source_job
+    assert "git clone --depth 1 --branch main https://github.com/xadupre/mbext.git" in source_job
+    assert "torch==2.15.0" in source_job
+    assert "transformers==5.22.1 scipy==1.18.1" in source_job
+    assert 'ONNX_LIGHT_CPU_REQUIRE_WHISPER_EXPORT: "1"' in source_job
+    assert (
+        "python -m pytest unittests/python/test_microsoft_attention.py -k native_whisper"
+        in source_job
+    )
 
 
 def test_standalone_unix_install_retries_transient_wheel_download_failure():
