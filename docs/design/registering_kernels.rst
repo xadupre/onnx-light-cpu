@@ -384,6 +384,88 @@ model-specific override written in NumPy — use ``onnx-light``'s per-evaluator
 ``ReferenceEvaluator.register_custom_kernel(domain, op_type, fn)`` hook instead;
 it does not require rebuilding this package.
 
+Explicit weight/bias quantization preparation
+--------------------------------------------
+
+``PrepareWeightBiasQuantization`` is an **opt-in, lossy CPU stage**, not a
+generic equivalence rewrite or a whole-model quantizer. Neither kernel
+registration nor default optimization enables it. From C++, after
+floating-point weight-changing fusions and before any QDQ fusion:
+
+.. code-block:: cpp
+
+   #include <onnx_light_cpu/patterns/weight_bias_quantization.h>
+   #include <onnx_core/builder/graph_graph.h>
+
+   builder.set_device(onnx_light::core::symbolic::Device::kCPU);
+   auto preparation = onnx_light_cpu::PrepareWeightBiasQuantization(builder);
+
+   // Preserve the boundaries until downstream QDQ fusions have run.
+   onnx_light::core::builder::ConstantFoldingOptions folding;
+   folding.excluded_ops.insert({"", "DequantizeLinear"});
+   onnx_light::core::builder::GraphGraph optimizer(builder);
+   optimizer.Optimize(-1, nullptr, folding);
+
+This ports a conservative subset of ORT's
+`WeightBiasQuantization at 36f07f760d
+<https://github.com/microsoft/onnxruntime/blob/36f07f760d/onnxruntime/core/optimizer/qdq_transformer/weight_bias_quantization.cc>`_.
+It requires default-domain opset 13 or later, FLOAT ``Conv``, ``ConvTranspose``
+or ``Gemm``, a DQ activation with constant scalar FLOAT scale and INT8/UINT8
+storage, and an exclusive output path to scalar ``QuantizeLinear``.
+Optional intermediate ``Relu`` and constant-bound ``Clip`` are supported.
+An output or intermediate exposed as a graph output, shared with another
+consumer, or captured by a subgraph is rejected. Shared source constants and
+activation DQ nodes are not changed.
+
+Supported weights are finite, nonempty FLOAT constants or constant INT8
+weights behind a scalar symmetric DQ. Existing INT8 weight DQ accepts omitted
+zero point (zero), or an explicit scalar INT8 zero. Activation/output zero
+points may be omitted or constant scalars of the corresponding storage type;
+an omitted output Q zero point selects UINT8. Per-axis scales (including
+length-one vectors), blocked quantization, nonzero weight zero points, and
+unknown attributes are rejected without rewriting.
+
+Shapes must be static and positive. Convolutions support rank 3/4, group 1,
+``auto_pad=NOTSET``, and validated ``kernel_shape``, ``strides``, ``dilations``
+and nonnegative ``pads``. ``ConvTranspose`` output-shape/output-padding
+overrides and grouped convolutions are deliberately excluded.
+``Gemm`` supports both transpose flags, but requires ``alpha=beta=1``.
+An optional bias must be a finite FLOAT constant vector with one element
+per output channel; scalar/matrix broadcasting is not supported.
+
+The precision policy is:
+
+* New weights use symmetric INT8 with zero point zero and scalar FLOAT
+  ``scale=max(abs(weight))/127``. All-zero weights use scale one.
+* Bias uses FLOAT ``bias_scale=activation_scale*weight_scale``, FLOAT division,
+  round-to-nearest/ties-to-even, and INT32 storage with zero point zero.
+  Nonfinite, zero, negative or subnormal scales, underflow/overflow of the
+  product scale, and rounded biases outside INT32 are rejected before mutation.
+* Generic onnx-light ``QuantizeLinear``, ``Div``, ``Round`` and ``Cast``
+  primitives perform preparation; no duplicate quantization kernels are added.
+  Preparation pins nearest rounding and restores the caller's rounding mode.
+* Weight reconstruction error is approximately at most half a weight scale
+  (plus FLOAT arithmetic error); bias has the analogous rounding error.
+  Accumulation, FLOAT representation near INT32 limits, and output
+  quantization/saturation can amplify or mask those errors. Equality with the
+  original floating-point model is not promised.
+
+The stage folds preparation arithmetic, retains weight/bias DQ boundaries,
+and converges on repeated application. Subsequent optimizers must preserve
+those boundaries explicitly as above. Dead source constants may be removed
+by subsequent cleanup; live/shared source constants remain unchanged.
+
+Produced graphs execute with existing CPU kernels: onnx-light supplies the
+FLOAT convolution and Q/DQ kernels, and onnx-light-cpu supplies accelerated
+FLOAT ``Gemm``. There is currently no Conv/ConvTranspose/Gemm QDQ fusion in
+this backend; this stage does not claim an integer-kernel speedup and adds
+no kernels. Measure end-to-end accuracy, latency and memory on representative
+models before considering default enablement; it remains disabled by default.
+This is CPU-owned preparation related to
+`#1126 <https://github.com/xadupre/onnx-light-cpu/issues/1126>`_ and complements
+`#1017 <https://github.com/xadupre/onnx-light-cpu/issues/1017>`_; reconstructing
+DQ weights into MatMulNBits and generic QDQ propagation are separate work.
+
 .. _l-registration-ignored:
 
 Troubleshooting: the registration is ignored

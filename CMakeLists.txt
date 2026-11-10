@@ -965,7 +965,8 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
                 "lib_onnx_light_cpu_kernels;lib_onnx_light_cpu_backend_test")
           endif()
         elseif(_test_name STREQUAL "test_onnx_light_normalization_cast" OR
-               _test_name STREQUAL "test_onnx_light_moe_pattern")
+               _test_name STREQUAL "test_onnx_light_moe_pattern" OR
+               _test_name STREQUAL "test_onnx_light_weight_bias_quantization")
           if(TARGET onnx_light::lib_onnx_op AND TARGET onnx_light::lib_onnx_shape)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op;onnx_light::lib_onnx_shape")
