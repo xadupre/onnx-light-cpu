@@ -664,7 +664,8 @@ The paired policies are:
   Only this diagnostic baseline needs the original weight in the driver.
 
 The three packed policies use the same microkernel arithmetic. The driver
-reports effective ISA, FMA, microarchitecture, MR, actual dispatched blocks, and packed bytes.
+reports effective ISA, FMA, microarchitecture, MR, actual dispatched blocks,
+and packed bytes.
 Packing, input generation, and plan construction are outside measurement for
 every policy; per-call dispatch and scratch remain inside. Three warmup rounds
 check candidate outputs against generic dispatch, followed by 21 samples per
@@ -697,6 +698,57 @@ versus SMT comparison.
 AVX-512 execution and a larger native pool are unavailable on this host:
 neither performance claim is made. On an AVX-512 host, repeat with
 ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX512`` and verify the reported dispatch.
+
+Paired before/experimental-after medians
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The before baseline is commit ``e6c7576``. ``Columns`` is the unchanged
+prepared schedule; ``Rows`` and ``Dynamic`` are the experimental after
+policies, not retained production changes. ``Generic`` is a separate
+original-layout comparison, not the before baseline for prepared decode.
+``Blocks`` lists actual C/R/D/G dispatch counts in that order. The final
+production scheduler is identical to before; no speedup is claimed for it.
+
+.. csv-table:: FP32, K=512, median seconds (M=384 is three batches of 128)
+   :header: "Threads", "M", "N", "Columns", "Rows", "Dynamic", "Generic", "Blocks"
+   :widths: 5, 6, 8, 13, 13, 13, 13, 9
+
+   1, 1, 32000, 0.003021731, 0.003021541, 0.003003798, 0.002436924, 1/1/1/1
+   1, 4, 32000, 0.003740810, 0.003738545, 0.003734928, 0.010881533, 1/1/1/1
+   1, 12, 32000, 0.006425684, 0.006353470, 0.008236534, 0.017491080, 1/1/1/1
+   1, 128, 32000, 0.051552258, 0.051790992, 0.103798497, 0.059934465, 1/1/1/1
+   1, 384, 32000, 0.142362848, 0.142062179, 0.256421826, 0.169030661, 1/1/1/1
+   1, 768, 32000, 0.284770591, 0.284477038, 0.513405420, 0.291473453, 1/1/1/1
+   1, 1, 32016, 0.003067053, 0.003002313, 0.002983558, 0.002452334, 1/1/1/1
+   1, 4, 32016, 0.003715478, 0.003715809, 0.003729946, 0.009588986, 1/1/1/1
+   1, 12, 32016, 0.006359412, 0.006223940, 0.007918725, 0.017401903, 1/1/1/1
+   1, 128, 32016, 0.049324701, 0.049302109, 0.085651675, 0.057012371, 1/1/1/1
+   1, 384, 32016, 0.141771651, 0.141505224, 0.250904609, 0.170127475, 1/1/1/1
+   1, 768, 32016, 0.285109708, 0.285057205, 0.495066902, 0.291138927, 1/1/1/1
+   4, 1, 32000, 0.001796883, 0.002913396, 0.002904811, 0.002073659, 4/1/1/4
+   4, 4, 32000, 0.001944960, 0.003473021, 0.003483711, 0.006256435, 4/1/1/4
+   4, 12, 32000, 0.002671616, 0.004448442, 0.004350458, 0.006112997, 4/2/2/4
+   4, 128, 32000, 0.022446676, 0.025950507, 0.032049208, 0.024096858, 4/4/4/4
+   4, 384, 32000, 0.066444441, 0.066435961, 0.089960620, 0.072399666, 4/4/4/4
+   4, 768, 32000, 0.135308802, 0.132714633, 0.179720080, 0.145148586, 4/4/4/4
+   4, 1, 32016, 0.001848696, 0.003046435, 0.002993456, 0.002053890, 4/1/1/4
+   4, 4, 32016, 0.001870087, 0.003494123, 0.003513318, 0.006131453, 4/1/1/4
+   4, 12, 32016, 0.002903528, 0.004497177, 0.004445691, 0.008330344, 4/2/2/4
+   4, 128, 32016, 0.022918117, 0.026348115, 0.033383035, 0.025110368, 4/4/4/4
+   4, 384, 32016, 0.066731089, 0.066783343, 0.091958982, 0.074381046, 4/4/4/4
+   4, 768, 32016, 0.135336467, 0.132692144, 0.178604935, 0.145913971, 4/4/4/4
+   2, 1, 32000, 0.001948384, 0.002977042, 0.002959450, 0.002238575, 2/1/1/2
+   2, 4, 32000, 0.002159578, 0.003534392, 0.003527328, 0.006745090, 2/1/1/2
+   2, 12, 32000, 0.003391695, 0.004241641, 0.004216353, 0.008483533, 2/2/2/2
+   2, 128, 32000, 0.025152718, 0.026464421, 0.047074586, 0.028261008, 2/2/2/2
+   2, 384, 32000, 0.073663069, 0.072878127, 0.141206406, 0.109089279, 2/2/2/2
+   2, 768, 32000, 0.144862876, 0.144004846, 0.302062556, 0.161698989, 2/2/2/2
+   2, 1, 32016, 0.002703340, 0.003915981, 0.003807699, 0.003262242, 2/1/1/2
+   2, 4, 32016, 0.002841588, 0.004295549, 0.004219497, 0.007490365, 2/1/1/2
+   2, 12, 32016, 0.004193137, 0.005140905, 0.005190517, 0.010020332, 2/2/2/2
+   2, 128, 32016, 0.025290678, 0.026649153, 0.048838134, 0.028990892, 2/2/2/2
+   2, 384, 32016, 0.074825643, 0.074392224, 0.147549118, 0.111406852, 2/2/2/2
+   2, 768, 32016, 0.145238639, 0.144081429, 0.281993297, 0.162990027, 2/2/2/2
 
 No scheduling or dispatch change is retained. Static columns already
 distribute decode's approximately 65.5 MB weight stream without duplicating
