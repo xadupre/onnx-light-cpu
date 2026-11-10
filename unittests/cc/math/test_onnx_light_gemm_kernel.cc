@@ -592,6 +592,25 @@ rt_ns::Tensor GemmTensor(rt_ns::DataType dtype, const rt_ns::Shape &shape,
   }
 }
 
+TEST(OnnxLightGemmKernel, Gemm29EmptyBatchReturnsBeforeMatrixSizeOverflow) {
+  constexpr std::int64_t large_dimension = INT64_C(4294967296);
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+                          rt_ns::DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const auto a = GemmTensor(type, {0, large_dimension, 0}, {});
+    const auto b = GemmTensor(type, {0, large_dimension}, {});
+    const auto c = GemmTensor(type, {1}, {1.0f});
+    const auto invalid_c = GemmTensor(type, {2}, {1.0f, 2.0f});
+    const onnx_light_cpu::GemmKernel kernel(MakeCtx(29));
+    const auto output = kernel(a, b, c, 1.0f, 1.0f, false, false);
+    EXPECT_EQ(output.data_type, type);
+    EXPECT_EQ(output.shape, (rt_ns::Shape{0, large_dimension, large_dimension}));
+    EXPECT_EQ(output.element_count(), 0);
+    EXPECT_EQ(output.size_bytes(), 0);
+    EXPECT_THROW(kernel(a, b, invalid_c, 1.0f, 1.0f, false, false), std::invalid_argument);
+  }
+}
+
 void CheckGemm29(const rt_ns::Tensor &a, const rt_ns::Tensor &b, const rt_ns::Tensor *c,
                  bool trans_a, bool trans_b, float beta = 0.5f) {
   const rt_ns::KernelContext ctx(rt_ns::DefaultOpset(29));
