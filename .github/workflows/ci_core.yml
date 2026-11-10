@@ -466,3 +466,71 @@ jobs:
         run: |
           qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
           qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
+
+  onnx_light_release:
+    name: onnx-light release (ubuntu-latest)
+    runs-on: ubuntu-latest
+    # Validates the latest published onnx-light release (setup_onnx_light_source
+    # only covers onnx-light main). The helper rejects a latest release older
+    # than the minimum declared in pyproject.toml.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Set parallel build level
+        shell: bash
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}" >> "$GITHUB_ENV"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
+
+      # The release wheel provides the runtime libraries; the matching tag,
+      # cloned as the sibling ../onnx-light, provides the C++ headers.
+      - name: Install onnx-light release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pip install "cmake>=4" nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
+          ONNX_LIGHT_RELEASE=$(python tools/onnx_light_release.py latest)
+          echo "onnx-light release: ${ONNX_LIGHT_RELEASE}"
+          python tools/onnx_light_release.py clone --version "${ONNX_LIGHT_RELEASE}" "${GITHUB_WORKSPACE}/../onnx-light"
+          python tools/onnx_light_release.py install --version "${ONNX_LIGHT_RELEASE}"
+          ONNX_LIGHT_RELEASE="${ONNX_LIGHT_RELEASE}" python - <<'PY'
+          import os
+          from importlib.metadata import version
+
+          from onnx_light import get_cpp_build_info
+
+          installed = version("onnx-light")
+          if installed != os.environ["ONNX_LIGHT_RELEASE"]:
+              raise SystemExit(f"installed onnx-light {installed}, expected {os.environ['ONNX_LIGHT_RELEASE']}")
+          info = get_cpp_build_info()
+          print(f"onnx-light {installed}: {info}")
+          library_dir = info["library_dir"]
+          current = os.environ.get("LD_LIBRARY_PATH", "")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"LD_LIBRARY_PATH={library_dir}{os.pathsep + current if current else ''}\n")
+              env.write(f"ONNX_LIGHT_RELEASE_STABLE_ABI={info['python_stable_abi']}\n")
+          PY
+
+      - name: Build extension and run C++ tests via setup.py
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        shell: bash
+        run: |
+          export CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=${ONNX_LIGHT_RELEASE_STABLE_ABI}"
+          python setup.py build_ext --inplace --cpp-tests --onnx-light-source
+
+      - name: Run onnx-light integration tests
+        run: python -m pytest unittests

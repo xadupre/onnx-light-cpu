@@ -457,6 +457,27 @@ def test_native_kernel_tests_require_compatible_runtime_and_extension_in_standal
     )
 
 
+def test_pull_requests_validate_the_latest_onnx_light_release():
+    release_job = _CORE_WORKFLOW.split("  onnx_light_release:\n", 1)[1]
+    latest = release_job.index("ONNX_LIGHT_RELEASE=$(python tools/onnx_light_release.py latest)")
+    clone = release_job.index(
+        'python tools/onnx_light_release.py clone --version "${ONNX_LIGHT_RELEASE}" '
+        '"${GITHUB_WORKSPACE}/../onnx-light"'
+    )
+    install = release_job.index(
+        'python tools/onnx_light_release.py install --version "${ONNX_LIGHT_RELEASE}"'
+    )
+    build = release_job.index(
+        "python setup.py build_ext --inplace --cpp-tests --onnx-light-source"
+    )
+    test = release_job.index("run: python -m pytest unittests")
+    assert latest < clone < install < build < test
+    assert "--branch main" not in release_job
+    assert "ONNX_LIGHT_PYTEST_ARGS" not in release_job
+    assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=${ONNX_LIGHT_RELEASE_STABLE_ABI}" in release_job
+    assert "info['python_stable_abi']" in release_job
+
+
 def test_standalone_unix_install_retries_transient_wheel_download_failure():
     standalone_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[0]
     unix_install = standalone_job.split("      - name: Build and install package (Unix)", 1)[
