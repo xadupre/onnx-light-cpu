@@ -7,6 +7,27 @@ All notable changes to this project are documented in this file. The format is b
 ### Improvements
 
 - Bumped the project version to 0.2.7 ([#1106](https://github.com/xadupre/onnx-light-cpu/issues/1106)).
+- Implemented `com.microsoft::Attention` with schema, shape inference and scratch-memory support, enabling native Whisper encoder and decoder generation ([#1125](https://github.com/xadupre/onnx-light-cpu/pull/1125)).
+- Registered `com.microsoft::Gelu` (exact erf form) for FLOAT, DOUBLE, FLOAT16 and BFLOAT16, unblocking Qwen3.5 vision graphs ([#1115](https://github.com/xadupre/onnx-light-cpu/pull/1115)).
+- Aligned CPU `Gemm` with the opset-29 contract: vector and batched A inputs, transposition of the final two axes, broadcast bias validated even when `beta=0`, zero-depth products, and empty batches handled without matrix-size overflow; earlier opsets keep the rank-2 restriction ([#1136](https://github.com/xadupre/onnx-light-cpu/pull/1136), [#1131](https://github.com/xadupre/onnx-light-cpu/pull/1131)).
+- Paired adjacent packed panels in the prepared AVX-512 FP32 LM-head path, reusing A broadcasts and improving throughput ([#1112](https://github.com/xadupre/onnx-light-cpu/pull/1112)).
+- Reserved runtime-owned generic GEMM scratch before executor dispatch, removing worker-side allocation ([#1113](https://github.com/xadupre/onnx-light-cpu/pull/1113)).
+- Set all seven `com.microsoft` fusion patterns to priority 3 ([#1118](https://github.com/xadupre/onnx-light-cpu/pull/1118)).
+
+### Fixes
+
+- Included the head-sink buffer in `Attention` peak-memory estimates ([#1108](https://github.com/xadupre/onnx-light-cpu/pull/1108)).
+- Corrected native `MatMul` peak-memory estimates using the execution plans' packing formulas ([#1110](https://github.com/xadupre/onnx-light-cpu/pull/1110)).
+- Preserved CUDA `QMoE` shape inference for sparse-mixer graphs after global CPU registration; CPU execution still rejects sparse routing ([#1124](https://github.com/xadupre/onnx-light-cpu/pull/1124)).
+- Diagnosed native extensions selected from another installation when packages come from `PYTHONPATH` ([#1123](https://github.com/xadupre/onnx-light-cpu/pull/1123)).
+- Fixed the invalid-regex benchmark test on Python 3.12 ([#1122](https://github.com/xadupre/onnx-light-cpu/pull/1122)).
+
+### Documentation & CI
+
+- Fixed `python setup.py build_ext --inplace` against onnx-light main, requiring onnx-light>=0.2.7 ([#1119](https://github.com/xadupre/onnx-light-cpu/pull/1119)).
+- Added a pull-request CI job validating the latest published onnx-light release ([#1137](https://github.com/xadupre/onnx-light-cpu/pull/1137)).
+- Replaced machine-specific paths in documentation with portable relative paths ([#1135](https://github.com/xadupre/onnx-light-cpu/pull/1135)).
+- Fixed title underlines breaking strict documentation builds ([#1129](https://github.com/xadupre/onnx-light-cpu/pull/1129)).
 
 ## [0.2.6] – Unreleased
 
@@ -19,7 +40,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Fixes
 
 - Preserved the A row stride in AVX-512 FP32 GEMM scalar column tails ([#1097](https://github.com/xadupre/onnx-light-cpu/pull/1097)).
-- Added metadata-only `com.microsoft::QMoE` shape inference for GPT-OSS FP4 models with 17 positional input slots, FLOAT8E8M0 block scales, and per-expert FLOAT global scales. Validated both packed layouts and block alignment, including symbolic hidden dimensions, improved arity diagnostics, and accepted empty extended slots for integer CPU execution; FP4 execution remains unsupported ([#1099](https://github.com/xadupre/onnx-light-cpu/pull/1099), pending merge).
+- Added metadata-only `com.microsoft::QMoE` shape inference for GPT-OSS FP4 models with 17 positional input slots, FLOAT8E8M0 block scales, and per-expert FLOAT global scales. Validated both packed layouts and block alignment, including symbolic hidden dimensions, improved arity diagnostics, and accepted empty extended slots for integer CPU execution; FP4 execution remains unsupported ([#1099](https://github.com/xadupre/onnx-light-cpu/pull/1099)).
 
 ### Documentation & CI
 
