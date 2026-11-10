@@ -499,6 +499,9 @@ TEST(WeightBiasQuantization, AcceptsComputedConstantWeightsAndPreservesConstantD
   ExpectPrepared(*graph, options);
   ASSERT_NE(Producer(*graph, "unrelated_float"), nullptr);
   EXPECT_EQ(Producer(*graph, "unrelated_float")->SerializeAsString(), boundary);
+
+  options.bias_shape = {2};
+  ExpectRejected(options);
 }
 
 TEST(WeightBiasQuantization, AcceptsExistingSymmetricInt8WeightsWithFloatBiasOnly) {

@@ -377,6 +377,18 @@ public:
       result.push_back(std::move(node));
       return output;
     };
+    const auto materialize = [&](const std::string &input, const std::string &prefix) {
+      if (graph.NodeBefore(input) == nullptr) {
+        return input;
+      }
+      const auto *value = graph.GetComputedConstant(input);
+      if (value == nullptr) {
+        throw builder::BuilderError("WeightBiasQuantization: missing computed constant");
+      }
+      TensorProto tensor = *value;
+      tensor.set_name(builder.UniqueName(prefix));
+      return std::string(builder.MakeInitializer(tensor));
+    };
     if (plan->quantize_weight) {
       const auto scale = scalar(plan->weight_scale);
       TensorProto zero;
@@ -384,12 +396,14 @@ public:
       zero.set_data_type(TensorProto::INT8);
       zero.ref_int32_data().push_back(0);
       const std::string zero_name = builder.MakeInitializer(zero);
-      const auto quantized = emit("QuantizeLinear", {replacement.input(1), scale, zero_name});
+      const auto weight = materialize(replacement.input(1), "weight_bias_weight");
+      const auto quantized = emit("QuantizeLinear", {weight, scale, zero_name});
       replacement.ref_input()[1] = emit("DequantizeLinear", {quantized, scale, zero_name});
     }
     if (plan->bias_scale) {
       const auto scale = scalar(*plan->bias_scale);
-      const auto divided = emit("Div", {replacement.input(2), scale});
+      const auto bias = materialize(replacement.input(2), "weight_bias_bias");
+      const auto divided = emit("Div", {bias, scale});
       const auto rounded = emit("Round", {divided});
       const auto quantized = emit("Cast", {rounded});
       ONNX_LIGHT_NAMESPACE::AddAttribute(result.back(), "to", int64_t{TensorProto::INT32});
@@ -413,6 +427,24 @@ ONNX_LIGHT_NAMESPACE::RewritingProto PrepareWeightBiasQuantization(builder::Grap
   builder::GraphGraph optimizer(graph, std::move(patterns));
   builder::ConstantFoldingOptions folding;
   folding.excluded_ops.insert({"", "DequantizeLinear"});
+  std::vector<std::string> computed_values;
+  for (const auto &node : graph.Nodes()) {
+    for (const auto &name : node.output()) {
+      if (optimizer.IsConstant(name)) {
+        computed_values.push_back(name);
+      }
+    }
+  }
+  if (!computed_values.empty()) {
+    builder::GraphBuilder evaluated(graph.ToModel(), {}, graph.LocalRegistry());
+    evaluated.ConstantFold(folding);
+    builder::GraphGraph evaluated_graph(evaluated);
+    for (const auto &name : computed_values) {
+      if (const auto *value = evaluated_graph.GetComputedConstant(name)) {
+        optimizer.SetComputedConstant(name, *value);
+      }
+    }
+  }
   return optimizer.Optimize(-1, nullptr, folding, false, {}, false, false, false);
 }
 
