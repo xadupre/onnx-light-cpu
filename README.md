@@ -10,7 +10,7 @@
 [![clang-format](https://github.com/xadupre/onnx-light-cpu/actions/workflows/clang_format.yml/badge.svg)](https://github.com/xadupre/onnx-light-cpu/actions/workflows/clang_format.yml)
 [![OpenSSF Scorecard](https://github.com/xadupre/onnx-light-cpu/actions/workflows/cq_scorecard.yml/badge.svg)](https://github.com/xadupre/onnx-light-cpu/actions/workflows/cq_scorecard.yml)
 [![Coverage](https://codecov.io/gh/xadupre/onnx-light-cpu/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-cpu)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/xadupre/onnx-light-cpu/blob/main/LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Highly optimized CPU kernels for
 [onnx-light](https://github.com/xadupre/onnx-light).
@@ -99,7 +99,7 @@ and links the existing runtime libraries loaded by Python; it does not rebuild
 onnx-light or use `add_subdirectory`:
 
 ```bash
-PYTHONPATH=/path/to/onnx-light \
+PYTHONPATH=../onnx-light \
     python setup.py build_ext --inplace --onnx-light-source
 ```
 
@@ -427,4 +427,4 @@ static initialization guarantees), so the dispatch overhead is paid only once.
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/xadupre/onnx-light-cpu/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).

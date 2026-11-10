@@ -52,7 +52,7 @@ repository root run:
      --test '^test_cpu_causal_conv_c64_l(128|513)_float16_(first|last)_benchmark$' \
      --dtype float16 --onnxruntime --threads 1 \
      --warmup 100 --repeat 1000 --max-repeat-time 3 \
-     --output /tmp/causal-conv.xlsx
+     --output causal-conv.xlsx
 
 Use the same thread limit for both runtimes and for before/after measurements.
 The original dashboard does not provide per-case build provenance or complete

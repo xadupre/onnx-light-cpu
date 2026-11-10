@@ -115,7 +115,7 @@ For example (the CLI dtype filter selects the boolean output):
 
    taskset -c 0 python -m onnx_light_cpu benchmark --threads 1 \
        --tests '^test_cpu_greaterorequal_v16_(contiguous_float32xfloat32_to_bool(_swapped)?_n4194304|right_scalar_float32xfloat32_to_bool_swapped_n1048576)_benchmark$' \
-       --dtypes bool -r 1000 -w 200 -t 5 --onnxruntime -o /tmp/greaterorequal.xlsx
+       --dtypes bool -r 1000 -w 200 -t 5 --onnxruntime -o greaterorequal.xlsx
 
 An additional comparison used ``measure_alternating`` from
 ``tools/benchmark_binary_parity.py`` with those same warm-up/repetition limits,
@@ -220,7 +220,7 @@ the existing runner (repeat with an AVX2-ceiling build on AVX-512 hosts):
    PYTHONPATH="$PWD" python tools/benchmark_binary_parity.py --no-calibrate \
        --case '^test_cpu_(pow|div|mod|greater|greaterorequal|less|lessorequal)_v[0-9]+_.*_(u?int16|u?int32|u?int64)x' \
        --threads 1 --threads physical --cpus 0-3 \
-       -r 100 -w 30 --output /tmp/integer-binary-parity.json
+       -r 100 -w 30 --output integer-binary-parity.json
 
 The report retains raw alternating samples, shapes, types, effective threads,
 implementation paths, and latency percentiles. ORT worker spinning is disabled
@@ -248,7 +248,7 @@ The longer four-size campaign was stopped without publishing partial results.
        --case '^test_cpu_(pow|div|mod)_v[0-9]+_.*_int(16|32|64)x.*_n(65536|1048576)_benchmark$' \
        --case '^test_cpu_(greater|greaterorequal|less|lessorequal)_v[0-9]+_.*_(int64|uint64)x.*_n(65536|1048576)_benchmark$' \
        --threads 1 --threads physical --cpus 0-3 \
-       -r 30 -w 10 -t 0.05 --output /tmp/integer-binary-final.json
+       -r 30 -w 10 -t 0.05 --output integer-binary-final.json
 
 Each row below summarizes 28 measurements; ratios are ORT/CPU median latency.
 
@@ -296,7 +296,7 @@ Exception profiles and follow-up:
   the independently profiled 65,536-element case improved from 0.001325910 s
   to 0.000379798 s.
 
-Call-level profiles used ``python -m cProfile -o /tmp/integer.pstats`` before
+Call-level profiles used ``python -m cProfile -o integer.pstats`` before
 the runner command, selecting the four cases below at 65,536 elements, one
 thread, ``-r 100 -w 30 -t 0.2``. Of 0.074665 s in 524 CPU wrapper calls,
 0.074490 s was in the native-backed evaluator call; case collection consumed

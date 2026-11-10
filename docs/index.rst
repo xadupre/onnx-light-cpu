@@ -22,6 +22,9 @@ optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 gallery for performance comparisons against other back-ends, and the
 :ref:`processor-performance-gallery` for a profile of the current host.
 
+Unless stated otherwise, run shell commands from the repository root.
+Example source, build, and output paths are relative to that directory.
+
 Registering the optimized kernels
 ---------------------------------
 

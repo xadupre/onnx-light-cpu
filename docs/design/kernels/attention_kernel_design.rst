@@ -241,7 +241,7 @@ Reproduce the focused registered-kernel campaign with:
    python tools/benchmark_attention_parity.py --threads 1 --cpus 0 \
      --case '^test_cpu_attention_opset23_rank[34]_mha_q128_kv128_hd64_(none|causal)_stateless_float16_benchmark$' \
      --repeat 100 --warmup 20 --max-repeat-time 0.25 \
-     --output /tmp/attention-parity.json
+     --output attention-parity.json
 
 For native attribution, configure the existing ``test_attention_plan`` target
 with ``-DCMAKE_CXX_FLAGS=-pg -DCMAKE_EXE_LINKER_FLAGS=-pg`` and an AVX2 ceiling,
@@ -370,11 +370,10 @@ with the existing runner, and apply the same settings to each row:
 
 .. code-block:: bash
 
-   REPO=/home/runner/work/onnx-light-cpu/onnx-light-cpu
-   python "$REPO/tools/benchmark_attention_parity.py" --large \
+   python tools/benchmark_attention_parity.py --large \
      --threads 1 --cpus 0 --warmup 20 --repeat 100 --max-repeat-time 1 \
      --case '^test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16_benchmark$' \
-     --output /tmp/attention-case.json
+     --output attention-case.json
 
 Validation comprises all 90 ``test_attention_plan`` tests, the 37 runner
 correctness comparisons, and clang-format checks. New tests cover tile and
@@ -481,14 +480,13 @@ Reproduce all four cases with the existing CLI:
 
 .. code-block:: bash
 
-   REPO=/home/runner/work/onnx-light-cpu/onnx-light-cpu
-   export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+   export PYTHONPATH=".${PYTHONPATH:+:$PYTHONPATH}"
    CMAKE_ARGS='-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF' \
-     python "$REPO/setup.py" build_ext --inplace --onnx-light-source
+     python setup.py build_ext --inplace --onnx-light-source
    taskset -c 0 python -m onnx_light_cpu benchmark \
      --test '^test_cpu_group_query_attention_(mqa_b4_s32_qh8_kvh1|gqa_b2_s64_qh8_kvh2)_hd64_causal_float(16|32)_benchmark$' \
      --dtype float32 float16 --threads 1 --warmup 100 --repeat 1000 \
-     --max-repeat-time 3 --onnxruntime --output /tmp/gqa.xlsx
+     --max-repeat-time 3 --onnxruntime --output gqa.xlsx
 
 Validation passed all 91 shared Attention tests, 20 GQA adapter tests,
 10 naive-GQA tests, and 12 MHA adapter tests. The exact four registered
@@ -596,7 +594,7 @@ The historical measurements above used an explicit AVX2 ceiling instead.
      --threads 1 --cpus 2 --warmup 40 --repeat 400 --max-repeat-time 4 \
      --case '^test_cpu_attention_opset23_rank3_mha_q(128|129)_kv(128|257)_hd64_none_stateless_float32_benchmark$' \
      --case '^test_cpu_attention_opset23_rank4_mha_q(16|128|129)_kv(128|257)_hd(63|64|128|256)_none_stateless_float16_benchmark$' \
-     --output /tmp/attention-1029-auto.json
+     --output attention-1029-auto.json
 
 Validation includes all 93 Attention tests, 36 shared math tests and 18
 Sigmoid/Softmax adapter tests under the AVX2 ceiling. An AVX-512-ceiling
@@ -776,4 +774,4 @@ The retained path can be reproduced from a source-linked build with:
    python tools/benchmark_attention_parity.py --large \
      --threads 1 --cpus 0 --warmup 20 --repeat 100 --max-repeat-time 2 \
      --case '^test_cpu_attention_opset23_rank4_mha_(q128_kv128_hd(64|128|256)|q512_kv128_hd64|q128_kv8192_hd64)_none_stateless_float32_benchmark$' \
-     --output /tmp/attention-1028.json
+     --output attention-1028.json
