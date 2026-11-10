@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
+#include "ml_cpu_compute/execution.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -41,6 +42,17 @@ void ConfigureTuning(onnx_light_cpu::GemmKernel &kernel, rt_ns::DataType data_ty
         "compact_blocking.kc", "parallel.maximum_threads"}) {
     parameters.values[name] = int64_t{1};
   }
+  kernel.Configure(parameters);
+}
+
+void ConfigureMaximumParticipants(onnx_light_cpu::GemmKernel &kernel, rt_ns::DataType data_type,
+                                  std::int64_t maximum) {
+  onnx_light_cpu::GemmKernel::RegisterTuningSchemas();
+  const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(
+      kernel.TuningKey(static_cast<int32_t>(data_type)));
+  ASSERT_NE(schema, nullptr);
+  auto parameters = schema->portable_defaults();
+  parameters.values["parallel.maximum_threads"] = maximum;
   kernel.Configure(parameters);
 }
 
@@ -378,6 +390,19 @@ double GemmValue(const rt_ns::Tensor &tensor, std::size_t index) {
   }
 }
 
+struct GemmExecutorRecorder {
+  std::int64_t maximum_blocks = 0;
+
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
+    auto &executor = *static_cast<GemmExecutorRecorder *>(context);
+    executor.maximum_blocks = std::max(executor.maximum_blocks, blocks);
+    for (std::int64_t block = 0; block < blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
+
 void ExpectGemmMatches(const rt_ns::Tensor &actual, const rt_ns::Tensor &expected) {
   ASSERT_EQ(actual.data_type, expected.data_type);
   ASSERT_EQ(actual.shape, expected.shape);
@@ -470,6 +495,31 @@ TEST(OnnxLightGemmKernel, Gemm29ZeroDepthPreservesAlphaSemantics) {
         }
       }
     }
+  }
+}
+
+TEST(OnnxLightGemmKernel, GemmParticipantLimitBoundsBatchedEpilogues) {
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    GemmExecutorRecorder recorder;
+    ml_cpu_compute::ExecutionExecutorView executor{&recorder, 4, &GemmExecutorRecorder::Run};
+    ml_cpu_compute::ExecutionExecutorScope executor_scope(&executor);
+    onnx_light_cpu::GemmKernel kernel(MakeCtx(29));
+    ConfigureMaximumParticipants(kernel, type, 1);
+
+    const auto zero_depth_a = MakeGemmInput(type, {2, 513, 0}, 1);
+    const auto zero_depth_b = MakeGemmInput(type, {0, 512}, 2);
+    const auto zero_depth_output = kernel(zero_depth_a, zero_depth_b, 0.75f, false, false);
+    EXPECT_EQ(zero_depth_output.shape, (rt_ns::Shape{2, 513, 512}));
+    EXPECT_LE(recorder.maximum_blocks, 1);
+
+    const auto a = MakeGemmInput(type, {2, 513, 8}, 1);
+    const auto b = MakeGemmInput(type, {8, 512}, 2);
+    const auto c = MakeGemmInput(type, {2, 1, 512}, 3);
+    const auto output = kernel(a, b, c, 0.75f, 0.5f, false, false);
+    EXPECT_EQ(output.shape, (rt_ns::Shape{2, 513, 512}));
+    EXPECT_LE(recorder.maximum_blocks, 1);
+    EXPECT_TRUE(std::isfinite(GemmValue(output, 0)));
   }
 }
 

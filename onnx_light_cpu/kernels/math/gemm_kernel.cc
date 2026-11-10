@@ -332,6 +332,30 @@ template <typename T> void FillZeroDepth(T *output, std::size_t count, T alpha) 
                                 });
 }
 
+class GemmParticipantLimitScope {
+public:
+  explicit GemmParticipantLimitScope(std::size_t maximum_participants)
+      : original_(ml_cpu_compute::CurrentExecutionExecutor()),
+        executor_(original_ == nullptr ? ml_cpu_compute::ExecutionExecutorView{} : *original_),
+        scope_(Limit(maximum_participants)) {}
+
+private:
+  const ml_cpu_compute::ExecutionExecutorView *Limit(std::size_t maximum_participants) {
+    if (original_ == nullptr || maximum_participants == 0) {
+      return original_;
+    }
+    const std::size_t bounded = std::min(
+        maximum_participants, static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()));
+    executor_.effective_threads =
+        std::min(executor_.effective_threads, static_cast<std::int64_t>(bounded));
+    return &executor_;
+  }
+
+  const ml_cpu_compute::ExecutionExecutorView *original_;
+  ml_cpu_compute::ExecutionExecutorView executor_;
+  ml_cpu_compute::ExecutionExecutorScope scope_;
+};
+
 template <typename T>
 void ExecuteGemmBatches(const ml_cpu_compute::GemmPlan<T> &plan, const Tensor &a, const Tensor &b,
                         const Tensor *c, const Shape &output_shape, std::size_t batches,
@@ -449,6 +473,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       ValidateGemmBuffer(*c, element_size, "C");
     }
   }
+
+  const GemmParticipantLimitScope participant_limit(tuning.maximum_participants);
 
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT: {
