@@ -138,6 +138,35 @@ public:
   std::vector<std::size_t> requests;
 };
 
+class DispatchCheckingAllocator : public RecordingAllocator {
+public:
+  using RecordingAllocator::RecordingAllocator;
+  rt_ns::RawBuffer *Allocate(std::size_t bytes) override {
+    allocated_during_dispatch |= in_dispatch;
+    return RecordingAllocator::Allocate(bytes);
+  }
+  bool in_dispatch = false;
+  bool allocated_during_dispatch = false;
+};
+
+struct InlineGemmExecutor {
+  DispatchCheckingAllocator *allocator;
+  std::int64_t dispatches = 0;
+  std::int64_t maximum_blocks = 0;
+
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
+    auto &executor = *static_cast<InlineGemmExecutor *>(context);
+    ++executor.dispatches;
+    executor.maximum_blocks = std::max(executor.maximum_blocks, blocks);
+    executor.allocator->in_dispatch = true;
+    for (std::int64_t block = 0; block < blocks; ++block) {
+      task(task_context, block);
+    }
+    executor.allocator->in_dispatch = false;
+  }
+};
+
 TEST(MatMulMemory, RuntimeAllocatorOwnsGenericPackingAndWorkspaceNotDeclaredOutput) {
   constexpr std::size_t m = 17, n = 1057, k = 129;
   const std::vector<float> a(m * k, 0.25f), b(k * n, 0.5f);
@@ -235,6 +264,89 @@ TEST(GemmMemory, RuntimeAllocatorOwnsTransposedGenericPacking) {
     EXPECT_FALSE(scratch.requests.empty());
     EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
     EXPECT_EQ(outputs.requests.size(), 1U);
+  }
+}
+
+TEST(GemmMemory, Gemm29BatchesUseRuntimeScratchBeforeExecutorDispatch) {
+  constexpr std::size_t batches = 2, m = 49, n = 1057, k = 129;
+  for (const auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                           rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(dtype));
+    DispatchCheckingAllocator scratch(32);
+    RecordingAllocator outputs;
+    InlineGemmExecutor executor{&scratch};
+    ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineGemmExecutor::Run};
+    ml_cpu_compute::ExecutionExecutorScope scope(&view);
+    const rt_ns::KernelContext context(rt_ns::OpsetId("", 29));
+    rt_ns::RuntimeContext runtime(
+        context, rt_ns::RuntimeContextOptions{.allocator = &scratch, .io_allocator = &outputs});
+    runtime.SetActiveAllocator(&outputs);
+    const rt_ns::Shape a_shape{batches, k, m}, b_shape{n, k}, c_shape{batches, 1, n};
+    const std::vector<float> a(batches * k * m, 0.25f), b(n * k, 0.5f);
+    std::vector<float> c(batches * n, 0.25f);
+    std::fill(c.begin() + n, c.end(), 0.75f);
+    if (dtype == rt_ns::DataType::FLOAT16 || dtype == rt_ns::DataType::BFLOAT16) {
+      const bool bf16 = dtype == rt_ns::DataType::BFLOAT16;
+      runtime.Set("A", bf16 ? rt_ns::MakeBfloat16Tensor("A", a_shape, a)
+                            : rt_ns::MakeFloat16Tensor("A", a_shape, a));
+      runtime.Set("B", bf16 ? rt_ns::MakeBfloat16Tensor("B", b_shape, b)
+                            : rt_ns::MakeFloat16Tensor("B", b_shape, b));
+      runtime.Set("C", bf16 ? rt_ns::MakeBfloat16Tensor("C", c_shape, c)
+                            : rt_ns::MakeFloat16Tensor("C", c_shape, c));
+    } else if (dtype == rt_ns::DataType::FLOAT) {
+      runtime.Set("A", rt_ns::Tensor::FromFloat("A", a_shape, a));
+      runtime.Set("B", rt_ns::Tensor::FromFloat("B", b_shape, b));
+      runtime.Set("C", rt_ns::Tensor::FromFloat("C", c_shape, c));
+    } else {
+      runtime.Set("A", rt_ns::Tensor::FromDouble("A", a_shape, {a.begin(), a.end()}));
+      runtime.Set("B", rt_ns::Tensor::FromDouble("B", b_shape, {b.begin(), b.end()}));
+      runtime.Set("C", rt_ns::Tensor::FromDouble("C", c_shape, {c.begin(), c.end()}));
+    }
+    const std::size_t baseline = scratch.TotalAllocatedSize();
+    scratch.requests.clear();
+    onnx_light_cpu::GemmKernel kernel(context);
+    ONNX_LIGHT_NAMESPACE::NodeProto node;
+    node.set_op_type("Gemm");
+    node.add_input("A");
+    node.add_input("B");
+    node.add_input("C");
+    node.add_output("Y");
+    for (const char *name : {"transA", "transB"}) {
+      auto *attribute = node.add_attribute();
+      attribute->set_name(name);
+      attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
+      attribute->set_i(1);
+    }
+    kernel.set_node(node);
+    kernel.Run(runtime);
+
+    ASSERT_FALSE(scratch.requests.empty());
+    EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+    EXPECT_FALSE(scratch.allocated_during_dispatch);
+    EXPECT_GT(executor.dispatches, 0);
+    EXPECT_GT(executor.maximum_blocks, 1);
+    EXPECT_LE(executor.maximum_blocks, 4);
+    const bool half = dtype == rt_ns::DataType::FLOAT16 || dtype == rt_ns::DataType::BFLOAT16;
+    if (half) {
+      EXPECT_EQ(scratch.requests.front(), m * n * sizeof(float));
+    }
+    const std::size_t width = half ? 2 : dtype == rt_ns::DataType::FLOAT ? 4 : 8;
+    EXPECT_EQ(outputs.requests, (std::vector<std::size_t>{batches * m * n * width}));
+    const auto &y = runtime.Get("Y");
+    ASSERT_EQ(y.shape, (rt_ns::Shape{batches, m, n}));
+    for (const std::size_t index : {std::size_t{0}, m * n}) {
+      const float expected = index == 0 ? 16.375f : 16.875f;
+      if (dtype == rt_ns::DataType::FLOAT) {
+        EXPECT_FLOAT_EQ(y.AsFloat()[index], expected);
+      } else if (dtype == rt_ns::DataType::DOUBLE) {
+        EXPECT_DOUBLE_EQ(y.AsDouble()[index], expected);
+      } else {
+        const auto bits = reinterpret_cast<const std::uint16_t *>(y.bytes())[index];
+        EXPECT_FLOAT_EQ(dtype == rt_ns::DataType::FLOAT16 ? rt_ns::Float16BitsToFloat(bits)
+                                                          : rt_ns::Bfloat16BitsToFloat(bits),
+                        expected);
+      }
+    }
   }
 }
 
