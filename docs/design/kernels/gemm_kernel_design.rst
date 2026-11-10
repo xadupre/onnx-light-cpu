@@ -23,10 +23,10 @@ with the output width of ``op(B)``.
 
 The adapter applies the existing GEMM plan to each final-axis matrix,
 sharing ``B`` without materializing transposed inputs or expanded bias.
-``C`` broadcasts right-aligned against the full output shape; its shape
-and dtype are validated even when ``beta`` is zero. Empty output dimensions
-produce empty tensors, whereas an empty contraction produces zeros plus
-the optional scaled bias.
+``C`` broadcasts right-aligned against the full output shape; its shape,
+dtype, and buffer are validated even when ``beta`` is zero. Empty output
+dimensions produce empty tensors, whereas an empty contraction evaluates
+``alpha * 0`` plus the optional scaled bias.
 
 Kernel selection decision tree
 -------------------------------
