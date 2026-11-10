@@ -55,21 +55,6 @@ def _tensor_type(graph: Any, name: str) -> int | None:
     return None
 
 
-def _tensor_rank(graph: Any, name: str) -> int | None:
-    for values in (graph.input, graph.value_info, graph.output):
-        for value in values:
-            if (
-                value.name == name
-                and value.type.HasField("tensor_type")
-                and value.type.tensor_type.HasField("shape")
-            ):
-                return len(value.type.tensor_type.shape.dim)
-    for initializer in graph.initializer:
-        if initializer.name == name:
-            return len(initializer.dims)
-    return None
-
-
 def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool, str]:
     matching_nodes = [
         node
@@ -110,15 +95,6 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
                 for attribute in node.attribute:
                     if attribute.name == "reduction" and attribute.s != b"none":
                         return False, "ScatterND supports only reduction='none'"
-    if kernel.domain == "ai.onnx" and kernel.op_type == "Gemm":
-        for node in matching_nodes:
-            for index in range(min(2, len(node.input))):
-                rank = _tensor_rank(case.model.graph, node.input[index])
-                if rank is None:
-                    continue
-                supported = rank >= 1 if index == 0 and opset >= 29 else rank == 2
-                if not supported:
-                    return False, "Gemm operand rank is unsupported for this opset"
     return True, ""
 
 
@@ -145,8 +121,7 @@ def run_backend_correctness_tests(
 ) -> BackendCorrectnessReport:
     """Runs all applicable ``TestMode.TEST`` backend cases for registered CPU kernels.
 
-    The report records unsupported cases (including non-replacement ScatterND reductions
-    and Gemm operands outside the opset's rank restrictions)
+    The report records unsupported cases (including non-replacement ScatterND reductions)
     as skips and execution or comparison errors as failures. A kernel without an applicable
     correctness case is reported as a failure.
     """

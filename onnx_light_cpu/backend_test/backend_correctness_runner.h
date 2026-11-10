@@ -34,8 +34,7 @@ struct BackendCorrectnessReport {
 ///
 /// Backend cases are selected from the registrations returned by
 /// :cpp:func:`CollectRegisteredKernels`, including their domain, opset range,
-/// and input element types, with ScatterND limited to replacement reductions
-/// and Gemm operands subject to their opset-specific rank restrictions.
+/// and input element types, with ScatterND limited to replacement reductions.
 /// Unsupported candidates are retained in ``skipped``;
 /// a registration without an applicable case is retained in ``failed``.
 BackendCorrectnessReport RunBackendCorrectnessTests(
