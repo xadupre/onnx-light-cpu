@@ -34,7 +34,8 @@ namespace onnx_light_cpu {
 /// common fp16/bf16 GEMM backend conventions. The optional bias ``C`` is
 /// consumed directly as a scalar, row, column, or matrix view without
 /// materializing an expanded ``M x N`` tensor. FP16/BF16 narrowing is combined
-/// with the bias epilogue.
+/// with the bias epilogue. Since opset 29, vector and higher-rank ``A`` inputs
+/// are supported, with ``transA`` swapping only the final two axes.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   /// Constructs the kernel and eagerly allocates the immutable-plan cache so no
@@ -111,12 +112,12 @@ private:
   /// Shared computation for the operator ``Run`` and ``operator()`` paths. When
   /// ``cache`` is non-null, the FP32/FP64 paths retrieve or rebuild a keyed
   /// immutable plan through it; otherwise a transient plan is prepared.
-  static ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *c, float alpha, float beta,
           bool trans_a, bool trans_b, ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt,
-          GemmPlanCache *cache, const Tuning &tuning);
+          GemmPlanCache *cache, const Tuning &tuning) const;
 };
 
 /// Registers the onnx-light-cpu ``Gemm`` kernel into onnx-light's shared
