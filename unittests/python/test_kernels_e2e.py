@@ -727,6 +727,73 @@ class TestBackendCases(ExtTestCase):
             self.assertEqual(scatter_skips[name], "ScatterND supports only reduction='none'")
         self.assertFalse(any(name.startswith("test_cpu_scatternd_") for name in scatter_skips))
 
+        gemm_skips = {
+            case.case_name: case.reason for case in report.skipped if case.op_type == "Gemm"
+        }
+        for name in (
+            *(
+                f"test_cc_gemm_linear_{shape}_{bias}"
+                for shape in ("vector", "rank3", "rank4", "empty_batch", "empty_features")
+                for bias in ("no_bias", "bias")
+            ),
+            "test_cc_gemm_high_rank_transpose",
+        ):
+            self.assertEqual(gemm_skips[name], "Gemm supports only 2-D inputs A and B")
+        self.assertFalse(any(name.startswith("test_cpu_gemm_") for name in gemm_skips))
+
+    def test_gemm_corpus_eligibility_checks_operand_ranks(self):
+        from onnx_light_cpu._backend_correctness import _case_is_applicable
+
+        kernel = next(record for record in registered_kernels() if record.op_type == "Gemm")
+        for domain in ("", "ai.onnx"):
+            for operand in ("A", "B"):
+                for shape in (None, [], [3], [2, 3], [2, 3, 4], ["M", "K"], [0, 3]):
+                    for location in ("input", "value_info", "output", "initializer"):
+                        if location == "initializer" and (
+                            shape is None or any(isinstance(dim, str) for dim in shape)
+                        ):
+                            continue
+                        with self.subTest(
+                            domain=domain, operand=operand, shape=shape, location=location
+                        ):
+                            graph = helper.make_graph(
+                                [helper.make_node("Gemm", ["A", "B"], ["Y"], domain=domain)],
+                                "gemm_eligibility",
+                                [
+                                    helper.make_tensor_value_info(name, TensorProto.FLOAT, [2, 3])
+                                    for name in ("A", "B")
+                                    if name != operand
+                                ],
+                                [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 3])],
+                            )
+                            if location == "initializer":
+                                graph.initializer.append(
+                                    helper.make_tensor(
+                                        operand,
+                                        TensorProto.FLOAT,
+                                        shape,
+                                        np.zeros(shape, dtype=np.float32).ravel(),
+                                    )
+                                )
+                            else:
+                                getattr(graph, location).append(
+                                    helper.make_tensor_value_info(
+                                        operand, TensorProto.FLOAT, shape
+                                    )
+                                )
+                            model = helper.make_model(
+                                graph, opset_imports=[helper.make_opsetid(domain, 13)]
+                            )
+                            actual = _case_is_applicable(
+                                SimpleNamespace(model=model), kernel, TensorProto
+                            )
+                            expected = (
+                                (True, "")
+                                if shape is None or len(shape) == 2
+                                else (False, "Gemm supports only 2-D inputs A and B")
+                            )
+                            self.assertEqual(actual, expected)
+
     def test_scatternd_corpus_eligibility_checks_reduction_attributes(self):
         from onnx_light_cpu._backend_correctness import _case_is_applicable
 
