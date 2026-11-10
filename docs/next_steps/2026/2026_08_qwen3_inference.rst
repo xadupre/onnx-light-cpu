@@ -93,8 +93,8 @@ Audited ORT INT4 artifact
 -------------------------
 
 The first executable target is the local artifact
-``/home/xadupre/examples/models/qwen3-8b-cpu-int4/model.onnx``. The absolute
-path is a development input, not a portable model identity. Qwen PR01 must
+``models/qwen3-8b-cpu-int4/model.onnx`` within the external examples checkout.
+This path is a development input, not a portable model identity. Qwen PR01 must
 copy the graph and external data into the external model cache under immutable
 artifact metadata before CI or published benchmarks use it.
 

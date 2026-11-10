@@ -116,7 +116,7 @@ Reproduce a one-thread run from the built source tree with dependencies on
     taskset -c 0 python -m onnx_light_cpu benchmark \
       --test '^test_cpu_split_middle_axis_float32_benchmark$' --dtype float32 \
       --threads 1 --repeat 1001 --warmup 100 -t 10 --onnxruntime \
-      -o /tmp/split.xlsx
+      -o split.xlsx
 
 For the default-thread diagnostic use ``taskset -c 0-3`` and ``--threads 0``.
 Hardware-counter profiling was denied (``perf_event_paranoid=4``), and no
@@ -180,20 +180,20 @@ policy A/B test identifies a memory-traffic sensitivity, not a counter-verified
 cache-miss diagnosis. The original campaign's thread/spin settings and
 per-case build provenance remain unknown.
 
-Reproduce the diagnostic (absolute paths below assume this checkout location):
+Reproduce the diagnostic from the repository root:
 
 .. code-block:: bash
 
-    cmake -S /home/runner/work/onnx-light-cpu/onnx-light-cpu -B /tmp/abs-build \
+    cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
       -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
       -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
-    cmake --build /tmp/abs-build --target test_abs_kernel abs_throughput \
+    cmake --build build --target test_abs_kernel abs_throughput \
       --parallel "$(nproc)"
-    /tmp/abs-build/test_abs_kernel
-    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 default
-    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 cached
-    taskset -c 0 /tmp/abs-build/abs_throughput 4194304 1001 streaming
+    build/test_abs_kernel
+    taskset -c 0 build/abs_throughput 4194304 1001 default
+    taskset -c 0 build/abs_throughput 4194304 1001 cached
+    taskset -c 0 build/abs_throughput 4194304 1001 streaming
 
 Full acceptance still requires the existing backend benchmark with onnx-light
 available, under identical explicit thread and spin policies for both runtimes.
@@ -294,7 +294,7 @@ Reproduce the full single-thread corpus from the repository checkout:
       --test '^test_cpu_simplified_layer_normalization_' \
       --dtype float16 float32 float64 --threads 1 \
       --repeat 2000 --warmup 100 --max-repeat-time 1 --onnxruntime \
-      --output /tmp/simplified-layer-normalization.xlsx
+      --output simplified-layer-normalization.xlsx
 
 SimplifiedLayerNormalization FP16 row-range follow-up
 -----------------------------------------------------
@@ -396,11 +396,11 @@ unaligned, and double-stash fallbacks are unchanged. Width-one inputs retain
 their original adapter path.
 
 Reproduce after building the matching onnx-light integration in Release with
-the AVX2 ceiling and ``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI`` matching the runtime:
+the AVX2 ceiling and ``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI`` matching the runtime,
+then run from the repository root:
 
 .. code-block:: bash
 
-    cd /home/runner/work/onnx-light-cpu/onnx-light-cpu
     taskset -c 0 python - <<'PY'
     from onnx_light_cpu._benchmark import run_backend_benchmark
 
@@ -892,7 +892,7 @@ end-to-end measurement:
     taskset -c 0 build-integer/integer_gemm_throughput 2 4096 4096 128 0
     python -m tools.benchmark_integer_gemm_parity --threads 1 --cpus 0 \
       --case skinny_m_4096 --case skinny_m_4096_shifted --case skinny_m_mr \
-      --case skinny_m_tail --repeat 31 --warmup 5 --output /tmp/integer-parity.json
+      --case skinny_m_tail --repeat 31 --warmup 5 --output integer-parity.json
 
 The Python command requires an in-place extension built with the same ISA
 ceiling. Use ``AUTO`` instead of ``AVX2`` for native VNNI measurements.
@@ -1061,7 +1061,7 @@ Reproduce from the checkout with the selected onnx-light runtime on
     taskset -c 2 python -m onnx_light_cpu benchmark \
       --test '^test_cpu_softmax_1024x1024_float32_benchmark$' \
       --threads 1 --repeat 2000 --warmup 100 --max-repeat-time 2 \
-      --onnxruntime --output /tmp/softmax.xlsx
+      --onnxruntime --output softmax.xlsx
     # Configure ONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON to build this diagnostic.
     taskset -c 2 ./build/exp_log_throughput 301 softmax
 

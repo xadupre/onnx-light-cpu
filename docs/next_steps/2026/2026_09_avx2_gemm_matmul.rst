@@ -231,18 +231,17 @@ Python ABI. Build ``_cpuregister``, ``_cpukernels``, ``gemm_throughput``,
 ``test_gemm_kernel``, ``test_gemm_plan``, and
 ``test_onnx_light_matmul_kernel`` using ``cmake --build`` with
 ``--parallel 48``. With the source checkout on ``PYTHONPATH``, run the
-following twice for each revision, changing the output prefix each time:
+following from the repository root twice for each revision, changing the
+output prefix each time:
 
 .. code-block:: bash
 
-   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
-   cd "$ROOT"
    for threads in 1 2; do
-     PYTHONPATH="$ROOT" taskset -c 0,2 python -m onnx_light_cpu benchmark \
+     PYTHONPATH=. taskset -c 0,2 python -m onnx_light_cpu benchmark \
        --test '^test_cpu_matmul_(square_(128|512|1024)_float(16|32)|skinny_[mn]_float32)_benchmark$' \
        --dtype float32 float16 --threads "$threads" \
        --repeat 101 --warmup 20 --max-repeat-time 10 --onnxruntime \
-       --output "/tmp/matmul-${threads}.xlsx"
+       --output "matmul-${threads}.xlsx"
    done
 
 One-thread results (milliseconds)
@@ -464,17 +463,16 @@ Build the source integration against the selected wheel as described above,
 including ``_cpuregister``, ``_cpukernels``, ``gemm_throughput``,
 ``test_gemm_kernel``, ``test_gemm_plan`` and
 ``test_onnx_light_gemm_kernel``. Run the following twice per revision,
-changing the output path:
+changing the output path. Run from the repository root with the selected
+onnx-light runtime available on ``PYTHONPATH``:
 
 .. code-block:: bash
 
-   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
-   cd "$ROOT"
    pattern='^test_cpu_gemm_(?:(?:square_(?:128|256|512|1024)|big_m(?:8192_n128_k128|16384_n128_k128|128_n8192_k128|128_n16384_k128|128_n128_k8192)|transformer_projection)_float(?:16|32)_transA_0_transB_0_bias_none|square_128_float(?:16|32)_transA_(?:1_transB_0|0_transB_1)_bias_none|square_256_float(?:16|32)_transA_0_transB_0_bias_(?:scalar|row|matrix)|square_256_float32_transA_0_transB_0_bias_column|square_(?:2048|4096)_float32_transA_0_transB_0_bias_none|(?:transformer_projection_decode|skinny_m|large_k_1024)_float32_transA_0_transB_0_bias_none)_benchmark$'
-   PYTHONPATH="$ROOT:/tmp/gemm-runtime" taskset -c 0,2 \
+   PYTHONPATH=".${PYTHONPATH:+:$PYTHONPATH}" taskset -c 0,2 \
      python -m onnx_light_cpu benchmark --test "$pattern" --include-big \
        --dtype float32 float16 --threads 1 --repeat 31 --warmup 5 \
-       --max-repeat-time 120 --onnxruntime --output /tmp/gemm-results.xlsx
+       --max-repeat-time 120 --onnxruntime --output gemm-results.xlsx
 
 ``--include-big`` is an explicit opt-in: the underlying backend collector
 otherwise silently excludes names containing ``_big_`` even when the name
