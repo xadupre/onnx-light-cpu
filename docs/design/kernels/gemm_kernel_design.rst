@@ -676,7 +676,7 @@ each ISA ceiling):
 
 .. code-block:: bash
 
-   root=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   root="$(git rev-parse --show-toplevel)"
    cmake -S "$root" -B "$root/build/temp" \
      -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
      -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF \
