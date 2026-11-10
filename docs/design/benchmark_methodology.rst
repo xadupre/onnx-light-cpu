@@ -174,12 +174,11 @@ the regex fixes the inputs to float32:
 
 .. code-block:: bash
 
-   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
-   PYTHONPATH="$ROOT" python -m onnx_light_cpu benchmark \
+   PYTHONPATH=. python -m onnx_light_cpu benchmark \
        --test '^test_cpu_lessorequal_v16_(right_scalar|left_scalar|contiguous)_float32xfloat32_to_bool_n(4096|65536|4194304)_benchmark$' \
        --dtype bool --threads 1 --onnxruntime \
        --warmup 20 --repeat 400 --max-repeat-time 1 \
-       --output /tmp/lessorequal-results.xlsx
+       --output lessorequal-results.xlsx
 
 The workbook retains raw samples and percentile summaries. Hardware-counter
 profiling was restricted (``perf_event_paranoid=4``). AVX-512 hardware was
@@ -263,12 +262,11 @@ Reproduce each campaign, changing ``--threads`` to one for the serial run:
 
 .. code-block:: bash
 
-   ROOT=/home/runner/work/onnx-light-cpu/onnx-light-cpu
    python -m onnx_light_cpu benchmark \
        --test '^test_cpu_sigmoid_n(1048576|4194304)_float32_benchmark$' \
        --dtype float32 --threads 2 --onnxruntime \
        --warmup 20 --repeat 400 --max-repeat-time 1 \
-       --output /tmp/sigmoid-results.xlsx
+       --output sigmoid-results.xlsx
 
 **Kernel throughput:** the extended existing driver uses preallocated buffers,
 three warmups, 101 samples, one thread pinned to CPU 0, alternating scalar/SIMD
@@ -420,12 +418,12 @@ the changed-library run with:
 
    cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
    cmake --build build --target batch_normalization_throughput -j8
-   taskset -c 0 build/batch_normalization_throughput /tmp/bn-patched.bin \
-       > /tmp/bn-patched.csv
+   taskset -c 0 build/batch_normalization_throughput bn-patched.bin \
+       > bn-patched.csv
 
 For a before/after comparison, save the baseline
 ``liblib_onnx_light_cpu_kernels.so`` before rebuilding. Select it using
-``LD_PRELOAD=/path/to/baseline/liblib_onnx_light_cpu_kernels.so`` with the same
+``LD_PRELOAD=./baseline/liblib_onnx_light_cpu_kernels.so`` with the same
 command and a different output filename, then compare the binary outputs
 using ``cmp``. Verify the selected library with ``LD_TRACE_LOADED_OBJECTS=1``;
 ``LD_LIBRARY_PATH`` alone may not override the executable's RPATH.
@@ -473,7 +471,7 @@ Reproduce each build's measurement with its source tree on ``PYTHONPATH``:
    taskset -c 0,2 python -m onnx_light_cpu benchmark \
        --test '^test_cpu_cast_.*_(float32_to_float16|float16_to_float32|float32_to_bfloat16|bfloat16_to_float32|float32_to_float32)_benchmark$' \
        --threads 1 --repeat 201 --warmup 20 --max-repeat-time 2 \
-       --onnxruntime --output /tmp/cast-one-thread.xlsx
+       --onnxruntime --output cast-one-thread.xlsx
 
 Repeat with ``--threads 2`` and a different output filename. Keep the raw
 and aggregated workbook sheets, including path diagnostics and percentiles.
@@ -705,7 +703,7 @@ Reproduce the named-case measurements from the repository checkout:
    taskset -c 0 python -m onnx_light_cpu benchmark \
        --test '^test_cpu_cdist_m512_k512_n128_.*_float32_benchmark$' \
        --dtype float32 --threads 1 --onnxruntime \
-       -r 1000 -w 100 -t 1 -o /tmp/cdist-results.xlsx
+       -r 1000 -w 100 -t 1 -o cdist-results.xlsx
 
 Per-invocation medians in milliseconds (not best samples):
 

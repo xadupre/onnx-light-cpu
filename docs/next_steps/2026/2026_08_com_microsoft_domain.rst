@@ -97,11 +97,11 @@ metrics/types, eligibility boundaries, and row/column/feature tails:
 
 .. code-block:: bash
 
-   cmake -S . -B /tmp/cdist-build \
+   cmake -S . -B build \
        -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
        -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
-   cmake --build /tmp/cdist-build --target cdist_throughput -j4
-   taskset -c 0 /tmp/cdist-build/cdist_throughput
+   cmake --build build --target cdist_throughput -j4
+   taskset -c 0 build/cdist_throughput
 
 On an AMD EPYC 7763 with GCC 13.3, Release flags, and one pinned thread,
 three alternating baseline/candidate runs measured the following representative

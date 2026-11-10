@@ -166,9 +166,10 @@ trials each give these median *seconds per copy plus update* (one thread):
 
 Reproduce on an AVX-512CD host (choose an allowed CPU for affinity)::
 
+   mkdir -p build
    g++ -O3 -std=c++20 -mavx512f -mavx512cd -mavx2 \
-       tools/scatter_nd_conflict_probe.cc -o /tmp/scatter_cd
-   taskset -c <allowed-core> /tmp/scatter_cd
+       tools/scatter_nd_conflict_probe.cc -o build/scatter_cd
+   taskset -c <allowed-core> build/scatter_cd
 
 C++ parity coverage in
 ``test_onnx_light_scatter_nd_kernel.cc`` also exercises unique, clustered and

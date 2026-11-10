@@ -338,7 +338,7 @@ times per build and thread setting (replace ``--threads 1`` with ``2``):
    python -m onnx_light_cpu benchmark \
        --tests "^test_cpu_tanh_logits_.*_float32_benchmark$" --dtypes float32 \
        --threads 1 --repeat 100 --warmup 10 --max-repeat-time 10 \
-       --onnxruntime --output /tmp/tanh.xlsx
+       --onnxruntime --output tanh.xlsx
 
 **Kernel throughput:** ``taskset -c 0 build/exp_log_throughput 31 tanh``
 used preallocated buffers, three warmups, and 31 samples, rotating scalar

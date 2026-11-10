@@ -36,15 +36,17 @@ Diagnosing native-extension import failures
 Before attributing an undefined symbol to import order, rebuild both projects
 from clean source trees with no existing native artifacts. Reusing an in-place
 build can mix extensions and shared libraries from different configurations.
-Use absolute source paths and fresh build directories; do not install either
-project into site-packages or use editable installs for this check.
+Resolve source paths before changing directories and use fresh build directories;
+do not install either project into site-packages or use editable installs for
+this check.
 
-For example, on Linux, with the Python build dependencies already available:
+For example, on Linux, from the repository root with an adjacent ``onnx-light``
+checkout and the Python build dependencies already available:
 
 .. code-block:: bash
 
-   export ONNX_SOURCE=/absolute/path/to/onnx-light
-   export CPU_SOURCE=/absolute/path/to/onnx-light-cpu
+   export ONNX_SOURCE="$(cd ../onnx-light && pwd)"
+   export CPU_SOURCE="$PWD"
    export BUILD_ROOT="$(mktemp -d)"
 
    cmake -S "$ONNX_SOURCE" -B "$BUILD_ROOT/onnx-light" \
