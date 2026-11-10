@@ -470,9 +470,9 @@ jobs:
   onnx_light_release:
     name: onnx-light release (ubuntu-latest)
     runs-on: ubuntu-latest
-    # Validates the onnx-light release declared as the minimum dependency in
-    # pyproject.toml, the same release linked by build_release_wheel.yml.
-    # setup_onnx_light_source only covers onnx-light main.
+    # Validates the latest published onnx-light release (setup_onnx_light_source
+    # only covers onnx-light main). The helper rejects a latest release older
+    # than the minimum declared in pyproject.toml.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -498,18 +498,25 @@ jobs:
       # cloned as the sibling ../onnx-light, provides the C++ headers.
       - name: Install onnx-light release
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           pip install "cmake>=4" nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
-          python tools/onnx_light_release.py clone "${GITHUB_WORKSPACE}/../onnx-light"
-          python tools/onnx_light_release.py install
-          python - <<'PY'
+          ONNX_LIGHT_RELEASE=$(python tools/onnx_light_release.py latest)
+          echo "onnx-light release: ${ONNX_LIGHT_RELEASE}"
+          python tools/onnx_light_release.py clone --version "${ONNX_LIGHT_RELEASE}" "${GITHUB_WORKSPACE}/../onnx-light"
+          python tools/onnx_light_release.py install --version "${ONNX_LIGHT_RELEASE}"
+          ONNX_LIGHT_RELEASE="${ONNX_LIGHT_RELEASE}" python - <<'PY'
           import os
           from importlib.metadata import version
 
           from onnx_light import get_cpp_build_info
 
+          installed = version("onnx-light")
+          if installed != os.environ["ONNX_LIGHT_RELEASE"]:
+              raise SystemExit(f"installed onnx-light {installed}, expected {os.environ['ONNX_LIGHT_RELEASE']}")
           info = get_cpp_build_info()
-          print(f"onnx-light {version('onnx-light')}: {info}")
+          print(f"onnx-light {installed}: {info}")
           library_dir = info["library_dir"]
           current = os.environ.get("LD_LIBRARY_PATH", "")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:

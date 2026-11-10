@@ -10,6 +10,7 @@ from packaging.requirements import Requirement
 from tools.onnx_light_release import (
     ONNX_LIGHT_VERSION,
     find_msvc_tool,
+    latest_version,
     parse_dumpbin_exports,
     wheel_name,
     wheel_url,
@@ -62,6 +63,22 @@ def test_release_version_follows_dependency_metadata(tmp_path):
             "onnx_light-1.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
         ),
     ]
+
+
+def test_latest_version_reads_release_tag_and_rejects_older_than_minimum():
+    major, minor, *_ = (int(part) for part in ONNX_LIGHT_VERSION.split("."))
+    newer = f"{major}.{minor + 1}.0"
+    assert latest_version(lambda _: f'{{"tag_name": "{newer}"}}') == newer
+    assert latest_version(lambda _: f'{{"tag_name": "{ONNX_LIGHT_VERSION}"}}') == (
+        ONNX_LIGHT_VERSION
+    )
+    with pytest.raises(ValueError, match="older than the minimum"):
+        latest_version(lambda _: '{"tag_name": "0.0.1"}')
+    with pytest.raises(ValueError, match="Unexpected onnx-light release tag"):
+        latest_version(lambda _: '{"tag_name": "v1.0; rm"}')
+    assert wheel_url("Linux", "x86_64", (3, 13), newer).endswith(
+        f"/{newer}/onnx_light-{newer}-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+    )
 
 
 @pytest.mark.parametrize("python_version", [(3, 12), (3, 13), (3, 14)])
@@ -156,6 +173,8 @@ find_package(onnx_light_cpu CONFIG REQUIRED)
 def test_source_workflows_use_onnx_light_main():
     for name in ("ci_core.yml", "docs.yml", "cpp_standalone.yml"):
         workflow = (_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        # The dedicated release job is the only one allowed to use a published release.
+        workflow = workflow.split("  onnx_light_release:\n", 1)[0]
         assert (
             "git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "
         ) in workflow, name

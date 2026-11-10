@@ -1,11 +1,15 @@
 import argparse
+import json
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
+
+RELEASES_API = "https://api.github.com/repos/xadupre/onnx-light/releases/latest"
 
 
 def minimum_version():
@@ -22,7 +26,34 @@ def minimum_version():
 ONNX_LIGHT_VERSION = minimum_version()
 
 
-def wheel_name(system, machine, python_version):
+def _version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def latest_version(fetch=None):
+    """Return the latest published release, rejecting one below the declared minimum."""
+    if fetch is None:
+        request = urllib.request.Request(
+            RELEASES_API, headers={"Accept": "application/vnd.github+json"}
+        )
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = response.read().decode("utf-8")
+    else:
+        payload = fetch(RELEASES_API)
+    version = json.loads(payload)["tag_name"]
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version):
+        raise ValueError(f"Unexpected onnx-light release tag: {version!r}")
+    if _version_key(version) < _version_key(ONNX_LIGHT_VERSION):
+        raise ValueError(
+            f"Latest onnx-light release {version} is older than the minimum {ONNX_LIGHT_VERSION}"
+        )
+    return version
+
+
+def wheel_name(system, machine, python_version, version=ONNX_LIGHT_VERSION):
     python_tag = f"cp{python_version[0]}{python_version[1]}"
     normalized_machine = machine.lower()
     if system == "Linux" and normalized_machine in {"x86_64", "aarch64"}:
@@ -33,15 +64,15 @@ def wheel_name(system, machine, python_version):
         platform_tag = f"win_{normalized_machine}"
     else:
         raise ValueError(f"Unsupported onnx-light release platform: {system} {machine}")
-    return f"onnx_light-{ONNX_LIGHT_VERSION}-{python_tag}-{python_tag}-{platform_tag}.whl"
+    return f"onnx_light-{version}-{python_tag}-{python_tag}-{platform_tag}.whl"
 
 
-def wheel_url(system, machine, python_version):
-    name = wheel_name(system, machine, python_version)
-    return f"https://github.com/xadupre/onnx-light/releases/download/{ONNX_LIGHT_VERSION}/{name}"
+def wheel_url(system, machine, python_version, version=ONNX_LIGHT_VERSION):
+    name = wheel_name(system, machine, python_version, version)
+    return f"https://github.com/xadupre/onnx-light/releases/download/{version}/{name}"
 
 
-def clone_source(destination):
+def clone_source(destination, version=ONNX_LIGHT_VERSION):
     subprocess.check_call(
         [
             "git",
@@ -49,15 +80,15 @@ def clone_source(destination):
             "--depth",
             "1",
             "--branch",
-            ONNX_LIGHT_VERSION,
+            version,
             "https://github.com/xadupre/onnx-light.git",
             str(destination),
         ]
     )
 
 
-def install_wheel():
-    url = wheel_url(platform.system(), platform.machine(), sys.version_info[:2])
+def install_wheel(version=ONNX_LIGHT_VERSION):
+    url = wheel_url(platform.system(), platform.machine(), sys.version_info[:2], version)
     subprocess.check_call([sys.executable, "-m", "pip", "install", url])
 
 
@@ -160,15 +191,20 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
     clone = subparsers.add_parser("clone")
     clone.add_argument("destination", type=Path)
-    subparsers.add_parser("install")
+    clone.add_argument("--version", default=ONNX_LIGHT_VERSION)
+    install = subparsers.add_parser("install")
+    install.add_argument("--version", default=ONNX_LIGHT_VERSION)
+    subparsers.add_parser("latest")
     import_libraries = subparsers.add_parser("generate-import-libraries")
     import_libraries.add_argument("destination", type=Path)
     args = parser.parse_args()
 
     if args.command == "clone":
-        clone_source(args.destination)
+        clone_source(args.destination, args.version)
     elif args.command == "install":
-        install_wheel()
+        install_wheel(args.version)
+    elif args.command == "latest":
+        print(latest_version())
     else:
         generate_import_libraries(args.destination)
 
