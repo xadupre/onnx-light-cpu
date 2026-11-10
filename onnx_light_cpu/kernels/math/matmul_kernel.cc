@@ -264,7 +264,8 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
     } else {
       plan = &cache->GetOrBuild<float>(a.data_type, a_shape, b_shape);
     }
-    if (prepared != nullptr && rt != nullptr && prepared->Matches(b, *rt)) {
+    if (prepared != nullptr && rt != nullptr && prepared->Matches(b, *rt) &&
+        plan->batch_count() == 1 && plan->gemm_plan().m() >= 16 && plan->gemm_plan().m() <= 512) {
       const auto &gemm = plan->gemm_plan();
       const Shape output_shape = OutputShape(plan->output_shape());
       const std::size_t bytes = ElementCount(plan->output_shape()) * sizeof(float);
@@ -274,10 +275,8 @@ Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *r
                                     ml_cpu_compute::SimdLevel::kAVX512
                                 ? "MatMul.prepared_b.avx512"
                                 : "MatMul.prepared_b.avx2");
-      // Prepared B is rank two: all contiguous A batches share the same packed panels.
       ml_cpu_compute::detail::GemmWidePreparedB(
-          plan->batch_count() * gemm.m(), gemm.n(), gemm.k(), 1.0f,
-          reinterpret_cast<const float *>(a.bytes()),
+          gemm.m(), gemm.n(), gemm.k(), 1.0f, reinterpret_cast<const float *>(a.bytes()),
           reinterpret_cast<const float *>(packed.bytes()), 0.0f, nullptr,
           reinterpret_cast<float *>(y.mutable_bytes()), gemm.blocking().mr);
       return y;

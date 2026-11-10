@@ -631,3 +631,91 @@ The next x86 tuning step is to extend measured profiles beyond the currently
 available modern Intel Core AVX2 measurements as benchmark hosts become
 available, before adding additional family/model
 dispatch.
+
+Prepared wide-projection scheduling investigation
+------------------------------------------------
+
+The ``prepared_wide`` mode of ``tools/gemm_throughput.cc`` measures the
+runtime's ``GemmWidePreparedB`` entry point directly. This distinction matters:
+``GemmPlan`` prepares wide weights only for M=128, while the MatMul adapter
+currently selects its prepared slot only for one batch and 16 <= M <= 512.
+Consequently, a constant-B decode ``GemmPlan`` benchmark does **not** establish
+prepared decode performance.
+
+For each N, the driver packs one FP32 [512, N] weight and reuses that exact
+buffer for M=1, 4, 12, 128, 384, and 768. M=384 also measures the generic
+MatMul baseline as three batches of 128 rows. The packed policies flatten
+these contiguous rows because B is rank two. N=32000 has an even number of
+16-column panels; N=32016 leaves an odd final panel for AVX-512 panel pairing.
+This is a panel-pair tail, not support for N indivisible by 16: such weights
+remain ineligible for this representation.
+
+The paired policies are:
+
+* ``columns``: the unchanged production baseline, static contiguous column
+  ranges with the existing M-dependent work estimate.
+* ``rows``: static contiguous ranges of MR-aligned rows, with an equivalent
+  FMA work estimate. Each participant reads the full packed weight.
+* ``dynamic_rows``: one MR-row tile per task, initial useful tasks followed by
+  atomic work distribution, bounded by the existing executor's participant
+  budget. Inner products are serial through normal nesting suppression.
+* ``generic``: the unprepared MatMul dispatch, for context only. This uses the
+  original layout and is **not** a candidate for consumed-source execution.
+  Only this diagnostic baseline needs the original weight in the driver.
+
+The three packed policies use the same microkernel arithmetic. The driver
+reports effective ISA, FMA, microarchitecture, MR, actual dispatched blocks, and packed bytes.
+Packing, input generation, and plan construction are outside measurement for
+every policy; per-call dispatch and scratch remain inside. Three warmup rounds
+check candidate outputs against generic dispatch, followed by 21 samples per
+policy in rotating order. Medians below are seconds, not GFLOP/s.
+
+Reproduce the measurement with a Release build (use the same build tree for
+each ISA ceiling):
+
+.. code-block:: bash
+
+   root=/home/runner/work/onnx-light-cpu/onnx-light-cpu
+   cmake -S "$root" -B "$root/build/temp" \
+     -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+     -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF \
+     -DONNX_LIGHT_CPU_BUILD_TESTS=ON \
+     -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON \
+     -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2
+   cmake --build "$root/build/temp" --parallel 48 \
+     --target gemm_throughput test_gemm_kernel test_gemm_plan test_execution
+   taskset -c 0-3 "$root/build/temp/gemm_throughput" 1 prepared_wide fp32
+   taskset -c 0-3 "$root/build/temp/gemm_throughput" 4 prepared_wide fp32
+   taskset -c 0-3 "$root/build/temp/gemm_throughput" 2 prepared_wide fp32
+
+The measurement host was an AMD EPYC 7763 virtual machine with four logical
+CPUs (two physical cores, SMT2), GCC 13.3, AVX2/FMA, MR=6, and affinity 0-3.
+Four participants are the largest available native pool; two participants
+are included as a lower participant budget. Workers share the affinity mask
+and are not individually pinned, so this is not an isolated physical-core
+versus SMT comparison.
+AVX-512 execution and a larger native pool are unavailable on this host:
+neither performance claim is made. On an AVX-512 host, repeat with
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX512`` and verify the reported dispatch.
+
+No scheduling or dispatch change is retained. Static columns already
+distribute decode's approximately 65.5 MB weight stream without duplicating
+it, and reuse each panel across rows during compute-heavy prefill. Row
+partitioning and dynamic fine-grained rows did not improve both regimes.
+Single-thread packed decode was also slower than generic GEMV in the initial
+paired run, so simply removing the adapter's shape gate is not a
+performance-neutral change. That observation compares different weight
+layouts; it is not evidence that the prepared scheduler itself regressed.
+
+The bounded explicit-executor tests exercise serial small work, useful
+reverse-order block distribution, disjoint outputs (aliased beta exposes
+repeated writes), and suppressed nested submission. They destroy the source
+before reusing one packed buffer across decode, prefill, larger flattened
+rows, and aligned/odd-panel N. No alternate persistent representation, pool,
+microkernel, or scratch ownership change is introduced.
+
+Source retirement remains a separate integration prerequisite: the current
+adapter still has shape-dependent unprepared fallbacks. Those fallbacks must
+not be used once a source has been consumed. The standalone packed-only tests
+prove that the prepared computation itself does not need the source; they
+do not assert that the existing adapter already retires it.

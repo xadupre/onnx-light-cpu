@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <span>
@@ -211,7 +212,7 @@ std::size_t RepeatCount(const GemmCase &c) {
       5, std::min<std::uint64_t>(51, target / std::max<std::uint64_t>(1, operations))));
 }
 
-void MeasurePreparedWide(ThreadExecutor &executor, std::size_t mr) {
+void MeasurePreparedWide(ThreadExecutor &executor) {
   constexpr std::size_t k = 512;
   constexpr const char *policies[] = {"generic", "columns", "rows", "dynamic_rows"};
   for (const std::size_t n : {32000u, 32016u}) {
@@ -224,11 +225,15 @@ void MeasurePreparedWide(ThreadExecutor &executor, std::size_t mr) {
     }
     const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
     for (const std::size_t m : {1u, 4u, 12u, 128u, 384u, 768u}) {
-      std::vector<float> a(m * k, 0.25f), y(m * n);
+      std::vector<float> a(m * k), y(m * n);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = static_cast<float>(static_cast<int>(i % 17) - 8) / 32.0f;
+      }
       const std::vector<std::size_t> a_shape =
           m == 384 ? std::vector<std::size_t>{3, 128, k} : std::vector<std::size_t>{m, k};
       const std::vector<std::size_t> b_shape{k, n};
       const ml_cpu_compute::MatMulPlan<float> generic(a_shape, b_shape);
+      const std::size_t mr = generic.gemm_plan().blocking().mr;
       const auto run = [&](std::size_t policy) {
         if (policy == 0) {
           generic.Execute(a.data(), b.data(), y.data());
@@ -277,6 +282,9 @@ void MeasurePreparedWide(ThreadExecutor &executor, std::size_t mr) {
       for (std::size_t iteration = 0; iteration < 24; ++iteration) {
         for (std::size_t offset = 0; offset < 4; ++offset) {
           const std::size_t policy = (iteration + offset) % 4;
+          if (iteration < 3) {
+            std::fill(y.begin(), y.end(), std::numeric_limits<float>::quiet_NaN());
+          }
           executor.ResetMetrics();
           const auto start = std::chrono::steady_clock::now();
           run(policy);
@@ -288,7 +296,7 @@ void MeasurePreparedWide(ThreadExecutor &executor, std::size_t mr) {
           }
           if (iteration < 3) {
             for (std::size_t i = 0; i < y.size(); ++i) {
-              if (std::abs(y[i] - expected[i]) > 1e-4f) {
+              if (!(std::abs(y[i] - expected[i]) <= 1e-4f)) {
                 throw std::runtime_error("prepared wide scheduling result mismatch");
               }
             }
@@ -300,10 +308,11 @@ void MeasurePreparedWide(ThreadExecutor &executor, std::size_t mr) {
       for (std::size_t policy = 0; policy < 4; ++policy) {
         auto &seconds = samples[policy];
         std::sort(seconds.begin(), seconds.end());
-        std::printf("prepared_wide policy=%s M=%zu N=%zu K=%zu batches=%d seconds=%.9g blocks=%lld "
-                    "prepared_bytes=%zu\n",
-                    policies[policy], m, n, k, m == 384 ? 3 : 1, seconds[seconds.size() / 2],
-                    static_cast<long long>(blocks[policy]), packed.size() * sizeof(float));
+        std::printf(
+            "prepared_wide policy=%s M=%zu N=%zu K=%zu batches=%d MR=%zu seconds=%.9g blocks=%lld "
+            "prepared_bytes=%zu\n",
+            policies[policy], m, n, k, m == 384 ? 3 : 1, mr, seconds[seconds.size() / 2],
+            static_cast<long long>(blocks[policy]), packed.size() * sizeof(float));
       }
     }
   }
@@ -498,7 +507,7 @@ int main(int argc, char **argv) {
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
               register_rows, threads);
   if (argc > 3 && std::string(argv[2]) == "prepared_wide" && std::string(argv[3]) == "fp32") {
-    MeasurePreparedWide(executor, register_rows);
+    MeasurePreparedWide(executor);
     return 0;
   }
   if (argc <= 3) {
