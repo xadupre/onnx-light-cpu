@@ -302,7 +302,7 @@ std::optional<Plan> MakePlan(builder::GraphGraph &graph, const NodeProto &node) 
       maximum = std::max(maximum, std::abs(weight->AsFloat()[i]));
     }
     weight_scale = maximum == 0.0F ? 1.0F : maximum / 127.0F;
-    if (!PositiveScale(weight_scale)) {
+    if (!PositiveScale(weight_scale) || !std::isfinite(127.0F * weight_scale)) {
       return std::nullopt;
     }
   }
