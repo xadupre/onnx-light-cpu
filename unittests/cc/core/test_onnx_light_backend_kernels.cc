@@ -442,8 +442,7 @@ TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessC
         std::find_if(report.skipped.begin(), report.skipped.end(), [&name](const auto &result) {
           return result.op_type == "Gemm" && result.case_name == name;
         });
-    ASSERT_NE(skipped, report.skipped.end()) << name;
-    EXPECT_EQ(skipped->reason, "Gemm supports only 2-D inputs A and B") << name;
+    EXPECT_EQ(skipped, report.skipped.end()) << name;
   }
   for (const auto &skipped : report.skipped) {
     EXPECT_FALSE(skipped.op_type == "ScatterND" &&

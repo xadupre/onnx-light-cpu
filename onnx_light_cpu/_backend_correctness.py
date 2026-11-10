@@ -112,10 +112,13 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
                         return False, "ScatterND supports only reduction='none'"
     if kernel.domain == "ai.onnx" and kernel.op_type == "Gemm":
         for node in matching_nodes:
-            for name in node.input[:2]:
-                rank = _tensor_rank(case.model.graph, name)
-                if rank is not None and rank != 2:
-                    return False, "Gemm supports only 2-D inputs A and B"
+            for index in range(min(2, len(node.input))):
+                rank = _tensor_rank(case.model.graph, node.input[index])
+                if rank is None:
+                    continue
+                supported = rank >= 1 if index == 0 and opset >= 29 else rank == 2
+                if not supported:
+                    return False, "Gemm operand rank is unsupported for this opset"
     return True, ""
 
 
@@ -143,7 +146,7 @@ def run_backend_correctness_tests(
     """Runs all applicable ``TestMode.TEST`` backend cases for registered CPU kernels.
 
     The report records unsupported cases (including non-replacement ScatterND reductions
-    and Gemm operands with known ranks other than 2)
+    and Gemm operands outside the opset's rank restrictions)
     as skips and execution or comparison errors as failures. A kernel without an applicable
     correctness case is reported as a failure.
     """

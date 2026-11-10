@@ -208,9 +208,12 @@ bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
         continue;
       }
       for (std::size_t i = 0; i < std::min<std::size_t>(2, node.input().size()); ++i) {
-        if (const auto rank = TensorRank(graph, node.input(i)); rank && *rank != 2) {
-          reason = "Gemm supports only 2-D inputs A and B";
-          return false;
+        if (const auto rank = TensorRank(graph, node.input(i))) {
+          const bool supported = i == 0 && opset >= 29 ? *rank >= 1 : *rank == 2;
+          if (!supported) {
+            reason = "Gemm operand rank is unsupported for this opset";
+            return false;
+          }
         }
       }
     }
