@@ -766,6 +766,12 @@ before reusing one packed buffer across decode, prefill, larger flattened
 rows, and aligned/odd-panel N. No alternate persistent representation, pool,
 microkernel, or scratch ownership change is introduced.
 
+Validation passed 110 kernel, 56 plan, and 14 executor tests in both the
+AVX2-ceiling and AVX-512-ceiling builds, reusing one build tree. The latter
+still executes AVX2 on this host and skips unsupported ISA tests; it verifies
+compilation and safe fallback, not AVX-512 execution. Strict Sphinx validation
+could not start because ``sphinx-build`` is unavailable in this environment.
+
 Source retirement remains a separate integration prerequisite: the current
 adapter still has shape-dependent unprepared fallbacks. Those fallbacks must
 not be used once a source has been consumed. The standalone packed-only tests
