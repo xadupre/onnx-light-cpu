@@ -214,7 +214,7 @@ struct AllocationCheckingExecutor {
   }
 };
 
-TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
+TEST(MatMulKernel, SharesImmutableWideWeightsAcrossInferenceShapesWithoutSourceReads) {
   constexpr std::size_t k = 512, n = 32016;
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("MatMul");
@@ -242,7 +242,8 @@ TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
     b[col] = static_cast<float>(col % 7) / 8;
     b[(k - 1) * n + col] = static_cast<float>(col % 11) / 16;
   }
-  runtime.Set("B", rt_ns::Tensor::FromFloat("B", {k, n}, b));
+  auto source = rt_ns::Tensor::FromFloat("B", {k, n}, b);
+  runtime.Set("B", source);
   const auto memory = preparations[0].estimate_memory(runtime);
   EXPECT_EQ(memory.source_bytes, b.size() * sizeof(float));
   EXPECT_EQ(memory.temporary_bytes, 0U);
@@ -255,15 +256,26 @@ TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
   EXPECT_EQ(runtime.value_store().prepared_bytes(), memory.prepared_bytes);
   EXPECT_EQ(runtime.value_store().slot_count(), 1U);
 
-  for (std::size_t m : {0U, 1U, 17U, 128U, 129U}) {
-    SCOPED_TRACE(m);
+  ASSERT_EQ(source.bytes(), runtime.Get("B").bytes());
+  std::fill_n(reinterpret_cast<float *>(source.mutable_bytes()), b.size(),
+              std::numeric_limits<float>::quiet_NaN());
+  for (const rt_ns::Shape &shape :
+       {rt_ns::Shape{k}, rt_ns::Shape{1, 0, k}, rt_ns::Shape{1, 1, k}, rt_ns::Shape{1, 4, k},
+        rt_ns::Shape{1, 12, k}, rt_ns::Shape{1, 17, k}, rt_ns::Shape{1, 128, k},
+        rt_ns::Shape{1, 129, k}, rt_ns::Shape{1, 513, k}, rt_ns::Shape{2, 3, k},
+        rt_ns::Shape{2, 129, k}}) {
+    std::size_t m = 1;
+    for (std::size_t axis = 0; axis + 1 < shape.size(); ++axis) {
+      m *= static_cast<std::size_t>(shape[axis]);
+    }
+    SCOPED_TRACE(::testing::Message() << "rows=" << m << " rank=" << shape.size());
     std::vector<float> a(m * k, 0.25f);
     for (std::size_t row = 0; row < m; ++row) {
       a[row * k] = static_cast<float>(row % 13) / 4;
       a[(row + 1) * k - 1] = static_cast<float>(row % 5) / 2;
     }
-    runtime.Put("A", rt_ns::Tensor::FromFloat("A", {1, static_cast<std::int64_t>(m), k}, a));
-    if (m >= 16) {
+    runtime.Put("A", rt_ns::Tensor::FromFloat("A", shape, a));
+    if (m > 0) {
       AllocationCheckingExecutor executor;
       ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &AllocationCheckingExecutor::Run};
       ml_cpu_compute::ExecutionExecutorScope scope(&view);
@@ -276,7 +288,9 @@ TEST(MatMulKernel, SharesImmutableWideWeightsAndPreservesShapeFallbacks) {
       second.Run(runtime);
     }
     const auto &output = runtime.Get("Y");
-    ASSERT_EQ(output.shape, (rt_ns::Shape{1, static_cast<std::int64_t>(m), n}));
+    auto expected_shape = shape;
+    expected_shape.back() = n;
+    ASSERT_EQ(output.shape, expected_shape);
     for (std::size_t row = 0; row < m; ++row) {
       for (const std::size_t col : WideProjectionCheckColumns(n)) {
         const float expected = a[row * k] * b[col] + a[(row + 1) * k - 1] * b[(k - 1) * n + col];

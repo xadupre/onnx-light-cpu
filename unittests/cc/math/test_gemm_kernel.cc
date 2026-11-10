@@ -290,6 +290,110 @@ TEST(GemmFloat32, PreparedWidePanelPairsRespectExecutorBoundaries) {
   }
 }
 
+namespace {
+
+struct PreparedOutputExecutor {
+  std::vector<float> &output;
+  std::vector<float> previous;
+  std::vector<unsigned char> writes;
+  std::int64_t dispatches = 0;
+  std::int64_t maximum_blocks = 0;
+
+  explicit PreparedOutputExecutor(std::vector<float> &values)
+      : output(values), previous(values), writes(values.size(), 0) {}
+
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  ml_cpu_compute::ExecutionBlockFn task) {
+    auto &self = *static_cast<PreparedOutputExecutor *>(context);
+    ++self.dispatches;
+    self.maximum_blocks = std::max(self.maximum_blocks, blocks);
+    EXPECT_LE(blocks, 4);
+    // Reverse order exposes assumptions about participant or panel ordering.
+    for (std::int64_t block = blocks; block-- > 0;) {
+      task(task_context, block);
+      std::size_t changed = 0;
+      for (std::size_t i = 0; i < self.output.size(); ++i) {
+        if (self.output[i] != self.previous[i]) {
+          EXPECT_EQ(self.writes[i], 0) << "overlapping output at " << i;
+          ++self.writes[i];
+          ++changed;
+        }
+      }
+      EXPECT_GT(changed, 0u) << "unproductive block " << block;
+      self.previous = self.output;
+    }
+  }
+};
+
+} // namespace
+
+TEST(GemmFloat32, PreparedWideSchedulingReusesOnlyPackedWeightsAcrossRows) {
+  constexpr std::size_t k = 512;
+  for (const std::size_t n : {8192u, 8208u}) {
+    // Destroy the original before testing decode, prefill, and flattened batches.
+    const auto packed = [&] {
+      const std::vector<float> source(k * n, 1);
+      return ml_cpu_compute::detail::PackGemmWideB(n, k, source.data());
+    }();
+    for (const std::size_t m : {1u, 4u, 12u, 128u, 513u}) {
+      SCOPED_TRACE(::testing::Message() << "M=" << m << " N=" << n);
+      const std::vector<float> a(m * k, 1);
+      std::vector<float> output(m * n, 1);
+      PreparedOutputExecutor executor(output);
+      ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &PreparedOutputExecutor::Run};
+      ml_cpu_compute::ExecutionExecutorScope scope(&view);
+      // Aliased beta makes repeated writes observable, even with identical tiles.
+      ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 1, a.data(), packed.data(), 1,
+                                                output.data(), output.data(), 12);
+      EXPECT_EQ(executor.dispatches, 1);
+      EXPECT_GT(executor.maximum_blocks, 1);
+      for (std::size_t i = 0; i < output.size(); ++i) {
+        ASSERT_EQ(executor.writes[i], 1) << i;
+        ASSERT_FLOAT_EQ(output[i], k + 1) << i;
+      }
+    }
+  }
+}
+
+TEST(GemmFloat32, PreparedWideSmallWorkStaysSerial) {
+  constexpr std::size_t m = 1, n = 48, k = 8;
+  const std::vector<float> a(m * k, 1), b(k * n, 1);
+  const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+  std::vector<float> output(m * n, 1);
+  PreparedOutputExecutor executor(output);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &PreparedOutputExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 1, a.data(), packed.data(), 1, output.data(),
+                                            output.data(), 12);
+  EXPECT_EQ(executor.dispatches, 0);
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, k + 1);
+  }
+}
+
+TEST(GemmFloat32, PreparedWideSchedulingSuppressesNestedSubmission) {
+  constexpr std::size_t m = 25, n = 176, k = 2049;
+  const std::vector<float> a(m * k, 1), b(k * n, 1);
+  const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+  std::vector<float> output(2 * m * n, 1);
+  PreparedOutputExecutor executor(output);
+  ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &PreparedOutputExecutor::Run};
+  ml_cpu_compute::ExecutionExecutorScope scope(&view);
+  ml_cpu_compute::ExecuteRanges(2, ml_cpu_compute::ExecutionSchedule{2, 1, 2},
+                                [&](std::int64_t begin, std::int64_t end) {
+                                  for (auto batch = begin; batch < end; ++batch) {
+                                    float *y = output.data() + batch * m * n;
+                                    ml_cpu_compute::detail::GemmWidePreparedB(
+                                        m, n, k, 1, a.data(), packed.data(), 1, y, y, 12);
+                                  }
+                                });
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.maximum_blocks, 2);
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, k + 1);
+  }
+}
+
 #ifdef ML_CPU_COMPUTE_HAVE_AVX512
 TEST(GemmFloat32, Avx512PreparedPanelPairPreservesColumnBiasInRowTail) {
   if (ml_cpu_compute::EffectiveGemmSimdLevel() < ml_cpu_compute::SimdLevel::kAVX512) {
