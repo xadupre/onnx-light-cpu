@@ -1,6 +1,6 @@
 """
 ONNX Runtime contrib Gelu
-========================
+=========================
 
 Qwen3.5's vision patch merger uses ``com.microsoft::Gelu`` rather than
 standard ONNX Gelu. This example validates both float32 and float16 against

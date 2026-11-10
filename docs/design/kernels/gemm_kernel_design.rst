@@ -264,7 +264,7 @@ kernel. An oversized runtime pool falls back to serial execution when at most
 four useful panel groups would otherwise wake dozens of idle workers.
 
 Prepared FP32 LM-head panel pairs
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For AVX-512 with a 12-row register tile, ``GemmWidePreparedB`` consumes two
 existing K-by-16 panels together. Each A broadcast feeds two FMAs in the

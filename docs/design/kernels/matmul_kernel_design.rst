@@ -50,7 +50,7 @@ Native half routines pack compact panels; fallback routines widen only while
 packing or reducing, not by materializing complete FP32 copies of A and B.
 
 Peak-memory accounting
----------------------
+----------------------
 
 The CPU ``MatMul`` peak-memory hook uses the same shape plans and checked
 packing-size formulas as execution. It excludes declared output ``Y``, inputs,
