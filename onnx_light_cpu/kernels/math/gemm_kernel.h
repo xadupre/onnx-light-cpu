@@ -35,7 +35,8 @@ namespace onnx_light_cpu {
 /// consumed directly as a scalar, row, column, or matrix view without
 /// materializing an expanded ``M x N`` tensor. FP16/BF16 narrowing is combined
 /// with the bias epilogue. Since opset 29, vector and higher-rank ``A`` inputs
-/// are supported, with ``transA`` swapping only the final two axes.
+/// are supported; ``transA`` swaps only the final two axes and is ignored for
+/// vectors. ``B`` remains rank 2 and ``C`` broadcasts against the full output shape.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   /// Constructs the kernel and eagerly allocates the immutable-plan cache so no

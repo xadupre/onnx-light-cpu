@@ -655,6 +655,31 @@ TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, Gemm29UpstreamCasesRunThroughCpuKernel) {
+  onnx_kernels::RegisterKernelFunctions();
+  onnx_light_cpu::RegisterAllKernels();
+  auto cases = CollectTestCases("Gemm", false, core::backend_test::TestMode::TEST);
+  std::vector<std::string> failures;
+  for (const std::string name :
+       {"test_cc_gemm_linear_vector_no_bias", "test_cc_gemm_linear_vector_bias",
+        "test_cc_gemm_linear_rank3_no_bias", "test_cc_gemm_linear_rank3_bias",
+        "test_cc_gemm_linear_rank4_no_bias", "test_cc_gemm_linear_rank4_bias",
+        "test_cc_gemm_linear_empty_batch_no_bias", "test_cc_gemm_linear_empty_batch_bias",
+        "test_cc_gemm_linear_empty_features_no_bias", "test_cc_gemm_linear_empty_features_bias",
+        "test_cc_gemm_high_rank_transpose"}) {
+    SCOPED_TRACE(name);
+    const auto found = std::find_if(cases.begin(), cases.end(),
+                                    [&name](const TestCase &tc) { return tc.name == name; });
+    ASSERT_NE(found, cases.end());
+    TestCaseUnloadGuard unload_guard(*found);
+    EXPECT_EQ(DefaultModelOpsetVersion(found->model()), 29);
+    std::vector<std::string> used;
+    ASSERT_NO_THROW(RunCaseThroughRuntime(*found, true, failures, &used));
+    EXPECT_NE(std::find(used.begin(), used.end(), onnx_light_cpu::GemmKernel::kName), used.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, GemmCaseCollectionRetainsNoKernels) {
   const std::int64_t baseline = onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting();
 

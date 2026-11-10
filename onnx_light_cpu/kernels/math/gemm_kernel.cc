@@ -438,6 +438,32 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       ml_cpu_compute::CheckedShapeIndexProduct(out_shape, "GemmKernel", "output shape");
   const std::size_t output_elements =
       ml_cpu_compute::CheckedDimension(output_count, "GemmKernel", "output shape");
+  const bool has_bias = c != nullptr && beta != 0.0f;
+  const auto bias_layout = c != nullptr && (has_bias || ctx_.opset.version >= 29)
+                               ? ResolveBiasLayout(*c, out_shape)
+                               : ml_cpu_compute::GemmBroadcast::kNone;
+  if (rank != 2 || ctx_.opset.version >= 29 || output_elements == 0) {
+    if (!IsSupportedElementType(a.data_type)) {
+      throw std::invalid_argument("onnx_light_cpu::GemmKernel: unsupported data type " +
+                                  std::to_string(a.data_type) +
+                                  ", only FLOAT, DOUBLE, FLOAT16 and BFLOAT16 are supported.");
+    }
+    const std::size_t element_size = a.data_type == DataType::FLOAT    ? sizeof(float)
+                                     : a.data_type == DataType::DOUBLE ? sizeof(double)
+                                                                       : sizeof(std::uint16_t);
+    ValidateGemmBuffer(a, element_size, "A");
+    ValidateGemmBuffer(b, element_size, "B");
+    if (c != nullptr) {
+      ValidateGemmBuffer(*c, element_size, "C");
+    }
+    if (output_elements == 0) {
+      const std::size_t n_bytes = ml_cpu_compute::CheckedByteSize(output_elements, element_size,
+                                                                  "GemmKernel", "output byte size");
+      return rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
+                           : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
+    }
+  }
+
   Shape batch_shape;
   for (std::size_t i = 0; i < (rank > 1 ? rank - 2 : 0); ++i) {
     batch_shape.push_back(a.shape[i]);
@@ -454,26 +480,6 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       output_elements == 0
           ? 0
           : ml_cpu_compute::CheckedMultiply(M, N, "GemmKernel", "output matrix size");
-  const bool has_bias = c != nullptr && beta != 0.0f;
-  const auto bias_layout = c != nullptr && (has_bias || ctx_.opset.version >= 29)
-                               ? ResolveBiasLayout(*c, out_shape)
-                               : ml_cpu_compute::GemmBroadcast::kNone;
-  if (rank != 2) {
-    if (!IsSupportedElementType(a.data_type)) {
-      throw std::invalid_argument("onnx_light_cpu::GemmKernel: unsupported data type " +
-                                  std::to_string(a.data_type) +
-                                  ", only FLOAT, DOUBLE, FLOAT16 and BFLOAT16 are supported.");
-    }
-    const std::size_t element_size = a.data_type == DataType::FLOAT    ? sizeof(float)
-                                     : a.data_type == DataType::DOUBLE ? sizeof(double)
-                                                                       : sizeof(std::uint16_t);
-    ValidateGemmBuffer(a, element_size, "A");
-    ValidateGemmBuffer(b, element_size, "B");
-    if (c != nullptr) {
-      ValidateGemmBuffer(*c, element_size, "C");
-    }
-  }
-
   const GemmParticipantLimitScope participant_limit(tuning.maximum_participants);
 
   switch (static_cast<DataType>(a.data_type)) {
