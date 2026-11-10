@@ -8,18 +8,27 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
+#include "onnx_extensions/kernels/kernels/math/include_math_kernels.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
-rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
+rt_ns::KernelContext MakeCtx(int64_t version = 18) {
+  return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), version));
+}
 
 void ConfigureTuning(onnx_light_cpu::GemmKernel &kernel, rt_ns::DataType data_type) {
   onnx_light_cpu::GemmKernel::RegisterTuningSchemas();
@@ -328,6 +337,194 @@ TEST(OnnxLightGemmKernel, Float64Matmul) {
   EXPECT_DOUBLE_EQ(py[1], 22.0);
   EXPECT_DOUBLE_EQ(py[2], 43.0);
   EXPECT_DOUBLE_EQ(py[3], 50.0);
+}
+
+rt_ns::Tensor MakeGemmInput(rt_ns::DataType type, const rt_ns::Shape &shape, int seed,
+                            bool nan = false) {
+  const auto count = static_cast<std::size_t>(shape.product());
+  std::vector<float> values(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    values[i] = nan ? std::numeric_limits<float>::quiet_NaN()
+                    : static_cast<float>(static_cast<int>((i * 13 + seed) % 17) - 8) / 4.0f;
+  }
+  switch (type) {
+  case rt_ns::DataType::FLOAT:
+    return rt_ns::Tensor::FromFloat("", shape, values);
+  case rt_ns::DataType::DOUBLE:
+    return rt_ns::Tensor::FromDouble("", shape, std::vector<double>(values.begin(), values.end()));
+  case rt_ns::DataType::FLOAT16:
+    return rt_ns::MakeFloat16Tensor("", shape, values);
+  case rt_ns::DataType::BFLOAT16:
+    return rt_ns::MakeBfloat16Tensor("", shape, values);
+  default:
+    throw std::invalid_argument("Unsupported Gemm test dtype.");
+  }
+}
+
+double GemmValue(const rt_ns::Tensor &tensor, std::size_t index) {
+  switch (static_cast<rt_ns::DataType>(tensor.data_type)) {
+  case rt_ns::DataType::FLOAT:
+    return tensor.AsFloat()[index];
+  case rt_ns::DataType::DOUBLE:
+    return tensor.AsDouble()[index];
+  case rt_ns::DataType::FLOAT16:
+    return rt_ns::Float16BitsToFloat(
+        reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
+  case rt_ns::DataType::BFLOAT16:
+    return rt_ns::Bfloat16BitsToFloat(
+        reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
+  default:
+    throw std::invalid_argument("Unsupported Gemm test dtype.");
+  }
+}
+
+void ExpectGemmMatches(const rt_ns::Tensor &actual, const rt_ns::Tensor &expected) {
+  ASSERT_EQ(actual.data_type, expected.data_type);
+  ASSERT_EQ(actual.shape, expected.shape);
+  ASSERT_EQ(actual.element_count(), expected.element_count());
+  const double tolerance = actual.data_type == rt_ns::DataType::BFLOAT16  ? 0.02
+                           : actual.data_type == rt_ns::DataType::FLOAT16 ? 0.002
+                           : actual.data_type == rt_ns::DataType::FLOAT   ? 1e-5
+                                                                          : 1e-10;
+  for (std::int64_t i = 0; i < actual.element_count(); ++i) {
+    const double reference = GemmValue(expected, static_cast<std::size_t>(i));
+    const double value = GemmValue(actual, static_cast<std::size_t>(i));
+    if (std::isnan(reference)) {
+      EXPECT_TRUE(std::isnan(value)) << "element " << i;
+    } else if (std::isinf(reference)) {
+      EXPECT_EQ(value, reference) << "element " << i;
+    } else {
+      EXPECT_NEAR(value, reference, tolerance * std::max(1.0, std::abs(reference)))
+          << "element " << i;
+    }
+  }
+}
+
+TEST(OnnxLightGemmKernel, Gemm29GeneralizedShapesMatchBuiltin) {
+  struct Case {
+    const char *name;
+    rt_ns::Shape a;
+    rt_ns::Shape b;
+    rt_ns::Shape c;
+    bool has_bias;
+    bool trans_a;
+    bool trans_b;
+    float beta;
+    bool nan_bias;
+  };
+  const std::vector<Case> cases = {
+      {"vector_transpose", {4}, {3, 4}, {3}, true, true, true, -0.75f, false},
+      {"batch_row_bias", {2, 3, 4}, {4, 5}, {2, 1, 5}, true, false, false, -0.75f, false},
+      {"broadcast_column", {2, 3, 4, 5}, {6, 5}, {3, 4, 1}, true, false, true, -0.75f, false},
+      {"transpose_batches", {2, 3, 5, 4}, {6, 5}, {2, 1, 1, 6}, true, true, true, -0.75f, false},
+      {"broadcast_matrices", {2, 3, 4, 5}, {5, 6}, {2, 1, 4, 6}, true, false, false, -0.75f, false},
+      {"batch_scalars", {2, 3, 4, 5}, {5, 6}, {1, 3, 1, 1}, true, false, false, -0.75f, false},
+      {"rank5_bias", {2, 3, 2, 4, 5}, {5, 6}, {3, 1, 4, 6}, true, false, false, -0.75f, false},
+      {"no_bias", {2, 3, 4}, {4, 5}, {}, false, false, false, 0.0f, false},
+      {"empty_batch", {0, 3, 4}, {4, 5}, {1, 1, 5}, true, false, false, -0.75f, false},
+      {"empty_rows", {2, 0, 4}, {4, 5}, {2, 0, 1}, true, false, false, -0.75f, false},
+      {"empty_features", {2, 3, 0}, {0, 5}, {2, 1, 5}, true, false, false, -0.75f, false},
+      {"empty_output", {2, 3, 4}, {4, 0}, {1, 0}, true, false, false, -0.75f, false},
+      {"zero_beta", {2, 3, 4}, {4, 5}, {2, 1, 5}, true, false, false, 0.0f, true},
+  };
+  for (const auto &test : cases) {
+    for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                            rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+      SCOPED_TRACE(test.name);
+      SCOPED_TRACE(static_cast<int>(type));
+      const auto a = MakeGemmInput(type, test.a, 1);
+      const auto b = MakeGemmInput(type, test.b, 2);
+      const auto c = MakeGemmInput(type, test.c, 3, test.nan_bias);
+      const auto *bias = test.has_bias ? &c : nullptr;
+      const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Gemm builtin(MakeCtx(29));
+      const auto expected = builtin(a, b, bias, 0.5f, test.beta, test.trans_a, test.trans_b);
+      const onnx_light_cpu::GemmKernel kernel(MakeCtx(29));
+      const auto actual = test.has_bias
+                              ? kernel(a, b, c, 0.5f, test.beta, test.trans_a, test.trans_b)
+                              : kernel(a, b, 0.5f, test.trans_a, test.trans_b);
+      ExpectGemmMatches(actual, expected);
+    }
+  }
+}
+
+TEST(OnnxLightGemmKernel, Gemm29ZeroDepthPreservesAlphaSemantics) {
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+                          rt_ns::DataType::BFLOAT16}) {
+    for (const float alpha :
+         {-1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+      for (const bool has_bias : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(type));
+        SCOPED_TRACE(alpha);
+        SCOPED_TRACE(has_bias);
+        const auto a = MakeGemmInput(type, {2, 3, 0}, 1);
+        const auto b = MakeGemmInput(type, {0, 5}, 2);
+        const auto c = MakeGemmInput(type, {5}, 3);
+        const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Gemm builtin(MakeCtx(29));
+        const auto expected = builtin(a, b, has_bias ? &c : nullptr, alpha, 0.75f, 0, 0);
+        const onnx_light_cpu::GemmKernel kernel(MakeCtx(29));
+        const auto actual = has_bias ? kernel(a, b, c, alpha, 0.75f, false, false)
+                                     : kernel(a, b, alpha, false, false);
+        ExpectGemmMatches(actual, expected);
+        if (!has_bias && alpha == -1.0f) {
+          EXPECT_TRUE(std::signbit(GemmValue(actual, 0)));
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightGemmKernel, Gemm29RejectsInvalidInputsAndKeepsLegacyRankRules) {
+  const onnx_light_cpu::GemmKernel legacy(MakeCtx(28));
+  const onnx_light_cpu::GemmKernel modern(MakeCtx(29));
+  const auto vector = rt_ns::Tensor::FromFloat("A", {2}, {1, 2});
+  const auto matrix = rt_ns::Tensor::FromFloat("B", {2, 2}, {1, 0, 0, 1});
+  EXPECT_THROW(legacy(vector, matrix, 1.0f, false, false), std::invalid_argument);
+
+  const auto scalar = rt_ns::Tensor::FromFloat("A", {}, {1});
+  EXPECT_THROW(modern(scalar, matrix, 1.0f, false, false), std::invalid_argument);
+  const auto a = MakeGemmInput(rt_ns::DataType::FLOAT, {2, 3, 4}, 1);
+  const auto b = MakeGemmInput(rt_ns::DataType::FLOAT, {4, 5}, 2);
+  const auto invalid_bias = MakeGemmInput(rt_ns::DataType::FLOAT, {2, 2}, 3);
+  EXPECT_THROW(modern(a, b, invalid_bias, 1.0f, 0.0f, false, false), std::invalid_argument);
+  const auto wrong_b = MakeGemmInput(rt_ns::DataType::FLOAT, {1, 4, 5}, 2);
+  EXPECT_THROW(modern(a, wrong_b, 1.0f, false, false), std::invalid_argument);
+
+  auto short_a = rt_ns::Tensor::FromFloat("A", {1}, {1});
+  short_a.shape = {2, 3, 4};
+  EXPECT_THROW(modern(short_a, b, 1.0f, false, false), std::invalid_argument);
+  auto short_b = rt_ns::Tensor::FromFloat("B", {1}, {1});
+  short_b.shape = {4, 5};
+  EXPECT_THROW(modern(a, short_b, 1.0f, false, false), std::invalid_argument);
+  auto short_c = rt_ns::Tensor::FromFloat("C", {1}, {1});
+  short_c.shape = {2, 1, 5};
+  EXPECT_THROW(modern(a, b, short_c, 1.0f, 1.0f, false, false), std::invalid_argument);
+  auto negative_dimension = rt_ns::Tensor::FromFloat("A", {1}, {1});
+  negative_dimension.shape = {2, -1, 4};
+  EXPECT_THROW(modern(negative_dimension, b, 1.0f, false, false), std::invalid_argument);
+}
+
+TEST(OnnxLightGemmKernel, Gemm29RuntimeCacheHandlesChangingShapes) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Gemm");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::GemmKernel kernel(MakeCtx(29));
+  kernel.set_node(node);
+  rt_ns::RuntimeContext runtime(MakeCtx(29));
+  const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Gemm builtin(MakeCtx(29));
+  for (const auto &[a_shape, b_shape] : {std::pair{rt_ns::Shape{2, 2, 3}, rt_ns::Shape{3, 4}},
+                                         std::pair{rt_ns::Shape{3, 2, 3}, rt_ns::Shape{3, 4}},
+                                         std::pair{rt_ns::Shape{3}, rt_ns::Shape{3, 4}},
+                                         std::pair{rt_ns::Shape{3, 2, 2}, rt_ns::Shape{2, 5}}}) {
+    const auto a = MakeGemmInput(rt_ns::DataType::FLOAT, a_shape, 1);
+    const auto b = MakeGemmInput(rt_ns::DataType::FLOAT, b_shape, 2);
+    const auto expected = builtin(a, b, nullptr, 1.0f, 1.0f, 0, 0);
+    runtime.Put("A", a);
+    runtime.Put("B", b);
+    kernel.Run(runtime);
+    ExpectGemmMatches(runtime.Get("Y"), expected);
+  }
 }
 
 } // namespace
