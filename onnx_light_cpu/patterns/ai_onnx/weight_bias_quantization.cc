@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 
 namespace onnx_light_cpu {
 namespace {
@@ -358,12 +359,19 @@ public:
     Nodes result;
     auto replacement = *nodes[0];
     auto &builder = graph.Builder();
+    const auto initializer = [&](TensorProto tensor, const std::string &prefix) {
+      auto name = prefix;
+      for (std::size_t suffix = 0; builder.HasName(name); ++suffix) {
+        name = prefix + "_" + std::to_string(suffix);
+      }
+      tensor.set_name(name);
+      return std::string(builder.MakeInitializer(tensor));
+    };
     const auto scalar = [&](float value) {
       TensorProto tensor;
-      tensor.set_name(builder.UniqueName("weight_bias_scale"));
       tensor.set_data_type(TensorProto::FLOAT);
       tensor.ref_float_data().push_back(value);
-      return std::string(builder.MakeInitializer(tensor));
+      return initializer(tensor, "weight_bias_scale");
     };
     const auto emit = [&](const std::string &op, const std::vector<std::string> &inputs) {
       NodeProto node;
@@ -385,17 +393,14 @@ public:
       if (value == nullptr) {
         throw builder::BuilderError("WeightBiasQuantization: missing computed constant");
       }
-      TensorProto tensor = *value;
-      tensor.set_name(builder.UniqueName(prefix));
-      return std::string(builder.MakeInitializer(tensor));
+      return initializer(*value, prefix);
     };
     if (plan->quantize_weight) {
       const auto scale = scalar(plan->weight_scale);
       TensorProto zero;
-      zero.set_name(builder.UniqueName("weight_bias_zero"));
       zero.set_data_type(TensorProto::INT8);
       zero.ref_int32_data().push_back(0);
-      const std::string zero_name = builder.MakeInitializer(zero);
+      const auto zero_name = initializer(zero, "weight_bias_zero");
       const auto weight = materialize(replacement.input(1), "weight_bias_weight");
       const auto quantized = emit("QuantizeLinear", {weight, scale, zero_name});
       replacement.ref_input()[1] = emit("DequantizeLinear", {quantized, scale, zero_name});
