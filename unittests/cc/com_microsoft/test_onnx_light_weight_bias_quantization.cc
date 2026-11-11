@@ -58,8 +58,8 @@ struct Options {
   sym::Device device = sym::Device::kCPU;
   Quantization activation;
   Quantization output;
-  Quantization weight_quantization{.scale = 1.0F};
-  Quantization bias_quantization{.scale = 0.5F, .type = DT::INT32};
+  Quantization weight_quantization;
+  Quantization bias_quantization;
   std::vector<float> weight = {127, -64, 32, 0, 2, -2};
   std::vector<float> bias = {0.5F, -1.5F, 2.5F};
   std::vector<int32_t> integer_weight = {127, -64, 32, 0, 2, -2};
@@ -84,6 +84,11 @@ struct Options {
   std::string branch;
   std::string capture;
   NodeProto attributes;
+
+  Options() {
+    weight_quantization.scale = 1.0F;
+    bias_quantization.type = DT::INT32;
+  }
 };
 
 TensorProto FloatTensor(const std::string &name, const std::vector<int64_t> &shape,
