@@ -93,6 +93,15 @@ def test_standalone_source_build_allows_time_for_both_projects():
     assert "- name: Build and install onnx-light-cpu\n" in standalone_job
 
 
+def test_arm_sve_emulation_allows_time_for_all_vector_lengths():
+    sve_job = _CORE_WORKFLOW.split("  arm_gemm_sve:\n", 1)[1].split("  onnx_light_release:\n", 1)[
+        0
+    ]
+    assert "    timeout-minutes: 90\n" in sve_job
+    for vector_length in (4, 1, 3):
+        assert f"qemu-aarch64 -cpu max,sve=on,sve-max-vq={vector_length}" in sve_job
+
+
 def test_standalone_source_build_uses_onnx_light_main():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
     assert (
