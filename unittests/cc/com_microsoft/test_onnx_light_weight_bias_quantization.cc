@@ -506,6 +506,7 @@ TEST(WeightBiasQuantization, AcceptsComputedConstantWeightsAndPreservesConstantD
   EXPECT_EQ(Producer(*graph, "unrelated_float")->SerializeAsString(), boundary);
 
   options.bias_shape = {2};
+  options.bias = {0.5F, -1.5F};
   ExpectRejected(options);
 }
 
