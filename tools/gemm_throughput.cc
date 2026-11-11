@@ -16,6 +16,8 @@
 // ``gemm_throughput [threads] [case substring] [dtype]`` executable. The optional
 // dtype selects fp32 or fp64 and reports median seconds as well as throughput.
 // Its persistent executor reports the maximum block count used by each plan.
+// ``gemm_throughput [threads] prepared_wide fp32`` compares scheduling policies
+// on the runtime's packed-only entry point, reusing each packed weight across M.
 
 #include "ml_cpu_compute/math/gemm/gemm_common.h"
 #include "ml_cpu_compute/math/gemm/gemm_plan.h"
@@ -26,14 +28,17 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -205,6 +210,112 @@ std::size_t RepeatCount(const GemmCase &c) {
   const std::uint64_t target = 400'000'000ull;
   return static_cast<std::size_t>(std::max<std::uint64_t>(
       5, std::min<std::uint64_t>(51, target / std::max<std::uint64_t>(1, operations))));
+}
+
+void MeasurePreparedWide(ThreadExecutor &executor) {
+  constexpr std::size_t k = 512;
+  constexpr const char *policies[] = {"generic", "columns", "rows", "dynamic_rows"};
+  for (const std::size_t n : {32000u, 32016u}) {
+    // The source is retained only for the old generic-dispatch baseline.
+    std::vector<float> b(k * n);
+    std::mt19937 rng(0x5eed5eedu);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (float &value : b) {
+      value = dist(rng);
+    }
+    const auto packed = ml_cpu_compute::detail::PackGemmWideB(n, k, b.data());
+    for (const std::size_t m : {1u, 4u, 12u, 128u, 384u, 768u}) {
+      std::vector<float> a(m * k), y(m * n);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = static_cast<float>(static_cast<int>(i % 17) - 8) / 32.0f;
+      }
+      const std::vector<std::size_t> a_shape =
+          m == 384 ? std::vector<std::size_t>{3, 128, k} : std::vector<std::size_t>{m, k};
+      const std::vector<std::size_t> b_shape{k, n};
+      const ml_cpu_compute::MatMulPlan<float> generic(a_shape, b_shape);
+      const std::size_t mr = generic.gemm_plan().blocking().mr;
+      const auto run = [&](std::size_t policy) {
+        if (policy == 0) {
+          generic.Execute(a.data(), b.data(), y.data());
+        } else if (policy == 1) {
+          ml_cpu_compute::detail::GemmWidePreparedB(m, n, k, 1, a.data(), packed.data(), 0, nullptr,
+                                                    y.data(), mr);
+        } else if (policy == 2) {
+          const std::int64_t tiles = static_cast<std::int64_t>((m + mr - 1) / mr);
+          ml_cpu_compute::ExecuteRanges(
+              tiles, static_cast<double>(mr) * n * k / ml_cpu_compute::kGemmFmasPerParallelWorkUnit,
+              [&](std::int64_t begin, std::int64_t end) {
+                const std::size_t row = static_cast<std::size_t>(begin) * mr;
+                const std::size_t rows = std::min(m, static_cast<std::size_t>(end) * mr) - row;
+                ml_cpu_compute::detail::GemmWidePreparedB(rows, n, k, 1, a.data() + row * k,
+                                                          packed.data(), 0, nullptr,
+                                                          y.data() + row * n, mr);
+              });
+        } else {
+          const std::int64_t tasks = static_cast<std::int64_t>((m + mr - 1) / mr);
+          const std::int64_t participants = ml_cpu_compute::ExecutionBlockCount(
+              tasks,
+              static_cast<double>(mr) * n * k / ml_cpu_compute::kGemmFmasPerParallelWorkUnit);
+          std::atomic<std::int64_t> next{participants};
+          ml_cpu_compute::ExecuteRanges(
+              participants, ml_cpu_compute::ExecutionSchedule{2, 1, participants},
+              [&](std::int64_t begin, std::int64_t end) {
+                const auto task = [&](std::int64_t index) {
+                  const std::size_t row = static_cast<std::size_t>(index) * mr;
+                  ml_cpu_compute::detail::GemmWidePreparedB(std::min(mr, m - row), n, k, 1,
+                                                            a.data() + row * k, packed.data(), 0,
+                                                            nullptr, y.data() + row * n, mr);
+                };
+                for (std::int64_t index = begin; index < end; ++index) {
+                  task(index);
+                }
+                for (std::int64_t index = next.fetch_add(1); index < tasks;
+                     index = next.fetch_add(1)) {
+                  task(index);
+                }
+              });
+        }
+      };
+      std::vector<float> expected;
+      std::vector<double> samples[4];
+      std::int64_t blocks[4] = {1, 1, 1, 1};
+      for (std::size_t iteration = 0; iteration < 24; ++iteration) {
+        for (std::size_t offset = 0; offset < 4; ++offset) {
+          const std::size_t policy = (iteration + offset) % 4;
+          if (iteration < 3) {
+            std::fill(y.begin(), y.end(), std::numeric_limits<float>::quiet_NaN());
+          }
+          executor.ResetMetrics();
+          const auto start = std::chrono::steady_clock::now();
+          run(policy);
+          const double seconds =
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+          blocks[policy] = executor.maximum_blocks;
+          if (iteration == 0 && policy == 0) {
+            expected = y;
+          }
+          if (iteration < 3) {
+            for (std::size_t i = 0; i < y.size(); ++i) {
+              if (!(std::abs(y[i] - expected[i]) <= 1e-4f)) {
+                throw std::runtime_error("prepared wide scheduling result mismatch");
+              }
+            }
+          } else {
+            samples[policy].push_back(seconds);
+          }
+        }
+      }
+      for (std::size_t policy = 0; policy < 4; ++policy) {
+        auto &seconds = samples[policy];
+        std::sort(seconds.begin(), seconds.end());
+        std::printf(
+            "prepared_wide policy=%s M=%zu N=%zu K=%zu batches=%d MR=%zu seconds=%.9g blocks=%lld "
+            "prepared_bytes=%zu\n",
+            policies[policy], m, n, k, m == 384 ? 3 : 1, mr, seconds[seconds.size() / 2],
+            static_cast<long long>(blocks[policy]), packed.size() * sizeof(float));
+      }
+    }
+  }
 }
 
 template <typename T>
@@ -395,6 +506,10 @@ int main(int argc, char **argv) {
   std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu  threads: %zu\n",
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
               register_rows, threads);
+  if (argc > 3 && std::string(argv[2]) == "prepared_wide" && std::string(argv[3]) == "fp32") {
+    MeasurePreparedWide(executor);
+    return 0;
+  }
   if (argc <= 3) {
     std::printf("%-18s %6s %6s %6s %8s %10s %14s %8s %10s %14s %14s %14s\n", "case", "M", "N", "K",
                 "fp32 thr", "fp32 blocks", "fp32 GFLOP/s", "fp64 thr", "fp64 blocks",
