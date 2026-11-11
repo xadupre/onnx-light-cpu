@@ -26,7 +26,7 @@ _PYTHON_API_TOPICS = (
 
 
 class TestApiDocReflectsPublicApi(ExtTestCase):
-    def test_homepage_displays_package_version(self):
+    def test_homepage_displays_package_version_and_generation_date(self):
         docs_dir = _PYTHON_API_DIR.parents[1]
         original_path = sys.path[:]
         try:
@@ -37,6 +37,7 @@ class TestApiDocReflectsPublicApi(ExtTestCase):
         self.assertEqual(config["release"], onnx_light_cpu.__version__)
         homepage = (docs_dir / "index.rst").read_text(encoding="utf-8")
         self.assertIn("Version |release|.", homepage)
+        self.assertIn("Last generated on |today|.", homepage)
 
     def test_every_public_symbol_is_documented(self):
         assert _PYTHON_API_DIR.is_dir(), "docs/api/python is missing"
