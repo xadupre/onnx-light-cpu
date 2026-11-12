@@ -171,16 +171,7 @@ jobs:
 
       - name: Run Python tests
         shell: bash
-        run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests $ONNX_LIGHT_PYTEST_ARGS
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
-        with:
-          files: ./coverage.xml
-          flags: python-${{ runner.os }}
-          name: python-${{ matrix.os }}-py${{ matrix.python-version }}
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+        run: pytest --durations=10 unittests $ONNX_LIGHT_PYTEST_ARGS
 
   setup_onnx_light_source:
     name: onnx-light main (${{ matrix.os }}, ${{ matrix.python-abi }})
