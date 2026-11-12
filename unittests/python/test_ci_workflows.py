@@ -110,6 +110,13 @@ def test_standalone_source_build_uses_onnx_light_main():
     )
 
 
+def test_standalone_source_build_uses_clang():
+    standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
+    environment = standalone_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert "      CC: clang\n" in environment
+    assert "      CXX: clang++\n" in environment
+
+
 def test_onnx_light_build_workflows_install_cmake_four_or_newer():
     for name, build_command in (
         ("ci_core.yml", "git clone --depth 1 --branch main"),
