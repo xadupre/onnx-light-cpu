@@ -26,6 +26,9 @@ _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
 _CPP_COVERAGE_WORKFLOW = (_ROOT / ".github" / "workflows" / "cpp_coverage_weekly.yml").read_text(
     encoding="utf-8"
 )
+_PYTHON_COVERAGE_WORKFLOW = (
+    _ROOT / ".github" / "workflows" / "python_coverage_weekly.yml"
+).read_text(encoding="utf-8")
 _DEPENDABOT_CONFIG = (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
 
 
@@ -351,8 +354,39 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert "0.1.19" not in source_job
 
 
-def test_cpp_coverage_is_carried_forward_between_weekly_runs():
-    assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
+def test_coverage_runs_weekly_outside_regular_ci():
+    for workflow in (_CPP_COVERAGE_WORKFLOW, _PYTHON_COVERAGE_WORKFLOW):
+        triggers = workflow.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        assert "  workflow_dispatch:\n" in triggers
+        assert "  schedule:\n" in triggers
+        assert triggers.count("- cron:") == 1
+        assert '- cron: "0 5 * * 1"' in triggers
+        assert "  push:" not in triggers
+        assert "  pull_request:" not in triggers
+        assert "  workflow_call:" not in triggers
+    assert "--cov" not in _CORE_WORKFLOW
+    assert "codecov/codecov-action@" not in _CORE_WORKFLOW
+    assert "run: pytest --durations=10 unittests $ONNX_LIGHT_PYTEST_ARGS" in _CORE_WORKFLOW
+
+
+def test_weekly_python_coverage_builds_and_reports():
+    build = _PYTHON_COVERAGE_WORKFLOW.index(
+        "python setup.py build_ext --inplace --onnx-light-source"
+    )
+    test = _PYTHON_COVERAGE_WORKFLOW.index(
+        "python -m pytest --durations=10 --cov=onnx_light_cpu "
+        "--cov-report=xml --cov-report=term-missing unittests"
+    )
+    upload = _PYTHON_COVERAGE_WORKFLOW.index("uses: codecov/codecov-action@")
+    assert build < test < upload
+    assert "pytest-cov" in _PYTHON_COVERAGE_WORKFLOW
+    assert "files: ./coverage.xml" in _PYTHON_COVERAGE_WORKFLOW
+    assert "flags: python-${{ runner.os }}" in _PYTHON_COVERAGE_WORKFLOW
+
+
+def test_coverage_is_carried_forward_between_weekly_runs():
+    for flag in ("cpp", "python-Linux"):
+        assert f"{flag}:\n    carryforward: true" in _CODECOV_CONFIG
 
 
 def test_cpp_coverage_exercises_native_and_emulated_processors():
