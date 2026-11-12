@@ -144,7 +144,7 @@ TEST(OnnxLightSplitKernel, FourWayByteAndEightByteColumnsPreserveTailsAndGuards)
       std::array<void *, 4> outputs;
       const std::array<std::size_t, 4> widths{width, width, width, width};
       for (std::size_t output = 0; output < 4; ++output) {
-        storage[output].assign(2 + rows * width, 0xa5);
+        storage[output] = std::vector<uint8_t>(2 + rows * width, 0xa5);
         outputs[output] = storage[output].data() + 1;
       }
       ml_cpu_compute::SplitCopyOutputs(source.data() + 1, outputs, rows, width * 4, widths);
