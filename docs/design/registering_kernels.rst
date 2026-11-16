@@ -385,7 +385,7 @@ model-specific override written in NumPy — use ``onnx-light``'s per-evaluator
 it does not require rebuilding this package.
 
 Explicit weight/bias quantization preparation
---------------------------------------------
+---------------------------------------------
 
 ``PrepareWeightBiasQuantization`` is an **opt-in, lossy CPU stage**, not a
 generic equivalence rewrite or a whole-model quantizer. Neither kernel
