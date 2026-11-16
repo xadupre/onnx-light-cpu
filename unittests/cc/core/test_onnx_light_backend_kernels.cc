@@ -339,6 +339,24 @@ TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, MeanVarianceNormalizationOpset29EpsilonRunsThroughRuntime) {
+  onnx_kernels::RegisterKernelFunctions();
+  onnx_light_cpu::RegisterAllKernels();
+  auto cases =
+      CollectTestCases("MeanVarianceNormalization", false, core::backend_test::TestMode::TEST);
+  const auto found = std::find_if(cases.begin(), cases.end(), [](const TestCase &tc) {
+    return tc.name == "test_cc_mvn_epsilon";
+  });
+  ASSERT_NE(found, cases.end());
+  TestCaseUnloadGuard unload_guard(*found);
+  std::vector<std::string> failures;
+  std::vector<std::string> used;
+  RunCaseThroughRuntime(*found, true, failures, &used);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+  EXPECT_NE(std::find(used.begin(), used.end(), "onnx_light_cpu::MeanVarianceNormalization"),
+            used.end());
+}
+
 TEST(OnnxLightBackendKernels, LinearAttentionPoliciesRunIndependentMicrosoftKernels) {
   using onnx_light_cpu::MicrosoftKernelImplementation;
   for (const auto policy :

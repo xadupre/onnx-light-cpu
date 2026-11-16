@@ -35,7 +35,7 @@ To build the current development version, use the source instructions below.
 The minimum onnx-light version is declared once in the project dependencies in
 `pyproject.toml`. Development source builds use onnx-light **main**; GitHub release
 wheel downloads derive their version from that requirement. The current development
-version requires onnx-light **0.2.7**, which must be built from main until released.
+version requires onnx-light **0.2.8**.
 
 ### Recover missing macOS release wheels
 
