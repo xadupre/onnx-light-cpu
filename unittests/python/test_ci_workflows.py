@@ -438,12 +438,18 @@ def test_compute_coverage_inlines_header_helpers_for_baseline_callers():
 
 def test_dependabot_updates_actions_and_python_dependencies():
     assert _DEPENDABOT_CONFIG.startswith("version: 2\nupdates:\n")
-    for ecosystem in ("github-actions", "pip"):
+    for ecosystem, group in (("github-actions", "actions"), ("pip", "pip")):
         assert (
             f'  - package-ecosystem: "{ecosystem}"\n'
             '    directory: "/"\n'
             "    schedule:\n"
-            '      interval: "weekly"\n'
+            "      interval: monthly\n"
+            "    cooldown:\n"
+            "      default-days: 7\n"
+            "    groups:\n"
+            f"      {group}:\n"
+            "        patterns:\n"
+            '          - "*"\n'
         ) in _DEPENDABOT_CONFIG
 
 
