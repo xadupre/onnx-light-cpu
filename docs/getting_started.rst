@@ -4,7 +4,7 @@ Getting Started
 Installation
 ------------
 
-The current development version requires onnx-light main (0.2.7); older releases
+The current development version requires onnx-light 0.2.8 or newer; older releases
 are not supported. Build onnx-light main before installing from source:
 
 .. code-block:: bash

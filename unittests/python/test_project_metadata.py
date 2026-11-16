@@ -34,6 +34,15 @@ def test_project_version_consistency():
     assert f"Current development version: **{version}**" in readme
 
 
+def test_onnx_light_minimum_version():
+    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "onnx-light>=0.2.8" in metadata["project"]["dependencies"]
+
+    changelog = (_ROOT / "CHANGELOGS.md").read_text(encoding="utf-8")
+    assert "minimum onnx-light dependency to 0.2.8" in changelog
+    assert "[#1156](https://github.com/xadupre/onnx-light-cpu/issues/1156)" in changelog
+
+
 def test_builds_use_cmake_four_or_newer():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["tool"]["scikit-build"]["cmake"]["version"] == ">=4"
