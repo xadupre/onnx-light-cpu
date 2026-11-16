@@ -633,7 +633,7 @@ available, before adding additional family/model
 dispatch.
 
 Prepared wide-projection scheduling investigation
-------------------------------------------------
+-------------------------------------------------
 
 The ``prepared_wide`` mode of ``tools/gemm_throughput.cc`` measures the
 runtime's ``GemmWidePreparedB`` entry point directly. This distinction matters:
@@ -700,7 +700,7 @@ neither performance claim is made. On an AVX-512 host, repeat with
 ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX512`` and verify the reported dispatch.
 
 Paired before/experimental-after medians
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The before baseline is commit ``e6c7576``. ``Columns`` is the unchanged
 prepared schedule; ``Rows`` and ``Dynamic`` are the experimental after
