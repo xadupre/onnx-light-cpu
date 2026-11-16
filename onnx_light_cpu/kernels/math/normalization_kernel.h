@@ -119,6 +119,10 @@ public:
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
              const std::vector<std::int64_t> &axes = {0, 2, 3},
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
+             const std::vector<std::int64_t> &axes,
+             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt, float epsilon) const;
 };
 
 void RegisterNormalizationKernels();

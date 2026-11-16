@@ -755,7 +755,8 @@ void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dime
 }
 
 template <DataType Type>
-void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t reduced_size) {
+void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t reduced_size,
+                   float epsilon) {
   using Traits = norm::TypeTraits<Type>;
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
@@ -765,7 +766,7 @@ void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t re
         for (std::size_t lane = begin; lane < end; ++lane) {
           const std::size_t base = lane * reduced_size;
           const norm::Moments<Acc> moments = ComputeSliceMoments<Type>(input + base, reduced_size);
-          const Acc denominator = std::sqrt(moments.variance) + static_cast<Acc>(1.0e-9F);
+          const Acc denominator = std::sqrt(moments.variance) + static_cast<Acc>(epsilon);
           for (std::size_t i = 0; i < reduced_size; ++i) {
             Traits::Store(output, base + i,
                           (Traits::Load(input, base + i) - moments.mean) / denominator);
@@ -776,7 +777,7 @@ void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t re
 
 template <DataType Type, bool AlignedFloat = false>
 void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t lanes,
-                     std::size_t inner) {
+                     std::size_t inner, float epsilon) {
   using Traits = norm::TypeTraits<Type>;
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
@@ -845,7 +846,7 @@ void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t 
         variance = (centered_sums[0] + centered_sums[1] + centered_sums[2] + centered_sums[3]) /
                    static_cast<Acc>(count);
       }
-      const Acc denominator = std::sqrt(variance) + static_cast<Acc>(1.0e-9F);
+      const Acc denominator = std::sqrt(variance) + static_cast<Acc>(epsilon);
       for (std::size_t prefix = 0; prefix < outer; ++prefix) {
         const std::size_t base = (prefix * lanes + lane) * inner;
         for (std::size_t i = 0; i < inner; ++i) {
@@ -858,7 +859,8 @@ void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t 
 
 template <DataType Type>
 void MvnGrouped(const Tensor &x, Tensor &y, const std::vector<std::size_t> &offsets,
-                const std::vector<std::size_t> &positions, std::size_t reduced_size) {
+                const std::vector<std::size_t> &positions, std::size_t reduced_size,
+                float epsilon) {
   using Traits = norm::TypeTraits<Type>;
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
@@ -882,7 +884,7 @@ void MvnGrouped(const Tensor &x, Tensor &y, const std::vector<std::size_t> &offs
           const Acc stddev =
               std::sqrt((squared_sums[0] + squared_sums[1] + squared_sums[2] + squared_sums[3]) /
                         static_cast<Acc>(reduced_size));
-          const Acc denominator = stddev + static_cast<Acc>(1.0e-9F);
+          const Acc denominator = stddev + static_cast<Acc>(epsilon);
           for (std::size_t i = first; i < last; ++i) {
             const std::size_t index = positions[i];
             Traits::Store(output, index, (Traits::Load(input, index) - mean) / denominator);
@@ -1265,6 +1267,12 @@ void LpNormalizationKernel::Run(RuntimeContext &rt) {
 Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
                                                    const std::vector<std::int64_t> &axes,
                                                    RuntimeContext *rt) const {
+  return (*this)(x, axes, rt, 1.0e-9F);
+}
+
+Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
+                                                   const std::vector<std::int64_t> &axes,
+                                                   RuntimeContext *rt, float epsilon) const {
   const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kMvnOp, "X");
   if (x.shape.empty()) {
@@ -1315,8 +1323,9 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
   }
   if (contiguous_suffix) {
     const std::size_t lanes = norm::Product(x.shape, 0, suffix_begin, kMvnOp);
-    norm::DispatchFloatType(
-        x.data_type, [&]<DataType Type>() { MvnContiguous<Type>(x, output, lanes, reduced_size); });
+    norm::DispatchFloatType(x.data_type, [&]<DataType Type>() {
+      MvnContiguous<Type>(x, output, lanes, reduced_size, epsilon);
+    });
     return output;
   }
 
@@ -1335,11 +1344,11 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
     norm::DispatchFloatType(x.data_type, [&]<DataType Type>() {
       if constexpr (Type == DataType::FLOAT) {
         if (inner % 4 == 0) {
-          MvnRetainedAxis<Type, true>(x, output, outer, lanes, inner);
+          MvnRetainedAxis<Type, true>(x, output, outer, lanes, inner, epsilon);
           return;
         }
       }
-      MvnRetainedAxis<Type>(x, output, outer, lanes, inner);
+      MvnRetainedAxis<Type>(x, output, outer, lanes, inner, epsilon);
     });
     return output;
   }
@@ -1369,7 +1378,7 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
     positions[cursors[lanes[i]]++] = i;
   }
   norm::DispatchFloatType(x.data_type, [&]<DataType Type>() {
-    MvnGrouped<Type>(x, output, offsets, positions, reduced_size);
+    MvnGrouped<Type>(x, output, offsets, positions, reduced_size, epsilon);
   });
   return output;
 }
@@ -1381,9 +1390,12 @@ void MeanVarianceNormalizationKernel::Run(RuntimeContext &rt) {
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
   const rt_ns::ParamInts axes = rt_ns::GetAttributeIntsOrDefault(node, "axes", {0, 2, 3});
+  const float epsilon = ctx_.opset.version >= 29
+                            ? rt_ns::GetAttributeFloatOrDefault(node, "epsilon", 1.0e-9F)
+                            : 1.0e-9F;
   rt_ns::SetOutput(node, 0,
                    (*this)(rt_ns::GetInput(node, 0, rt.tensors()),
-                           std::vector<std::int64_t>(axes.begin(), axes.end()), &rt),
+                           std::vector<std::int64_t>(axes.begin(), axes.end()), &rt, epsilon),
                    rt);
 }
 

@@ -1095,6 +1095,57 @@ TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationUsesRequestedAxes) {
   EXPECT_THROW(kernel(x, {2}), std::invalid_argument);
 }
 
+TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationEpsilonMatchesBuiltin) {
+  for (const std::int64_t version : {13, 29}) {
+    for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                            rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+      if (version < 29 && (type == rt_ns::DataType::FLOAT16 || type == rt_ns::DataType::BFLOAT16)) {
+        continue;
+      }
+      for (const rt_ns::Shape &axes :
+           {rt_ns::Shape{1, 2}, rt_ns::Shape{0, 2}, rt_ns::Shape{0, 1}, rt_ns::Shape{1}}) {
+        for (const float epsilon : {-1.0F, 0.0F, 1.0F}) {
+          SCOPED_TRACE(::testing::Message() << "version=" << version << " type="
+                                            << static_cast<int>(type) << " epsilon=" << epsilon);
+          ONNX_LIGHT_NAMESPACE::NodeProto node;
+          node.set_op_type("MeanVarianceNormalization");
+          node.add_input("X");
+          node.add_output("Y");
+          auto *attribute = node.add_attribute();
+          attribute->set_name("axes");
+          attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INTS);
+          for (const auto axis : axes) {
+            attribute->add_ints(axis);
+          }
+          if (epsilon >= 0.0F) {
+            AddFloatAttribute(node, "epsilon", epsilon);
+          }
+          std::vector<float> values(24);
+          for (std::size_t i = 0; i < values.size(); ++i) {
+            values[i] = static_cast<float>(i);
+          }
+          rt_ns::RuntimeContext actual_rt(MakeContext(version));
+          rt_ns::RuntimeContext reference_rt(MakeContext(version));
+          actual_rt.Set("X", MakeTensor(type, {2, 3, 4}, values));
+          reference_rt.Set("X", MakeTensor(type, {2, 3, 4}, values));
+          onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(version));
+          ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::MeanVarianceNormalization reference(
+              MakeContext(version));
+          kernel.set_node(node);
+          reference.set_node(node);
+          kernel.Run(actual_rt);
+          reference.Run(reference_rt);
+          const auto &actual = actual_rt.Get("Y");
+          const auto &expected = reference_rt.Get("Y");
+          for (std::size_t i = 0; i < values.size(); ++i) {
+            EXPECT_NEAR(Value(actual, i), Value(expected, i), Tolerance(type)) << "index=" << i;
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, MvnRetainedAxisAlignedAndTailSlicesMatchCenteredReference) {
   const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
   std::vector<rt_ns::Shape> shapes{{8, 32, 16, 16}, {8, 32, 128}};
