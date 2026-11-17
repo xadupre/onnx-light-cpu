@@ -7,6 +7,7 @@
 #include "ml_cpu_compute/checked_arithmetic.h"
 #include "ml_cpu_compute/com_microsoft/matmul_nbits_panel.h"
 #include "ml_cpu_compute/execution.h"
+#include "ml_cpu_compute/math/gemm/gemm_plan.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "ml_cpu_compute/math/math.h"
 #include "ml_cpu_compute/simd_level.h"
@@ -19,7 +20,6 @@
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
-#include <vector>
 
 namespace ml_cpu_compute {
 
@@ -231,17 +231,39 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),
       tuning.max_participants,
   };
+  if (k == 0 && (accuracy_level == 2 || accuracy_level == 3)) {
+    ExecuteRanges(static_cast<std::int64_t>(output_size), schedule,
+                  [&](std::int64_t begin, std::int64_t end) {
+                    for (auto index = begin; index < end; ++index) {
+                      const auto column = static_cast<std::size_t>(index) % n;
+                      y[index] =
+                          Codec::Store(0.0f + (bias == nullptr ? 0.0f : Codec::Load(bias[column])));
+                    }
+                  });
+    return;
+  }
   if (accuracy_level == 3) {
     const std::size_t dense_weight_count =
         CheckedMultiply(k, n, "MatMulNBits", "BFLOAT16 weight count");
     const std::size_t dense_activation_count =
         CheckedMultiply(rows, k, "MatMulNBits", "BFLOAT16 activation count");
-    CheckedByteSize(dense_weight_count, sizeof(std::uint16_t), "MatMulNBits",
-                    "BFLOAT16 weight bytes");
-    CheckedByteSize(dense_activation_count, sizeof(std::uint16_t), "MatMulNBits",
-                    "BFLOAT16 activation bytes");
-    std::vector<std::uint16_t> dense_weights(dense_weight_count);
-    std::vector<std::uint16_t> dense_activations(dense_activation_count);
+    const std::size_t dense_weight_bytes = CheckedByteSize(
+        dense_weight_count, sizeof(std::uint16_t), "MatMulNBits", "BFLOAT16 weight bytes");
+    const std::size_t dense_activation_bytes = CheckedByteSize(
+        dense_activation_count, sizeof(std::uint16_t), "MatMulNBits", "BFLOAT16 activation bytes");
+    const std::size_t float_bias_bytes =
+        bias == nullptr ? 0
+                        : CheckedByteSize(n, sizeof(float), "MatMulNBits", "BFLOAT16 bias bytes");
+    const std::size_t float_output_bytes =
+        CheckedByteSize(output_size, sizeof(float), "MatMulNBits", "FLOAT32 output bytes");
+    ExecutionBuffer weight_storage(dense_weight_bytes);
+    ExecutionBuffer activation_storage(dense_activation_bytes);
+    ExecutionBuffer bias_storage(float_bias_bytes);
+    ExecutionBuffer output_storage(float_output_bytes);
+    auto *dense_weights = static_cast<std::uint16_t *>(weight_storage.data());
+    auto *dense_activations = static_cast<std::uint16_t *>(activation_storage.data());
+    auto *float_bias = static_cast<float *>(bias_storage.data());
+    auto *float_output = static_cast<float *>(output_storage.data());
     for (std::size_t i = 0; i < dense_activation_count; ++i) {
       dense_activations[i] = detail::FloatToBFloat16Bits(Codec::Load(a[i]));
     }
@@ -275,22 +297,24 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       }
     }
 
-    std::vector<float> float_bias;
     GemmEpilogue<float> epilogue;
     if (bias != nullptr) {
-      CheckedByteSize(n, sizeof(float), "MatMulNBits", "BFLOAT16 bias bytes");
-      float_bias.resize(n);
       for (std::size_t column = 0; column < n; ++column) {
         float_bias[column] = Codec::Load(bias[column]);
       }
-      epilogue.bias = float_bias.data();
+      epilogue.bias = float_bias;
       epilogue.bias_layout = GemmBroadcast::kRow;
       epilogue.beta = 1.0f;
     }
-    CheckedByteSize(output_size, sizeof(float), "MatMulNBits", "FLOAT32 output bytes");
-    std::vector<float> float_output(output_size);
-    GemmHalfWithEpilogue(true, false, false, rows, n, k, 1.0f, dense_activations.data(),
-                         dense_weights.data(), epilogue, float_output.data());
+    GemmHalfPlanOptions gemm_options;
+    gemm_options.is_bfloat16 = true;
+    gemm_options.m = rows;
+    gemm_options.n = n;
+    gemm_options.k = k;
+    gemm_options.maximum_participants = static_cast<std::size_t>(
+        ExecutionBlockCount(static_cast<std::int64_t>(output_size), schedule));
+    const GemmHalfPlan gemm(gemm_options);
+    gemm.Execute(dense_activations, dense_weights, epilogue, float_output);
     for (std::size_t i = 0; i < output_size; ++i) {
       y[i] = Codec::Store(float_output[i]);
     }

@@ -11,6 +11,7 @@
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
+#include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/value_store.h"
@@ -27,6 +28,8 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -424,6 +427,133 @@ TEST(MatMulNBitsKernel, AccuracyLevelBiasKeepsItsOwnPrecision) {
     const onnx_light_cpu::MatMulNBitsKernel kernel{
         node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
     EXPECT_FLOAT_EQ(ReadValue(kernel(a, b, scales, &bias), 0), level == 2 ? 1025.0f : 1.00390625f);
+  }
+}
+
+class RecordingScratchAllocator : public rt_ns::SimpleRawBufferAllocator {
+public:
+  using rt_ns::SimpleRawBufferAllocator::SimpleRawBufferAllocator;
+
+  rt_ns::RawBuffer *Allocate(std::size_t bytes) override {
+    allocated_in_dispatch |= ml_cpu_compute::ExecutionInParallelRegion();
+    if (attempts++ == fail_after) {
+      throw std::bad_alloc();
+    }
+    requests.push_back(bytes);
+    return rt_ns::SimpleRawBufferAllocator::Allocate(bytes);
+  }
+
+  void Reset(std::size_t failure = std::numeric_limits<std::size_t>::max()) {
+    requests.clear();
+    attempts = 0;
+    fail_after = failure;
+    allocated_in_dispatch = false;
+  }
+
+  std::vector<std::size_t> requests;
+  std::size_t attempts = 0;
+  std::size_t fail_after = std::numeric_limits<std::size_t>::max();
+  bool allocated_in_dispatch = false;
+};
+
+TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
+  constexpr std::int64_t rows = 32, k = 128, n = 4096;
+  const auto a = rt_ns::Tensor::FromFloat("A", {rows, k}, std::vector<float>(rows * k, 0.5f));
+  const auto b =
+      rt_ns::Tensor::FromUint8("B", {n, k / 32, 16}, std::vector<std::uint8_t>(n * k / 2, 0x99));
+  const auto scales =
+      rt_ns::Tensor::FromFloat("scales", {n, k / 32}, std::vector<float>(n * k / 32, 0.25f));
+  const auto bias = rt_ns::Tensor::FromFloat("bias", {n}, std::vector<float>(n, 1.0f));
+  const auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n);
+
+  for (int entry : {0, 1, 2}) {
+    SCOPED_TRACE(entry);
+    RecordingScratchAllocator scratch(8);
+    rt_ns::SimpleRawBufferAllocator outputs(8);
+    const rt_ns::KernelContext context{rt_ns::OpsetId("com.microsoft", 1)};
+    rt_ns::RuntimeContext rt(
+        context, rt_ns::RuntimeContextOptions{.allocator = &scratch, .io_allocator = &outputs});
+    rt.SetActiveAllocator(&outputs);
+    auto node = MakeNode(k, n);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(3);
+      }
+    }
+    if (entry != 0) {
+      node.ref_input()[2] = "";
+    }
+    node.add_input("");
+    node.add_input("");
+    node.add_input("bias");
+    onnx_light_cpu::MatMulNBitsKernel kernel{node, context};
+    if (entry == 2) {
+      rt.Put("A", a);
+      rt.Put("bias", bias);
+      rt.PutValue("B", rt_ns::RuntimeValue(encoded));
+      ExecutePreparations(kernel, rt, {"B"});
+    }
+    const auto baseline = scratch.TotalAllocatedSize();
+    scratch.Reset();
+    InlineExecutor executor;
+    const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+    const ml_cpu_compute::ExecutionExecutorScope executor_scope(&view);
+    if (entry == 0) {
+      const auto y = kernel(a, b, scales, &bias, &rt);
+      EXPECT_FLOAT_EQ(y.AsFloat()[0], 17.0f);
+    } else if (entry == 1) {
+      const auto y = kernel(a, encoded, &bias, {}, &rt);
+      EXPECT_NEAR(y.AsFloat()[0], 65.0f, 0.1f);
+    } else {
+      kernel.Run(rt);
+      EXPECT_NEAR(rt.Get("Y").AsFloat()[0], 65.0f, 0.1f);
+    }
+    for (std::size_t bytes :
+         {static_cast<std::size_t>(k * n * 2), static_cast<std::size_t>(rows * k * 2),
+          static_cast<std::size_t>(n * sizeof(float)),
+          static_cast<std::size_t>(rows * n * sizeof(float))}) {
+      EXPECT_NE(std::find(scratch.requests.begin(), scratch.requests.end(), bytes + 63),
+                scratch.requests.end())
+          << "missing scratch allocation of " << bytes << " bytes";
+    }
+    EXPECT_FALSE(scratch.allocated_in_dispatch);
+    EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+    EXPECT_GT(executor.dispatches, 0);
+
+    if (entry == 0) {
+      onnx_light_cpu::MatMulNBitsKernel::RegisterTuningSchemas();
+      const auto key = kernel.TuningKey(static_cast<std::int32_t>(rt_ns::DataType::FLOAT));
+      const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+      ASSERT_NE(schema, nullptr);
+      auto parameters = schema->portable_defaults();
+      parameters.values["parallel.threshold_outputs"] = std::int64_t{1};
+      parameters.values["parallel.target_block_outputs"] = std::int64_t{1};
+      parameters.values["parallel.max_participants"] = std::int64_t{1};
+      kernel.Configure(parameters);
+      scratch.Reset();
+      executor = {};
+      const auto configured = kernel(a, b, scales, &bias, &rt);
+      EXPECT_FLOAT_EQ(configured.AsFloat()[0], 17.0f);
+      EXPECT_EQ(executor.dispatches, 0);
+      EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+
+      scratch.Reset();
+      {
+        const ml_cpu_compute::ExecutionAllocatorScope explicit_heap(nullptr);
+        const auto y = kernel(a, b, scales, &bias, &rt);
+        EXPECT_FLOAT_EQ(y.AsFloat()[0], 17.0f);
+      }
+      EXPECT_TRUE(scratch.requests.empty());
+      EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+
+      for (std::size_t failure : {0u, 1u, 2u, 3u}) {
+        scratch.Reset(failure);
+        executor = {};
+        EXPECT_THROW(kernel(a, b, scales, &bias, &rt), std::bad_alloc);
+        EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+        EXPECT_EQ(executor.dispatches, 0);
+      }
+    }
   }
 }
 

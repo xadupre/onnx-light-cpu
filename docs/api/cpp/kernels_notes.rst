@@ -28,7 +28,8 @@ the dequantized weights to BFLOAT16 before GEMM. ``accuracy_level`` 0 and 1 use
 FLOAT32 accumulation, level 2 requires FLOAT16 input and accumulation, level 3
 rounds operands to BFLOAT16 and uses FLOAT32 accumulation, and level 4 selects
 integer accumulation when available, falling back to FLOAT32 otherwise. Level 3
-uses temporary heap allocations and has an unknown peak-memory estimate.
+uses runtime-allocator scratch when available and has an unknown peak-memory
+estimate.
 ``g_idx``, prepacked provider-specific layouts, invalid block sizes, mixed
 floating-point types, and ``DOUBLE`` are rejected. The separate encoded INT3
 layout requires block size 32 and does not support accuracy levels 2 or 3.

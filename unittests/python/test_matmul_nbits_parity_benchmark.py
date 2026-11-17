@@ -155,13 +155,14 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
         from onnx_light_cpu import register_kernel_for_session
 
         cases = (
-            ("g_idx", "g_idx is not supported"),
-            ("block_size", "power-of-two block_size"),
-            ("accuracy_level", "accuracy_level 0 or 4"),
-            ("weight_prepacked", "weight_prepacked=0"),
+            ("g_idx", 0, "g_idx is not supported"),
+            ("block_size", 24, "power-of-two block_size"),
+            ("accuracy_level", -1, "accuracy_level in"),
+            ("accuracy_level", 5, "accuracy_level in"),
+            ("weight_prepacked", 1, "weight_prepacked=0"),
         )
-        for option, message in cases:
-            with self.subTest(option=option):
+        for option, value, message in cases:
+            with self.subTest(option=option, value=value):
                 a, packed, scales = make_inputs(1, 64, 3, "float32")
                 model = make_model(1, 64, 3, "float32", packed, scales)
                 node = model.graph.node[0]
@@ -173,9 +174,9 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
                 elif option in {"block_size", "accuracy_level"}:
                     for attribute in node.attribute:
                         if attribute.name == option:
-                            attribute.i = 24 if option == "block_size" else 3
+                            attribute.i = value
                 elif option == "weight_prepacked":
-                    node.attribute.append(helper.make_attribute("weight_prepacked", 1))
+                    node.attribute.append(helper.make_attribute("weight_prepacked", value))
                 with self.assertRaisesRegex((ValueError, RuntimeError), message):
                     session = ReferenceEvaluator(model)
                     register_kernel_for_session(session, "com.microsoft", "MatMulNBits")

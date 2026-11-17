@@ -567,7 +567,7 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt,
                                      const Tensor *zero_points) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   if (attributes_.bits == 3) {
     throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
@@ -579,7 +579,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   if (attributes_.bits == 3) {
     return ComputeInt3(a, packed_weights, bias, rt);
   }
@@ -836,7 +836,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
 }
 
 void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(&rt);
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 6) {

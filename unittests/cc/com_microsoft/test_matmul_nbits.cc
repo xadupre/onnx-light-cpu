@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -152,6 +153,132 @@ TEST(MatMulNBits, Non32GroupsAndExplicitZeroPointsAllTypes) {
   }
 }
 
+template <typename Storage, typename Encode, typename Decode>
+void CheckPrecisionLayouts(DataType type, std::int64_t level, Encode encode, Decode decode) {
+  constexpr std::size_t rows = 3, k = 69, n = 5, block_size = 16, blocks = 5;
+  const auto round_half = [](float value) {
+    return detail::Float16BitsToFloat(detail::FloatToFloat16Bits(value));
+  };
+  const auto round_bfloat = [](float value) {
+    return detail::Bfloat16BitsToFloat(detail::FloatToBFloat16Bits(value));
+  };
+
+  for (std::size_t bits : {2u, 4u, 8u}) {
+    const std::size_t values_per_byte = 8 / bits;
+    const std::size_t blob_size = block_size * bits / 8;
+    const std::size_t zero_stride = (blocks + values_per_byte - 1) / values_per_byte;
+    const auto mask = static_cast<std::uint8_t>((1U << bits) - 1U);
+    std::vector<Storage> a(rows * k), scales(n * blocks), bias(n), float_zeros(n * blocks);
+    std::vector<std::uint8_t> codes(n * k), packed(n * blocks * blob_size, 0xff),
+        zero_codes(n * blocks), packed_zeros(n * zero_stride, 0);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      a[i] = encode(static_cast<float>(static_cast<int>(i % 23) - 11) * 0.037f +
+                    static_cast<float>(i % 3) * 0.0007f);
+    }
+    for (std::size_t column = 0; column < n; ++column) {
+      bias[column] = encode(static_cast<float>(static_cast<int>(column) - 2) * 0.13f);
+      for (std::size_t block = 0; block < blocks; ++block) {
+        const auto index = column * blocks + block;
+        scales[index] = encode(static_cast<float>(index % 7 + 1) * 0.011f +
+                               static_cast<float>(index % 3) * 0.001f);
+        zero_codes[index] = static_cast<std::uint8_t>((column * 17 + block * 11 + 3) & mask);
+        float_zeros[index] = encode(static_cast<float>(zero_codes[index]) + 0.5f);
+        packed_zeros[column * zero_stride + block / values_per_byte] |=
+            static_cast<std::uint8_t>(zero_codes[index] << ((block % values_per_byte) * bits));
+      }
+      for (std::size_t p = 0; p < k; ++p) {
+        const auto code = static_cast<std::uint8_t>((column * 11 + p * 3 + p / 5) & mask);
+        codes[column * k + p] = code;
+        const auto offset = p % block_size;
+        const auto shift = (offset % values_per_byte) * bits;
+        const auto packed_index =
+            (column * blocks + p / block_size) * blob_size + offset / values_per_byte;
+        packed[packed_index] = static_cast<std::uint8_t>(
+            (packed[packed_index] & ~(static_cast<unsigned>(mask) << shift)) | (code << shift));
+      }
+    }
+
+    for (int zero_mode : {0, 1, 2}) {
+      for (bool with_bias : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "type=" << static_cast<int>(type) << " level=" << level << " bits=" << bits
+                     << " zero_mode=" << zero_mode << " bias=" << with_bias);
+        std::vector<Storage> output(rows * n + 1, encode(-42.0f));
+        const void *zeros = zero_mode == 1   ? static_cast<const void *>(packed_zeros.data())
+                            : zero_mode == 2 ? static_cast<const void *>(float_zeros.data())
+                                             : nullptr;
+        MatMulNBits(a.data(), packed.data(), scales.data(), with_bias ? bias.data() : nullptr,
+                    output.data(), type, rows, k, n, bits, block_size,
+                    kDefaultMatMulNBitsExecutionTuning, zeros, zero_mode != 2, level);
+        for (std::size_t row = 0; row < rows; ++row) {
+          for (std::size_t column = 0; column < n; ++column) {
+            float expected = 0.0f;
+            for (std::size_t p = 0; p < k; ++p) {
+              const std::size_t index = column * blocks + p / block_size;
+              const float zero = zero_mode == 0   ? static_cast<float>(1U << (bits - 1))
+                                 : zero_mode == 1 ? static_cast<float>(zero_codes[index])
+                                                  : decode(float_zeros[index]);
+              float weight =
+                  (static_cast<float>(codes[column * k + p]) - zero) * decode(scales[index]);
+              float activation = decode(a[row * k + p]);
+              if (level == 2) {
+                weight = round_half(weight);
+                expected = round_half(std::fma(activation, weight, expected));
+              } else {
+                weight = round_bfloat(weight);
+                activation = round_bfloat(activation);
+                expected = std::fma(activation, weight, expected);
+              }
+            }
+            expected += with_bias ? decode(bias[column]) : 0.0f;
+            const auto expected_storage = encode(expected);
+            if (level == 2) {
+              EXPECT_EQ(output[row * n + column], expected_storage);
+            } else {
+              const float reference = decode(expected_storage);
+              const float relative_tolerance = type == DataType::FLOAT     ? 2e-5f
+                                               : type == DataType::FLOAT16 ? 0.002f
+                                                                           : 0.01f;
+              EXPECT_NEAR(decode(output[row * n + column]), reference,
+                          relative_tolerance * std::max(1.0f, std::abs(reference)));
+            }
+          }
+        }
+        EXPECT_EQ(output.back(), encode(-42.0f));
+      }
+    }
+  }
+}
+
+TEST(MatMulNBits, PrecisionLevelsCoverPackedLayoutsAndBlockTails) {
+  CheckPrecisionLayouts<std::uint16_t>(DataType::FLOAT16, 2, detail::FloatToFloat16Bits,
+                                       detail::Float16BitsToFloat);
+  CheckPrecisionLayouts<float>(
+      DataType::FLOAT, 3, [](float x) { return x; }, [](float x) { return x; });
+  CheckPrecisionLayouts<std::uint16_t>(DataType::FLOAT16, 3, detail::FloatToFloat16Bits,
+                                       detail::Float16BitsToFloat);
+  CheckPrecisionLayouts<std::uint16_t>(DataType::BFLOAT16, 3, detail::FloatToBFloat16Bits,
+                                       detail::Bfloat16BitsToFloat);
+}
+
+TEST(MatMulNBits, PrecisionLevelsHandleEmptyReduction) {
+  const std::vector<std::uint16_t> bias{detail::FloatToFloat16Bits(1.0f),
+                                        detail::FloatToFloat16Bits(-0.5f),
+                                        detail::FloatToFloat16Bits(2.0f)};
+  for (std::int64_t level : {2, 3}) {
+    for (bool with_bias : {false, true}) {
+      std::vector<std::uint16_t> output(6, detail::FloatToFloat16Bits(-42.0f));
+      MatMulNBits(nullptr, nullptr, nullptr, with_bias ? bias.data() : nullptr, output.data(),
+                  DataType::FLOAT16, 2, 0, 3, 4, 16, kDefaultMatMulNBitsExecutionTuning, nullptr,
+                  true, level);
+      for (std::size_t i = 0; i < output.size(); ++i) {
+        EXPECT_EQ(output[i], with_bias ? bias[i % bias.size()] : detail::FloatToFloat16Bits(0.0f))
+            << "level=" << level << " index=" << i;
+      }
+    }
+  }
+}
+
 TEST(MatMulNBits, EncodedInt3DirectAffineMatchesReferenceAtByteAndBlockBoundaries) {
   constexpr std::size_t k = 35;
   constexpr std::size_t n = 2;
@@ -235,16 +362,45 @@ TEST(MatMulNBits, WidePanelRowBoundariesMatchReference) {
 struct InlineExecutor {
   int dispatches = 0;
   std::int64_t blocks = 0;
+  std::int64_t maximum_blocks = 0;
   static void Run(void *context, std::int64_t count, void *task_context,
                   ml_cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
+    self.maximum_blocks = std::max(self.maximum_blocks, count);
     for (std::int64_t block = count; block-- > 0;) {
       task(task_context, block);
     }
   }
 };
+
+TEST(MatMulNBits, AccuracyThreeHonorsExecutionTuning) {
+  constexpr std::size_t rows = 32, k = 128, n = 4096;
+  std::vector<float> a(rows * k, 0.5f), scales(n * (k / 32), 0.25f), bias(n, 1.0f);
+  std::vector<std::uint8_t> packed(n * k / 2, 0x99);
+  std::vector<float> output(rows * n);
+  InlineExecutor executor;
+  const ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  const ExecutionExecutorScope scope(&view);
+  const auto run = [&](const MatMulNBitsExecutionTuning &tuning) {
+    executor = {};
+    MatMulNBits(a.data(), packed.data(), scales.data(), bias.data(), output.data(), DataType::FLOAT,
+                rows, k, n, 4, 32, tuning, nullptr, true, 3);
+    EXPECT_FLOAT_EQ(output.front(), 17.0f);
+    EXPECT_FLOAT_EQ(output.back(), 17.0f);
+  };
+
+  run({1, 1, 1});
+  EXPECT_EQ(executor.dispatches, 0);
+  run({output.size() + 1, 1, 8});
+  EXPECT_EQ(executor.dispatches, 0);
+  run({1, output.size() + 1, 8});
+  EXPECT_EQ(executor.dispatches, 0);
+  run({1, 1, 2});
+  EXPECT_GT(executor.dispatches, 0);
+  EXPECT_LE(executor.maximum_blocks, 2);
+}
 
 struct ConcurrentExecutor {
   int dispatches = 0;
@@ -264,6 +420,45 @@ struct ConcurrentExecutor {
     }
   }
 };
+
+TEST(MatMulNBits, AccuracyThreeParallelMatchesSerial) {
+  constexpr std::size_t rows = 32, k = 128, n = 4096;
+  std::vector<float> a(rows * k), scales(n * (k / 32)), bias(n), serial(rows * n),
+      parallel(rows * n + 1, -42.0f);
+  std::vector<std::uint8_t> packed(n * k / 2);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 11) - 5) / 8.0f;
+  }
+  for (std::size_t i = 0; i < scales.size(); ++i) {
+    scales[i] = static_cast<float>(i % 7 + 1) / 128.0f;
+  }
+  for (std::size_t i = 0; i < bias.size(); ++i) {
+    bias[i] = static_cast<float>(static_cast<int>(i % 5) - 2) / 16.0f;
+  }
+  for (std::size_t i = 0; i < packed.size(); ++i) {
+    packed[i] = static_cast<std::uint8_t>(i * 37 + i / 11);
+  }
+  const auto run = [&](float *output) {
+    MatMulNBits(a.data(), packed.data(), scales.data(), bias.data(), output, DataType::FLOAT, rows,
+                k, n, 4, 32, {1, 1, 4}, nullptr, true, 3);
+  };
+  {
+    const ExecutionExecutorScope scope(nullptr);
+    run(serial.data());
+  }
+  ConcurrentExecutor executor;
+  const ExecutionExecutorView view{&executor, 4, &ConcurrentExecutor::Run};
+  {
+    const ExecutionExecutorScope scope(&view);
+    run(parallel.data());
+  }
+  ASSERT_GT(executor.dispatches, 0);
+  EXPECT_LE(executor.blocks, 4);
+  for (std::size_t i = 0; i < serial.size(); ++i) {
+    EXPECT_NEAR(parallel[i], serial[i], 2e-5f * std::max(1.0f, std::abs(serial[i]))) << i;
+  }
+  EXPECT_FLOAT_EQ(parallel.back(), -42.0f);
+}
 
 TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
   for (const auto [k, n] : {std::pair{512u, 32000u}, std::pair{512u, 1376u}, std::pair{1376u, 512u},
