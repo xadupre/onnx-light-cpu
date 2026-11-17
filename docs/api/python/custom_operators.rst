@@ -360,11 +360,13 @@ Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 
 ``com.microsoft::MatMulNBits`` version 1 multiplies floating-point activations by a
-block-quantized right-hand matrix without materializing the complete
-dequantized matrix. The CPU contract implements packed INT2, INT4, and INT8
+block-quantized right-hand matrix. Level 3 materializes a BFLOAT16 weight
+matrix for GEMM. The CPU contract implements packed INT2, INT4, and INT8
 formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
 8, a power-of-two ``block_size`` in ``[16, UINT32_MAX]`` (including 16, 32,
-64, 128, and 256), ``accuracy_level`` 0 or 4, and
+64, 128, and 256), ``accuracy_level`` in ``[0, 4]`` (level 2 requires
+FLOAT16 and uses FLOAT16 accumulation; level 3 rounds operands to BFLOAT16
+and uses FLOAT32 accumulation), and
 ``weight_prepacked=0``. Input ``B`` has shape
 ``[N, ceil(K / block_size), block_size * bits / 8]`` and scales have shape
 ``[N, ceil(K / block_size)]`` or the equivalent flat shape. Codes are packed

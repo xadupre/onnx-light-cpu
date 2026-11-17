@@ -431,10 +431,12 @@ LightOpSchema MakeMatMulNBitsSchema() {
       "accepts matching FLOAT, FLOAT16, or BFLOAT16 activations, scales, optional bias, and "
       "output; UINT8 packed INT2, INT4, or INT8 weights; power-of-two block_size in "
       "[16, UINT32_MAX], weight_prepacked=0, and "
-      "accuracy_level 0 or 4. B may instead be an ORT MatMulNBits EncodedValueProto "
+      "accuracy_level in [0, 4] (level 2 requires FLOAT16; level 3 rounds operands to BFLOAT16 "
+      "and accumulates in FLOAT32). B may instead be an ORT MatMulNBits EncodedValueProto "
       "(INT2/4/8) or an onnx-light MATMULNBITS_INT3 EncodedValueProto, in which "
       "case scales and zero_points must be omitted and the encoded packing is consumed without "
-      "provider repacking. INT3 requires block_size=32. This encoded form is inference-only. "
+      "provider repacking. INT3 requires block_size=32 and excludes accuracy levels 2 and 3. "
+      "This encoded form is inference-only. "
       "zero_points may be packed UINT8 or match A's floating type; g_idx must not be supplied. "
       "Packed B has shape (N, ceil(K / block_size), block_size * bits / 8), scales has shape "
       "(N, ceil(K / block_size)) or its flattened "
@@ -475,7 +477,10 @@ LightOpSchema MakeMatMulNBitsSchema() {
                       AttributeType::INT, false, int64_t{4}},
        AttributeParam{"block_size", "Power of two in [16, UINT32_MAX]; INT3 requires 32.",
                       AttributeType::INT, true},
-       AttributeParam{"accuracy_level", "Accuracy level; 0 and 4 are supported.",
+       AttributeParam{"accuracy_level",
+                      "0/1 use float32, 2 uses float16 accumulation, 3 rounds operands to "
+                      "bfloat16 with float32 accumulation, and 4 uses integer accumulation "
+                      "when available.",
                       AttributeType::INT, false, int64_t{0}},
        AttributeParam{"weight_prepacked", "Prepacked-weight flag; only 0 is supported.",
                       AttributeType::INT, false, int64_t{0}}},

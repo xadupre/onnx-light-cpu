@@ -977,11 +977,15 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
   if (k <= 0 || n <= 0 || !ml_cpu_compute::MatMulNBitsBlockSizeSupported(bits, block_size) ||
-      (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
+      accuracy_level < 0 || accuracy_level > 4 || weight_prepacked != 0 ||
+      (bits == 3 && (accuracy_level == 2 || accuracy_level == 3))) {
     throw std::invalid_argument("ComputeShapeMatMulNBits: unsupported bits, block_size, "
                                 "accuracy_level or weight_prepacked.");
   }
   const SymTensor &a = ctx.Get(node.input(0));
+  if (accuracy_level == 2 && a.Dtype() != sym_ns::TensorType::kFloat16) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: accuracy_level 2 requires FLOAT16.");
+  }
   const bool supported_type = a.Dtype() == sym_ns::TensorType::kFloat ||
                               a.Dtype() == sym_ns::TensorType::kFloat16 ||
                               a.Dtype() == sym_ns::TensorType::kBfloat16;
@@ -1718,9 +1722,12 @@ ComputePeakMemoryGatherBlockQuantized(sym_ns::Device, const ONNX_LIGHT_NAMESPACE
   return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 
-shapes_ns::PeakMemoryEstimate ComputePeakMemoryMatMulNBits(sym_ns::Device,
-                                                           const ONNX_LIGHT_NAMESPACE::NodeProto &,
-                                                           const std::vector<SymShape> &) {
+shapes_ns::PeakMemoryEstimate
+ComputePeakMemoryMatMulNBits(sym_ns::Device, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                             const std::vector<SymShape> &) {
+  if (GetIntAttribute(node, "accuracy_level", 0) == 3) {
+    return shapes_ns::UnknownPeakMemory(kMicrosoftDomain, "MatMulNBits");
+  }
   return shapes_ns::PeakMemoryEstimate::Exact(int64_t{0});
 }
 

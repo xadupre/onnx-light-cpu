@@ -177,7 +177,8 @@ bool IsSupportedMatMulNBitsNode(GraphGraph &graph, const NodeProto &node) {
       (GetIntAttributeOrDefault(node, "bits", 4) != 2 &&
        GetIntAttributeOrDefault(node, "bits", 4) != 4 &&
        GetIntAttributeOrDefault(node, "bits", 4) != 8) ||
-      block_size->i() != 32 || (accuracy_level != 0 && accuracy_level != 4) ||
+      block_size->i() != 32 ||
+      (accuracy_level != 0 && accuracy_level != 1 && accuracy_level != 4) ||
       GetIntAttributeOrDefault(node, "weight_prepacked", 0) != 0) {
     return false;
   }

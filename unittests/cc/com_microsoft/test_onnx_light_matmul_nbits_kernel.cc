@@ -11,6 +11,7 @@
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
+#include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/value_store.h"
@@ -27,6 +28,8 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -279,6 +282,18 @@ TEST(MatMulNBitsKernel, InfersEncodedInt3ShapeAndRejectsAttributeMismatch) {
   wrong = MakeNode(35, 2, 4);
   wrong.ref_input().resize(2);
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
+  for (std::int64_t level : {2, 3}) {
+    auto unsupported = node;
+    for (auto &attribute : *unsupported.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, unsupported), std::invalid_argument);
+    EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{
+                     unsupported, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
+                 std::invalid_argument);
+  }
 }
 
 TEST(MatMulNBitsKernel, RunsPreparedEncodedInt3WithoutTensorScales) {
@@ -313,6 +328,233 @@ TEST(MatMulNBitsKernel, DecodesInt4AndAppliesPerBlockScalesAndBias) {
   ASSERT_EQ(y.shape, (rt_ns::Shape{1, 2}));
   EXPECT_FLOAT_EQ(y.AsFloat()[0], 1.5f);
   EXPECT_FLOAT_EQ(y.AsFloat()[1], 13.0f);
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelTwoUsesFloat16ProductsAndAccumulator) {
+  const rt_ns::Tensor a =
+      MakeTensor(rt_ns::DataType::FLOAT16, {1, 32}, std::vector<float>(32, 0.3f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0xbb));
+  const rt_ns::Tensor scales = MakeTensor(rt_ns::DataType::FLOAT16, {1}, {0.11f});
+  auto node = MakeNode(32, 1);
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(2);
+    }
+  }
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const rt_ns::Tensor y = kernel(a, b, scales);
+
+  const float activation =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.3f));
+  const float weight =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(
+          3.0f * ml_cpu_compute::detail::Float16BitsToFloat(
+                     ml_cpu_compute::detail::FloatToFloat16Bits(0.11f))));
+  float expected = 0.0f;
+  for (int i = 0; i < 32; ++i) {
+    expected = ml_cpu_compute::detail::Float16BitsToFloat(
+        ml_cpu_compute::detail::FloatToFloat16Bits(std::fma(activation, weight, expected)));
+  }
+  EXPECT_FLOAT_EQ(ReadValue(y, 0), expected);
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelThreeUsesBfloat16ProductsForFloat16Inputs) {
+  const rt_ns::Tensor a =
+      MakeTensor(rt_ns::DataType::FLOAT16, {1, 32}, std::vector<float>(32, 0.3f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0xbb));
+  const rt_ns::Tensor scales = MakeTensor(rt_ns::DataType::FLOAT16, {1}, {0.11f});
+  auto node = MakeNode(32, 1);
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(3);
+    }
+  }
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const rt_ns::Tensor y = kernel(a, b, scales);
+
+  const float fp16_activation =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.3f));
+  const float activation = ml_cpu_compute::detail::Bfloat16BitsToFloat(
+      ml_cpu_compute::detail::FloatToBFloat16Bits(fp16_activation));
+  const float scale =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.11f));
+  const float weight = ml_cpu_compute::detail::Bfloat16BitsToFloat(
+      ml_cpu_compute::detail::FloatToBFloat16Bits(3.0f * scale));
+  float expected = 0.0f;
+  for (int i = 0; i < 32; ++i) {
+    expected = std::fma(activation, weight, expected);
+  }
+  expected = ml_cpu_compute::detail::Float16BitsToFloat(
+      ml_cpu_compute::detail::FloatToFloat16Bits(expected));
+  EXPECT_FLOAT_EQ(ReadValue(y, 0), expected);
+}
+
+TEST(MatMulNBitsKernel, RejectsAccuracyLevelTypeMismatch) {
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0x99));
+  const rt_ns::Tensor scales = rt_ns::Tensor::FromFloat("", {1}, {1.0f});
+  for (const std::int64_t level : {2}) {
+    auto node = MakeNode(32, 1);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    EXPECT_THROW(kernel(a, b, scales), std::invalid_argument) << "level " << level;
+  }
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelBiasKeepsItsOwnPrecision) {
+  const auto b = rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0x99));
+  for (std::int64_t level : {2, 3}) {
+    const auto type = level == 2 ? rt_ns::DataType::FLOAT16 : rt_ns::DataType::FLOAT;
+    const auto a = MakeTensor(type, {1, 32}, std::vector<float>(32, level == 2 ? 0.0234375f : 0));
+    const auto scales = MakeTensor(type, {1}, {1});
+    const auto bias = MakeTensor(type, {1}, {level == 2 ? 1024.0f : 1.00390625f});
+    auto node = MakeNode(32, 1);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    EXPECT_FLOAT_EQ(ReadValue(kernel(a, b, scales, &bias), 0), level == 2 ? 1025.0f : 1.00390625f);
+  }
+}
+
+class RecordingScratchAllocator : public rt_ns::SimpleRawBufferAllocator {
+public:
+  using rt_ns::SimpleRawBufferAllocator::SimpleRawBufferAllocator;
+
+  rt_ns::RawBuffer *Allocate(std::size_t bytes) override {
+    allocated_in_dispatch |= ml_cpu_compute::ExecutionInParallelRegion();
+    if (attempts++ == fail_after) {
+      throw std::bad_alloc();
+    }
+    requests.push_back(bytes);
+    return rt_ns::SimpleRawBufferAllocator::Allocate(bytes);
+  }
+
+  void Reset(std::size_t failure = std::numeric_limits<std::size_t>::max()) {
+    requests.clear();
+    attempts = 0;
+    fail_after = failure;
+    allocated_in_dispatch = false;
+  }
+
+  std::vector<std::size_t> requests;
+  std::size_t attempts = 0;
+  std::size_t fail_after = std::numeric_limits<std::size_t>::max();
+  bool allocated_in_dispatch = false;
+};
+
+TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
+  constexpr std::int64_t rows = 128, k = 256, n = 4096;
+  const auto a = rt_ns::Tensor::FromFloat("A", {rows, k}, std::vector<float>(rows * k, 0.5f));
+  const auto b =
+      rt_ns::Tensor::FromUint8("B", {n, k / 32, 16}, std::vector<std::uint8_t>(n * k / 2, 0x99));
+  const auto scales =
+      rt_ns::Tensor::FromFloat("scales", {n, k / 32}, std::vector<float>(n * k / 32, 0.25f));
+  const auto bias = rt_ns::Tensor::FromFloat("bias", {n}, std::vector<float>(n, 1.0f));
+  const auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n);
+
+  for (int entry : {0, 1, 2}) {
+    SCOPED_TRACE(entry);
+    RecordingScratchAllocator scratch(8);
+    rt_ns::SimpleRawBufferAllocator outputs(8);
+    const rt_ns::KernelContext context{rt_ns::OpsetId("com.microsoft", 1)};
+    rt_ns::RuntimeContext rt(
+        context, rt_ns::RuntimeContextOptions{.allocator = &scratch, .io_allocator = &outputs});
+    rt.SetActiveAllocator(&outputs);
+    auto node = MakeNode(k, n);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(3);
+      }
+    }
+    if (entry != 0) {
+      node.ref_input()[2] = "";
+    }
+    node.add_input("");
+    node.add_input("");
+    node.add_input("bias");
+    onnx_light_cpu::MatMulNBitsKernel kernel{node, context};
+    if (entry == 2) {
+      rt.Put("A", a);
+      rt.Put("bias", bias);
+      rt.PutValue("B", rt_ns::RuntimeValue(encoded));
+      ExecutePreparations(kernel, rt, {"B"});
+    }
+    const auto baseline = scratch.TotalAllocatedSize();
+    scratch.Reset();
+    InlineExecutor executor;
+    const ml_cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+    const ml_cpu_compute::ExecutionExecutorScope executor_scope(&view);
+    if (entry == 0) {
+      const auto y = kernel(a, b, scales, &bias, &rt);
+      EXPECT_FLOAT_EQ(y.AsFloat()[0], 33.0f);
+    } else if (entry == 1) {
+      const auto y = kernel(a, encoded, &bias, {}, &rt);
+      EXPECT_NEAR(y.AsFloat()[0], 129.0f, 0.1f);
+    } else {
+      kernel.Run(rt);
+      EXPECT_NEAR(rt.Get("Y").AsFloat()[0], 129.0f, 0.1f);
+    }
+    for (std::size_t bytes :
+         {static_cast<std::size_t>(k * n * 2), static_cast<std::size_t>(rows * k * 2),
+          static_cast<std::size_t>(n * sizeof(float)),
+          static_cast<std::size_t>(rows * n * sizeof(float))}) {
+      EXPECT_NE(std::find(scratch.requests.begin(), scratch.requests.end(), bytes + 63),
+                scratch.requests.end())
+          << "missing scratch allocation of " << bytes << " bytes";
+    }
+    EXPECT_FALSE(scratch.allocated_in_dispatch);
+    EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+    EXPECT_GT(executor.dispatches, 0);
+
+    if (entry == 0) {
+      onnx_light_cpu::MatMulNBitsKernel::RegisterTuningSchemas();
+      const auto key = kernel.TuningKey(static_cast<std::int32_t>(rt_ns::DataType::FLOAT));
+      const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+      ASSERT_NE(schema, nullptr);
+      auto parameters = schema->portable_defaults();
+      parameters.values["parallel.threshold_outputs"] = std::int64_t{1};
+      parameters.values["parallel.target_block_outputs"] = std::int64_t{1};
+      parameters.values["parallel.max_participants"] = std::int64_t{1};
+      kernel.Configure(parameters);
+      scratch.Reset();
+      executor = {};
+      const auto configured = kernel(a, b, scales, &bias, &rt);
+      EXPECT_FLOAT_EQ(configured.AsFloat()[0], 33.0f);
+      EXPECT_EQ(executor.dispatches, 0);
+      EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+
+      scratch.Reset();
+      {
+        const ml_cpu_compute::ExecutionAllocatorScope explicit_heap(nullptr);
+        const auto y = kernel(a, b, scales, &bias, &rt);
+        EXPECT_FLOAT_EQ(y.AsFloat()[0], 33.0f);
+      }
+      EXPECT_TRUE(scratch.requests.empty());
+      EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+
+      for (std::size_t failure : {0u, 1u, 2u, 3u}) {
+        scratch.Reset(failure);
+        executor = {};
+        EXPECT_THROW(kernel(a, b, scales, &bias, &rt), std::bad_alloc);
+        EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
+        EXPECT_EQ(executor.dispatches, 0);
+      }
+    }
+  }
 }
 
 TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {

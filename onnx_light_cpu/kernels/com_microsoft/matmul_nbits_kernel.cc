@@ -95,12 +95,14 @@ MatMulNBitsAttributes ParseAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &nod
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: K and N must be positive.");
   }
   if (!ml_cpu_compute::MatMulNBitsBlockSizeSupported(attributes.bits, attributes.block_size) ||
-      (attributes.accuracy_level != 0 && attributes.accuracy_level != 4) ||
-      attributes.weight_prepacked != 0) {
+      attributes.accuracy_level < 0 || attributes.accuracy_level > 4 ||
+      attributes.weight_prepacked != 0 ||
+      (attributes.bits == 3 &&
+       (attributes.accuracy_level == 2 || attributes.accuracy_level == 3))) {
     throw std::invalid_argument(
         "onnx_light_cpu::MatMulNBits: bits=2, 4, or 8 require a power-of-two block_size in "
         "[16, UINT32_MAX]; bits=3 requires block_size=32; the kernel requires "
-        "accuracy_level 0 or 4, and weight_prepacked=0.");
+        "accuracy_level in [0, 4] (INT3 excludes levels 2 and 3), and weight_prepacked=0.");
   }
   return attributes;
 }
@@ -565,7 +567,7 @@ void MatMulNBitsKernel::PrepareImmutableInputs(
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt,
                                      const Tensor *zero_points) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   if (attributes_.bits == 3) {
     throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
@@ -577,7 +579,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(rt);
   if (attributes_.bits == 3) {
     return ComputeInt3(a, packed_weights, bias, rt);
   }
@@ -828,12 +830,13 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
       static_cast<std::size_t>(attributes_.bits), block_size, tuning_,
       zero_points == nullptr ? nullptr : zero_points->bytes(),
       zero_points == nullptr ||
-          zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8));
+          zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8),
+      attributes_.accuracy_level);
   return y;
 }
 
 void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
-  const RuntimeExecutionScope execution_scope;
+  const RuntimeExecutionScope execution_scope(&rt);
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 6) {

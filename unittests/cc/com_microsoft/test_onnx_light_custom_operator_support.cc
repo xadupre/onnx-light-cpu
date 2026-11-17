@@ -1382,6 +1382,55 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeAndValidatesPackedInputs) {
                std::invalid_argument);
 }
 
+TEST(CustomOperatorSupport, InfersMatMulNBitsShapeForEveryAccuracyLevel) {
+  for (int64_t level : {-1, 0, 1, 2, 3, 4, 5}) {
+    shapes_ns::ShapesContext ctx;
+    const TensorType data_type =
+        level == 2 || level == 3 ? TensorType::kFloat16 : TensorType::kBfloat16;
+    ctx.Set("A", SymTensor(nullptr, data_type, {SymDim(2), SymDim(35)}));
+    ctx.Set("B", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(16)}));
+    ctx.Set("scales", SymTensor(nullptr, data_type, {SymDim(6)}));
+    NodeProto node = MakeMatMulNBitsNode();
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    if (level < 0 || level > 4) {
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node), std::invalid_argument);
+      continue;
+    }
+    onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node);
+    EXPECT_EQ(ctx.Get("Y").Dtype(), data_type);
+    EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsAccuracyLevelTwoRequiresFloat16Input) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("A", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(2), SymDim(35)}));
+  ctx.Set("B", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(16)}));
+  ctx.Set("scales", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(6)}));
+  NodeProto node = MakeMatMulNBitsNode();
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(2);
+    }
+  }
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node), std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsLevelThreeScratchIsUnknown) {
+  auto node = MakeMatMulNBitsNode();
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(3);
+    }
+  }
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMatMulNBits(sym_ns::Device::kCPU, node, {}),
+            shapes_ns::UnknownPeakMemory(onnx_light_cpu::kMicrosoftDomain, "MatMulNBits"));
+}
+
 TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromEncodedWeights) {
   for (const auto [format, bits] :
        {std::pair{rt_ns::QuantizationFormat::kOrtMatmulnbitsInt2, std::int64_t{2}},
@@ -2005,6 +2054,41 @@ TEST(CustomOperatorSupport, MatMulNBitsGradientRejectsUnsupportedForms) {
   encoded.ref_input().resize(2);
   for (const NodeProto &node : {zero_points, wrong_bits, encoded}) {
     EXPECT_ANY_THROW((void)MakeMatMulNBitsGradient(node));
+  }
+  for (int64_t level : {2, 3}) {
+    NodeProto node = MakeMatMulNBitsNode();
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    EXPECT_ANY_THROW((void)MakeMatMulNBitsGradient(node));
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsBiasFusionRejectsLowPrecisionLevels) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  for (int64_t level : {2, 3}) {
+    builder_ns::GraphBuilder builder("low_precision", SchemaLookup());
+    builder.SetOpsetVersion("", 23);
+    builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+    builder.MakeInput("A", TensorType::kFloat16, sym_ns::SymShape({2, 35}));
+    builder.MakeInput("B", TensorType::kUint8, sym_ns::SymShape({3, 2, 16}));
+    builder.MakeInput("scales", TensorType::kFloat16, sym_ns::SymShape({3, 2}));
+    builder.MakeInput("bias", TensorType::kFloat16, sym_ns::SymShape({3}));
+    NodeProto spec = MakeMatMulNBitsNode();
+    for (auto &attribute : *spec.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    builder.MakeNode("MatMulNBits", {"A", "B", "scales"}, {"mm"}, onnx_light_cpu::kMicrosoftDomain,
+                     "", spec.attribute());
+    builder.MakeNode("Add", {"mm", "bias"}, {"Y"});
+    builder.MakeOutput("Y");
+    builder_ns::GraphGraph graph(builder);
+    onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
+    EXPECT_EQ(pattern.Match(graph, builder.Nodes()[1]).pattern, nullptr);
   }
 }
 
