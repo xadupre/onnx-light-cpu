@@ -376,7 +376,7 @@ struct InlineExecutor {
 };
 
 TEST(MatMulNBits, AccuracyThreeHonorsExecutionTuning) {
-  constexpr std::size_t rows = 32, k = 128, n = 4096;
+  constexpr std::size_t rows = 128, k = 256, n = 4096;
   std::vector<float> a(rows * k, 0.5f), scales(n * (k / 32), 0.25f), bias(n, 1.0f);
   std::vector<std::uint8_t> packed(n * k / 2, 0x99);
   std::vector<float> output(rows * n);
@@ -387,8 +387,8 @@ TEST(MatMulNBits, AccuracyThreeHonorsExecutionTuning) {
     executor = {};
     MatMulNBits(a.data(), packed.data(), scales.data(), bias.data(), output.data(), DataType::FLOAT,
                 rows, k, n, 4, 32, tuning, nullptr, true, 3);
-    EXPECT_FLOAT_EQ(output.front(), 17.0f);
-    EXPECT_FLOAT_EQ(output.back(), 17.0f);
+    EXPECT_FLOAT_EQ(output.front(), 33.0f);
+    EXPECT_FLOAT_EQ(output.back(), 33.0f);
   };
 
   run({1, 1, 1});
@@ -422,7 +422,7 @@ struct ConcurrentExecutor {
 };
 
 TEST(MatMulNBits, AccuracyThreeParallelMatchesSerial) {
-  constexpr std::size_t rows = 32, k = 128, n = 4096;
+  constexpr std::size_t rows = 128, k = 256, n = 4096;
   std::vector<float> a(rows * k), scales(n * (k / 32)), bias(n), serial(rows * n),
       parallel(rows * n + 1, -42.0f);
   std::vector<std::uint8_t> packed(n * k / 2);

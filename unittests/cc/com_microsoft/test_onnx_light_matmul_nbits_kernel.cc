@@ -457,7 +457,7 @@ public:
 };
 
 TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
-  constexpr std::int64_t rows = 32, k = 128, n = 4096;
+  constexpr std::int64_t rows = 128, k = 256, n = 4096;
   const auto a = rt_ns::Tensor::FromFloat("A", {rows, k}, std::vector<float>(rows * k, 0.5f));
   const auto b =
       rt_ns::Tensor::FromUint8("B", {n, k / 32, 16}, std::vector<std::uint8_t>(n * k / 2, 0x99));
@@ -500,13 +500,13 @@ TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
     const ml_cpu_compute::ExecutionExecutorScope executor_scope(&view);
     if (entry == 0) {
       const auto y = kernel(a, b, scales, &bias, &rt);
-      EXPECT_FLOAT_EQ(y.AsFloat()[0], 17.0f);
+      EXPECT_FLOAT_EQ(y.AsFloat()[0], 33.0f);
     } else if (entry == 1) {
       const auto y = kernel(a, encoded, &bias, {}, &rt);
-      EXPECT_NEAR(y.AsFloat()[0], 65.0f, 0.1f);
+      EXPECT_NEAR(y.AsFloat()[0], 129.0f, 0.1f);
     } else {
       kernel.Run(rt);
-      EXPECT_NEAR(rt.Get("Y").AsFloat()[0], 65.0f, 0.1f);
+      EXPECT_NEAR(rt.Get("Y").AsFloat()[0], 129.0f, 0.1f);
     }
     for (std::size_t bytes :
          {static_cast<std::size_t>(k * n * 2), static_cast<std::size_t>(rows * k * 2),
@@ -533,7 +533,7 @@ TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
       scratch.Reset();
       executor = {};
       const auto configured = kernel(a, b, scales, &bias, &rt);
-      EXPECT_FLOAT_EQ(configured.AsFloat()[0], 17.0f);
+      EXPECT_FLOAT_EQ(configured.AsFloat()[0], 33.0f);
       EXPECT_EQ(executor.dispatches, 0);
       EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
 
@@ -541,7 +541,7 @@ TEST(MatMulNBitsKernel, AccuracyThreeUsesRuntimeScratchAcrossEntryPoints) {
       {
         const ml_cpu_compute::ExecutionAllocatorScope explicit_heap(nullptr);
         const auto y = kernel(a, b, scales, &bias, &rt);
-        EXPECT_FLOAT_EQ(y.AsFloat()[0], 17.0f);
+        EXPECT_FLOAT_EQ(y.AsFloat()[0], 33.0f);
       }
       EXPECT_TRUE(scratch.requests.empty());
       EXPECT_EQ(scratch.TotalAllocatedSize(), baseline);
