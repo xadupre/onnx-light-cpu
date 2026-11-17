@@ -440,7 +440,8 @@ LightOpSchema MakeMatMulNBitsSchema() {
       "zero_points may be packed UINT8 or match A's floating type; g_idx must not be supplied. "
       "Packed B has shape (N, ceil(K / block_size), block_size * bits / 8), scales has shape "
       "(N, ceil(K / block_size)) or its flattened "
-      "equivalent, and bias has shape (N).",
+      "equivalent, and bias has shape (N). Shape inference also accepts weight_prepacked=1 "
+      "with this tensor geometry and separate scales, but CPU execution rejects it.",
       {{"A", "FLOAT, FLOAT16, or BFLOAT16 tensor of rank at least one ending in K.", "T1"},
        {"B",
         "UINT8 packed weights with shape (N, ceil(K / block_size), block_size * bits / 8), or an "
@@ -482,7 +483,8 @@ LightOpSchema MakeMatMulNBitsSchema() {
                       "bfloat16 with float32 accumulation, and 4 uses integer accumulation "
                       "when available.",
                       AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"weight_prepacked", "Prepacked-weight flag; only 0 is supported.",
+       AttributeParam{"weight_prepacked",
+                      "0 for CPU execution; 1 is supported for tensor shape inference only.",
                       AttributeType::INT, false, int64_t{0}}},
       false, true);
 }

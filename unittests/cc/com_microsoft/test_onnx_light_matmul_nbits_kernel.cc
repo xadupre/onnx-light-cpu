@@ -282,6 +282,9 @@ TEST(MatMulNBitsKernel, InfersEncodedInt3ShapeAndRejectsAttributeMismatch) {
   wrong = MakeNode(35, 2, 4);
   wrong.ref_input().resize(2);
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
+  wrong = node;
+  ONNX_LIGHT_NAMESPACE::AddAttribute(wrong, "weight_prepacked", std::int64_t{1});
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
   for (std::int64_t level : {2, 3}) {
     auto unsupported = node;
     for (auto &attribute : *unsupported.mutable_attribute()) {

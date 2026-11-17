@@ -380,6 +380,12 @@ This supports ternary INT2 groups of 128 with zero point 1 without changing
 their quantization geometry. Activations, scales, optional bias, and output have one matching
 ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
 
+Shape inference also accepts ``weight_prepacked=1`` with tensor ``B`` and
+separate scales using the shapes and types above. This permits graph analysis
+and rewriting without interpreting the provider-specific packed weight contents.
+The flag must be 0 or 1; prepacked weights cannot use the encoded form below.
+CPU execution still requires ``weight_prepacked=0`` and rejects prepacked weights.
+
 Input ``B`` may instead be an ``EncodedValueProto`` using onnx-light's
 ``ORT_MATMULNBITS_INT2``, ``ORT_MATMULNBITS_INT4``, or
 ``ORT_MATMULNBITS_INT8`` layout. In that form, omit the ``scales`` input: the

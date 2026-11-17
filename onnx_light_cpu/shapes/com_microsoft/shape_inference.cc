@@ -977,10 +977,15 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
   if (k <= 0 || n <= 0 || !ml_cpu_compute::MatMulNBitsBlockSizeSupported(bits, block_size) ||
-      accuracy_level < 0 || accuracy_level > 4 || weight_prepacked != 0 ||
+      accuracy_level < 0 || accuracy_level > 4 ||
+      (weight_prepacked != 0 && weight_prepacked != 1) ||
       (bits == 3 && (accuracy_level == 2 || accuracy_level == 3))) {
     throw std::invalid_argument("ComputeShapeMatMulNBits: unsupported bits, block_size, "
                                 "accuracy_level or weight_prepacked.");
+  }
+  if (weight_prepacked == 1 && encoded_weights) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: weight_prepacked=1 requires UINT8 tensor B and separate scales.");
   }
   const SymTensor &a = ctx.Get(node.input(0));
   if (accuracy_level == 2 && a.Dtype() != sym_ns::TensorType::kFloat16) {

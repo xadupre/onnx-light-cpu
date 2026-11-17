@@ -5,6 +5,7 @@
 #include "ml_cpu_compute/com_microsoft/moe.h"
 #include "ml_cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/qmoe_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -1403,6 +1404,81 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeForEveryAccuracyLevel) {
     onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node);
     EXPECT_EQ(ctx.Get("Y").Dtype(), data_type);
     EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsPrepackedGraphConstructionAfterGlobalCPURegistration) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  onnx_light_cpu::RegisterAllKernelsGlobal();
+  for (const int64_t k : {32, 5120}) {
+    const int64_t n = k == 32 ? 16 : 10240;
+    for (const bool symbolic : {false, true}) {
+      SCOPED_TRACE(k);
+      SCOPED_TRACE(symbolic);
+      auto node = MakeMatMulNBitsNode();
+      for (auto &attribute : node.ref_attribute()) {
+        if (attribute.name() == "K") {
+          attribute.set_i(k);
+        } else if (attribute.name() == "N") {
+          attribute.set_i(n);
+        }
+      }
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, "weight_prepacked", int64_t{1});
+      const auto sequence = symbolic ? SymDim("sequence") : SymDim(1);
+      const sym_ns::SymShape a_shape{sequence, SymDim(k)};
+      const sym_ns::SymShape b_shape{SymDim(n), SymDim(k / 32), SymDim(16)};
+      const sym_ns::SymShape scales_shape{SymDim(n), SymDim(k / 32)};
+      builder_ns::GraphBuilder builder("prepacked_matmul_nbits", SchemaLookup());
+      builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+      builder.MakeInput("A", TensorType::kFloat16, a_shape);
+      builder.MakeInput("B", TensorType::kUint8, b_shape);
+      builder.MakeInput("scales", TensorType::kFloat16, scales_shape);
+      builder.MakeNode("MatMulNBits", {"A", "B", "scales"}, {"Y"}, onnx_light_cpu::kMicrosoftDomain,
+                       "prepacked_matmul_nbits", node.attribute());
+      EXPECT_EQ(builder.GetShape("Y").Shape(), (sym_ns::SymShape{sequence, SymDim(n)}));
+      EXPECT_EQ(builder.GetShape("Y").Dtype(), TensorType::kFloat16);
+      const rt_ns::KernelContext context{rt_ns::OpsetId(onnx_light_cpu::kMicrosoftDomain, 1)};
+      EXPECT_THROW(onnx_light_cpu::MatMulNBitsKernel(node, context), std::invalid_argument);
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsPrepackedShapeValidation) {
+  for (const std::string invalid :
+       {"", "flag_negative", "flag_unknown", "bits", "block_size", "accuracy_level", "a_k",
+        "b_type", "b_rank", "b_n", "b_blocks", "b_bytes", "scales_type", "scales_shape"}) {
+    SCOPED_TRACE(invalid);
+    auto node = MakeMatMulNBitsNode();
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "weight_prepacked",
+                                       int64_t{invalid == "flag_negative"  ? -1
+                                               : invalid == "flag_unknown" ? 2
+                                                                           : 1});
+    for (auto &attribute : node.ref_attribute()) {
+      if (attribute.name() == invalid) {
+        attribute.set_i(invalid == "bits" ? 5 : invalid == "block_size" ? 24 : 5);
+      }
+    }
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("A",
+            SymTensor(nullptr, TensorType::kFloat16,
+                      {SymDim("batch"), SymDim("sequence"), SymDim(invalid == "a_k" ? 36 : 35)}));
+    ctx.Set("B", SymTensor(nullptr, invalid == "b_type" ? TensorType::kInt8 : TensorType::kUint8,
+                           invalid == "b_rank"
+                               ? sym_ns::SymShape{SymDim(96)}
+                               : sym_ns::SymShape{SymDim(invalid == "b_n" ? 4 : 3),
+                                                  SymDim(invalid == "b_blocks" ? 1 : 2),
+                                                  SymDim(invalid == "b_bytes" ? 15 : 16)}));
+    ctx.Set("scales",
+            SymTensor(nullptr, invalid == "scales_type" ? TensorType::kFloat : TensorType::kFloat16,
+                      {SymDim(invalid == "scales_shape" ? 5 : 6)}));
+    if (invalid.empty()) {
+      EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node));
+      EXPECT_EQ(ctx.Get("Y").Shape(),
+                (sym_ns::SymShape{SymDim("batch"), SymDim("sequence"), SymDim(3)}));
+      EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
+    } else {
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node), std::invalid_argument);
+    }
   }
 }
 
