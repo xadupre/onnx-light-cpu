@@ -279,6 +279,18 @@ TEST(MatMulNBitsKernel, InfersEncodedInt3ShapeAndRejectsAttributeMismatch) {
   wrong = MakeNode(35, 2, 4);
   wrong.ref_input().resize(2);
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
+  for (std::int64_t level : {2, 3}) {
+    auto unsupported = node;
+    for (auto &attribute : *unsupported.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, unsupported), std::invalid_argument);
+    EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{
+                     unsupported, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
+                 std::invalid_argument);
+  }
 }
 
 TEST(MatMulNBitsKernel, RunsPreparedEncodedInt3WithoutTensorScales) {
@@ -313,6 +325,106 @@ TEST(MatMulNBitsKernel, DecodesInt4AndAppliesPerBlockScalesAndBias) {
   ASSERT_EQ(y.shape, (rt_ns::Shape{1, 2}));
   EXPECT_FLOAT_EQ(y.AsFloat()[0], 1.5f);
   EXPECT_FLOAT_EQ(y.AsFloat()[1], 13.0f);
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelTwoUsesFloat16ProductsAndAccumulator) {
+  const rt_ns::Tensor a =
+      MakeTensor(rt_ns::DataType::FLOAT16, {1, 32}, std::vector<float>(32, 0.3f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0xbb));
+  const rt_ns::Tensor scales = MakeTensor(rt_ns::DataType::FLOAT16, {1}, {0.11f});
+  auto node = MakeNode(32, 1);
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(2);
+    }
+  }
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const rt_ns::Tensor y = kernel(a, b, scales);
+
+  const float activation =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.3f));
+  const float weight =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(
+          3.0f * ml_cpu_compute::detail::Float16BitsToFloat(
+                     ml_cpu_compute::detail::FloatToFloat16Bits(0.11f))));
+  float expected = 0.0f;
+  for (int i = 0; i < 32; ++i) {
+    expected = ml_cpu_compute::detail::Float16BitsToFloat(
+        ml_cpu_compute::detail::FloatToFloat16Bits(std::fma(activation, weight, expected)));
+  }
+  EXPECT_FLOAT_EQ(ReadValue(y, 0), expected);
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelThreeUsesBfloat16ProductsForFloat16Inputs) {
+  const rt_ns::Tensor a =
+      MakeTensor(rt_ns::DataType::FLOAT16, {1, 32}, std::vector<float>(32, 0.3f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0xbb));
+  const rt_ns::Tensor scales = MakeTensor(rt_ns::DataType::FLOAT16, {1}, {0.11f});
+  auto node = MakeNode(32, 1);
+  for (auto &attribute : *node.mutable_attribute()) {
+    if (attribute.name() == "accuracy_level") {
+      attribute.set_i(3);
+    }
+  }
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const rt_ns::Tensor y = kernel(a, b, scales);
+
+  const float fp16_activation =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.3f));
+  const float activation = ml_cpu_compute::detail::Bfloat16BitsToFloat(
+      ml_cpu_compute::detail::FloatToBFloat16Bits(fp16_activation));
+  const float scale =
+      ml_cpu_compute::detail::Float16BitsToFloat(ml_cpu_compute::detail::FloatToFloat16Bits(0.11f));
+  const float weight = ml_cpu_compute::detail::Bfloat16BitsToFloat(
+      ml_cpu_compute::detail::FloatToBFloat16Bits(3.0f * scale));
+  float expected = 0.0f;
+  for (int i = 0; i < 32; ++i) {
+    expected = std::fma(activation, weight, expected);
+  }
+  expected = ml_cpu_compute::detail::Float16BitsToFloat(
+      ml_cpu_compute::detail::FloatToFloat16Bits(expected));
+  EXPECT_FLOAT_EQ(ReadValue(y, 0), expected);
+}
+
+TEST(MatMulNBitsKernel, RejectsAccuracyLevelTypeMismatch) {
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f));
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0x99));
+  const rt_ns::Tensor scales = rt_ns::Tensor::FromFloat("", {1}, {1.0f});
+  for (const std::int64_t level : {2}) {
+    auto node = MakeNode(32, 1);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    EXPECT_THROW(kernel(a, b, scales), std::invalid_argument) << "level " << level;
+  }
+}
+
+TEST(MatMulNBitsKernel, AccuracyLevelBiasKeepsItsOwnPrecision) {
+  const auto b = rt_ns::Tensor::FromUint8("", {1, 1, 16}, std::vector<std::uint8_t>(16, 0x99));
+  for (std::int64_t level : {2, 3}) {
+    const auto type = level == 2 ? rt_ns::DataType::FLOAT16 : rt_ns::DataType::FLOAT;
+    const auto a = MakeTensor(type, {1, 32}, std::vector<float>(32, level == 2 ? 0.0234375f : 0));
+    const auto scales = MakeTensor(type, {1}, {1});
+    const auto bias = MakeTensor(type, {1}, {level == 2 ? 1024.0f : 1.00390625f});
+    auto node = MakeNode(32, 1);
+    for (auto &attribute : *node.mutable_attribute()) {
+      if (attribute.name() == "accuracy_level") {
+        attribute.set_i(level);
+      }
+    }
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    EXPECT_FLOAT_EQ(ReadValue(kernel(a, b, scales, &bias), 0), level == 2 ? 1025.0f : 1.00390625f);
+  }
 }
 
 TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {

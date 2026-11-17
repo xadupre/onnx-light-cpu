@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Improvements
 
 - Bumped the project version to 0.2.9 ([#1158](https://github.com/xadupre/onnx-light-cpu/issues/1158)).
+- `MatMulNBits` implements FLOAT16 accumulation for `accuracy_level=2` and BFLOAT16 operands with FLOAT32 accumulation for `accuracy_level=3`.
 
 ## [0.2.8] – Unreleased
 

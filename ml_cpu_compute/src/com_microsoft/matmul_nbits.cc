@@ -8,14 +8,18 @@
 #include "ml_cpu_compute/com_microsoft/matmul_nbits_panel.h"
 #include "ml_cpu_compute/execution.h"
 #include "ml_cpu_compute/math/half_conversion.h"
+#include "ml_cpu_compute/math/math.h"
 #include "ml_cpu_compute/simd_level.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
+#include <vector>
 
 namespace ml_cpu_compute {
 
@@ -182,7 +186,13 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
                       const void *bias_raw, void *y_raw, std::size_t rows, std::size_t k,
                       std::size_t n, std::size_t bits, std::size_t block_size,
                       const MatMulNBitsExecutionTuning &tuning, const void *zero_points,
-                      bool packed_zero_points) {
+                      bool packed_zero_points, std::int64_t accuracy_level) {
+  if (accuracy_level < 0 || accuracy_level > 4) {
+    throw std::invalid_argument("MatMulNBits accuracy_level must be in [0, 4].");
+  }
+  if (accuracy_level == 2 && !std::is_same_v<Codec, Float16Codec>) {
+    throw std::invalid_argument("MatMulNBits accuracy_level 2 requires FLOAT16.");
+  }
   if (!MatMulNBitsBlockSizeSupported(bits, block_size)) {
     throw std::invalid_argument(
         "ml_cpu_compute::MatMulNBits: bits must be 2, 4, or 8 and block_size must be a power "
@@ -221,6 +231,117 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),
       tuning.max_participants,
   };
+  if (accuracy_level == 3) {
+    const std::size_t dense_weight_count =
+        CheckedMultiply(k, n, "MatMulNBits", "BFLOAT16 weight count");
+    const std::size_t dense_activation_count =
+        CheckedMultiply(rows, k, "MatMulNBits", "BFLOAT16 activation count");
+    CheckedByteSize(dense_weight_count, sizeof(std::uint16_t), "MatMulNBits",
+                    "BFLOAT16 weight bytes");
+    CheckedByteSize(dense_activation_count, sizeof(std::uint16_t), "MatMulNBits",
+                    "BFLOAT16 activation bytes");
+    std::vector<std::uint16_t> dense_weights(dense_weight_count);
+    std::vector<std::uint16_t> dense_activations(dense_activation_count);
+    for (std::size_t i = 0; i < dense_activation_count; ++i) {
+      dense_activations[i] = detail::FloatToBFloat16Bits(Codec::Load(a[i]));
+    }
+    const std::size_t zero_stride = k_blocks / values_per_byte + (k_blocks % values_per_byte != 0);
+    for (std::size_t column = 0; column < n; ++column) {
+      const std::uint8_t *b_column = b + column * packed_column_stride;
+      const Storage *column_scales = scales + column * k_blocks;
+      for (std::size_t block = 0; block < k_blocks; ++block) {
+        const std::size_t block_begin = block * block_size;
+        const std::size_t block_end = std::min(block_begin + block_size, k);
+        const std::uint8_t *packed = b_column + block * blob_size;
+        const float scale = Codec::Load(column_scales[block]);
+        float zero = zero_point;
+        if (zero_points != nullptr) {
+          if (packed_zero_points) {
+            const auto byte = static_cast<const std::uint8_t *>(
+                zero_points)[column * zero_stride + block / values_per_byte];
+            zero = (byte >> ((block % values_per_byte) * bits)) & mask;
+          } else {
+            zero =
+                Codec::Load(static_cast<const Storage *>(zero_points)[column * k_blocks + block]);
+          }
+        }
+        for (std::size_t offset = 0; block_begin + offset < block_end; ++offset) {
+          const std::uint8_t byte = packed[offset / values_per_byte];
+          const std::size_t shift = (offset % values_per_byte) * bits;
+          const std::uint8_t quantized = static_cast<std::uint8_t>((byte >> shift) & mask);
+          const float weight = (static_cast<float>(quantized) - zero) * scale;
+          dense_weights[(block_begin + offset) * n + column] = detail::FloatToBFloat16Bits(weight);
+        }
+      }
+    }
+
+    std::vector<float> float_bias;
+    GemmEpilogue<float> epilogue;
+    if (bias != nullptr) {
+      CheckedByteSize(n, sizeof(float), "MatMulNBits", "BFLOAT16 bias bytes");
+      float_bias.resize(n);
+      for (std::size_t column = 0; column < n; ++column) {
+        float_bias[column] = Codec::Load(bias[column]);
+      }
+      epilogue.bias = float_bias.data();
+      epilogue.bias_layout = GemmBroadcast::kRow;
+      epilogue.beta = 1.0f;
+    }
+    CheckedByteSize(output_size, sizeof(float), "MatMulNBits", "FLOAT32 output bytes");
+    std::vector<float> float_output(output_size);
+    GemmHalfWithEpilogue(true, false, false, rows, n, k, 1.0f, dense_activations.data(),
+                         dense_weights.data(), epilogue, float_output.data());
+    for (std::size_t i = 0; i < output_size; ++i) {
+      y[i] = Codec::Store(float_output[i]);
+    }
+    return;
+  }
+  if (accuracy_level == 2) {
+    ExecuteRanges(
+        static_cast<std::int64_t>(output_size), schedule,
+        [&](std::int64_t begin, std::int64_t end) {
+          for (std::int64_t output_index = begin; output_index < end; ++output_index) {
+            const std::size_t index = static_cast<std::size_t>(output_index);
+            const std::size_t row = index / n;
+            const std::size_t column = index - row * n;
+            const Storage *a_row = a + row * k;
+            const std::uint8_t *b_column = b + column * packed_column_stride;
+            const Storage *column_scales = scales + column * k_blocks;
+            float sum = 0.0f;
+            for (std::size_t block = 0; block < k_blocks; ++block) {
+              const std::size_t block_begin = block * block_size;
+              const std::size_t block_end = std::min(block_begin + block_size, k);
+              const std::uint8_t *packed = b_column + block * blob_size;
+              const float scale = Codec::Load(column_scales[block]);
+              float zero = zero_point;
+              if (zero_points != nullptr) {
+                if (packed_zero_points) {
+                  const std::size_t zero_stride =
+                      k_blocks / values_per_byte + (k_blocks % values_per_byte != 0);
+                  const auto byte = static_cast<const std::uint8_t *>(
+                      zero_points)[column * zero_stride + block / values_per_byte];
+                  zero = (byte >> ((block % values_per_byte) * bits)) & mask;
+                } else {
+                  zero = Codec::Load(
+                      static_cast<const Storage *>(zero_points)[column * k_blocks + block]);
+                }
+              }
+              for (std::size_t offset = 0; block_begin + offset < block_end; ++offset) {
+                const std::uint8_t byte = packed[offset / values_per_byte];
+                const std::size_t shift = (offset % values_per_byte) * bits;
+                const std::uint8_t quantized = static_cast<std::uint8_t>((byte >> shift) & mask);
+                float weight = (static_cast<float>(quantized) - zero) * scale;
+                weight = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(weight));
+                const float activation = Codec::Load(a_row[block_begin + offset]);
+                sum = std::fma(activation, weight, sum);
+                sum = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(sum));
+              }
+            }
+            y[index] = Codec::Store(sum + (bias == nullptr ? 0.0f : Codec::Load(bias[column])));
+          }
+        });
+    return;
+  }
   switch (bits) {
   case 2:
     MatMulNBitsPanels<Codec, 2>(a, b, scales, bias, y, rows, k, n, k_blocks, block_size,
@@ -380,18 +501,26 @@ void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const
                  void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
                  std::size_t bits, std::size_t block_size, const MatMulNBitsExecutionTuning &tuning,
                  const void *zero_points, bool packed_zero_points) {
+  MatMulNBits(a, b, scales, bias, y, data_type, rows, k, n, bits, block_size, tuning, zero_points,
+              packed_zero_points, 0);
+}
+
+void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const void *bias,
+                 void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
+                 std::size_t bits, std::size_t block_size, const MatMulNBitsExecutionTuning &tuning,
+                 const void *zero_points, bool packed_zero_points, std::int64_t accuracy_level) {
   switch (data_type) {
   case DataType::FLOAT:
     MatMulNBitsTyped<FloatCodec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
-                                 zero_points, packed_zero_points);
+                                 zero_points, packed_zero_points, accuracy_level);
     return;
   case DataType::FLOAT16:
     MatMulNBitsTyped<Float16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
-                                   zero_points, packed_zero_points);
+                                   zero_points, packed_zero_points, accuracy_level);
     return;
   case DataType::BFLOAT16:
     MatMulNBitsTyped<BFloat16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
-                                    zero_points, packed_zero_points);
+                                    zero_points, packed_zero_points, accuracy_level);
     return;
   default:
     throw std::invalid_argument(

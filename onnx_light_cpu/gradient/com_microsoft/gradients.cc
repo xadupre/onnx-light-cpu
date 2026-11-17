@@ -190,7 +190,7 @@ bool IsSupportedMatMulNBits(const NodeProto &node, int64_t &k, int64_t &n, int64
   bits = GetIntAttributeOrDefault(node, "bits", 4);
   const int64_t accuracy_level = GetIntAttributeOrDefault(node, "accuracy_level", 0);
   return k > 0 && n > 0 && (bits == 2 || bits == 4 || bits == 8) && block_size->i() == 32 &&
-         (accuracy_level == 0 || accuracy_level == 4) &&
+         (accuracy_level == 0 || accuracy_level == 1 || accuracy_level == 4) &&
          GetIntAttributeOrDefault(node, "weight_prepacked", 0) == 0;
 }
 

@@ -23,10 +23,16 @@ zero point is 2, 8, or 128 respectively; explicit packed UINT8 or matching
 floating-point zero points are also supported. Scales and zero points are
 indexed by quantization group, independently of the 32-element compute panels.
 It consumes the packed weights directly without allocating or expanding a
-floating-point weight matrix. ``accuracy_level`` 0 and 4 are accepted.
+floating-point weight matrix for levels 0–2 and 4. Level 3 currently expands
+the dequantized weights to BFLOAT16 before GEMM. ``accuracy_level`` 0 and 1 use
+FLOAT32 accumulation, level 2 requires FLOAT16 input and accumulation, level 3
+rounds operands to BFLOAT16 and uses FLOAT32 accumulation, and level 4 selects
+integer accumulation when available, falling back to FLOAT32 otherwise. Level 3
+uses temporary heap allocations and has an unknown peak-memory estimate.
 ``g_idx``, prepacked provider-specific layouts, invalid block sizes, mixed
 floating-point types, and ``DOUBLE`` are rejected. The separate encoded INT3
-layout requires block size 32. INT4/INT8 optimized preparation is used only
+layout requires block size 32 and does not support accuracy levels 2 or 3.
+Gradient and bias fusion are not enabled for levels 2 or 3. INT4/INT8 optimized preparation is used only
 for block size 32 with implicit zero points; all other supported groups use
 the bounded-panel path, including K tails and optional bias.
 
