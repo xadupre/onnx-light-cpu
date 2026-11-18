@@ -105,6 +105,37 @@ def test_arm_sve_emulation_allows_time_for_all_vector_lengths():
         assert f"qemu-aarch64 -cpu max,sve=on,sve-max-vq={vector_length}" in sve_job
 
 
+def test_arm_sve_emulation_bounds_and_reports_each_binary():
+    sve_job = _CORE_WORKFLOW.split("  arm_gemm_sve:\n", 1)[1].split("  onnx_light_release:\n", 1)[
+        0
+    ]
+    commands = [
+        shlex.split(line.strip()) for line in sve_job.splitlines() if "qemu-aarch64 -cpu" in line
+    ]
+    expected = {
+        (vector_length, binary)
+        for vector_length in (4, 1, 3)
+        for binary in ("test_gemm_kernel", "test_gemm_plan")
+    } | {(4, "test_integer_gemm_vnni")}
+    assert len(commands) == len(expected)
+    for command in commands:
+        assert command[:7] == [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "--kill-after=30s",
+            "10m",
+            "qemu-aarch64",
+            "-cpu",
+        ]
+        assert command[8:10] == ["-L", "/usr/aarch64-linux-gnu"]
+        assert command[11:] == ["--gtest_print_time=1"]
+    assert {
+        (int(command[7].rsplit("=", 1)[1]), command[10].removeprefix("build-sve/"))
+        for command in commands
+    } == expected
+
+
 def test_standalone_source_build_uses_onnx_light_main():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
     assert (
@@ -118,6 +149,21 @@ def test_standalone_source_build_uses_clang():
     environment = standalone_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
     assert "      CC: clang\n" in environment
     assert "      CXX: clang++\n" in environment
+
+
+def test_linux_integration_and_legacy_isa_use_supported_runtime():
+    source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
+        "  report_pr_benchmark:", 1
+    )[0]
+    assert source_job.count("os: ubuntu-24.04") == 2
+    assert "os: ubuntu-latest" not in source_job
+    release_job = _CORE_WORKFLOW.split("  onnx_light_release:\n", 1)[1]
+    assert "    runs-on: ubuntu-24.04\n" in release_job
+    fallback_job = _STANDALONE_WORKFLOW.split("  fallback_isa:\n", 1)[1].split(
+        "  standalone_inference:\n", 1
+    )[0]
+    assert "    runs-on: ubuntu-24.04\n" in fallback_job
+    assert "for cpu in Opteron_G1 SandyBridge; do" in fallback_job
 
 
 def test_onnx_light_build_workflows_install_cmake_four_or_newer():
@@ -336,7 +382,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
     )[0]
-    for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+    for os_name in ("ubuntu-24.04", "windows-latest", "macos-latest"):
         assert f"os: {os_name}" in source_job
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1

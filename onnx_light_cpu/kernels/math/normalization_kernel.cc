@@ -709,7 +709,6 @@ template <DataType Type>
 void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dimension,
                  std::size_t inner, std::int64_t p) {
   using Traits = norm::TypeTraits<Type>;
-  using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(y);
   const std::size_t vectors = outer * inner;
@@ -745,7 +744,7 @@ void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dime
           if (p == 2) {
             norm_value = std::sqrt(norm_value);
           }
-          const Acc inverse = norm_value == 0.0 ? Acc{} : static_cast<Acc>(1.0 / norm_value);
+          const double inverse = norm_value == 0.0 ? 0.0 : 1.0 / norm_value;
           for (std::size_t d = 0; d < dimension; ++d) {
             const std::size_t index = first + d * inner;
             Traits::Store(output, index, Traits::Load(input, index) * inverse);

@@ -50,7 +50,8 @@ jobs:
 
   fallback_isa:
     name: fallback ISA (${{ matrix.simd }})
-    runs-on: ubuntu-latest
+    # Keep the host runtime compatible with the legacy CPUs emulated below.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
