@@ -185,7 +185,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Upstream OptionalString headers do not yet compile with GCC 15
+          # on Ubuntu 26.04. Keep both ABI builds on the supported toolchain.
+          - os: ubuntu-24.04
             python-abi: stable
             stable-abi: "ON"
           - os: windows-latest
@@ -194,7 +196,7 @@ jobs:
           - os: macos-latest
             python-abi: stable
             stable-abi: "ON"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-abi: native
             stable-abi: "OFF"
     steps:
@@ -461,8 +463,9 @@ jobs:
           /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_print_time=1
 
   onnx_light_release:
-    name: onnx-light release (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: onnx-light release (ubuntu-24.04)
+    # Match the source integration toolchain for upstream header compatibility.
+    runs-on: ubuntu-24.04
     # Validates the latest published onnx-light release (setup_onnx_light_source
     # only covers onnx-light main). The helper rejects a latest release older
     # than the minimum declared in pyproject.toml.

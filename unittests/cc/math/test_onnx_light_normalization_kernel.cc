@@ -1053,6 +1053,36 @@ TEST(OnnxLightNormalizationKernel, LpNormalizationHandlesStridedAxesAndZeroNorm)
   EXPECT_THROW(kernel(x, 0, 3), std::invalid_argument);
 }
 
+TEST(OnnxLightNormalizationKernel, LpNormalizationSubnormalInputsMatchBuiltin) {
+  const float tiny = std::numeric_limits<float>::denorm_min();
+  for (const std::int64_t axis : {-1, 0, 1}) {
+    for (const std::int64_t p : {1, 2}) {
+      SCOPED_TRACE(::testing::Message() << "axis=" << axis << " p=" << p);
+      ONNX_LIGHT_NAMESPACE::NodeProto node;
+      node.set_op_type("LpNormalization");
+      node.add_input("X");
+      node.add_output("Y");
+      AddIntAttribute(node, "axis", axis);
+      AddIntAttribute(node, "p", p);
+      rt_ns::RuntimeContext actual_rt(MakeContext(22));
+      rt_ns::RuntimeContext reference_rt(MakeContext(22));
+      const auto x = rt_ns::Tensor::FromFloat("", {2, 2}, {tiny, -tiny, -tiny, tiny});
+      actual_rt.Set("X", x);
+      reference_rt.Set("X", x);
+      onnx_light_cpu::LpNormalizationKernel kernel(MakeContext(22));
+      ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::LpNormalization reference(MakeContext(22));
+      kernel.set_node(node);
+      reference.set_node(node);
+      kernel.Run(actual_rt);
+      reference.Run(reference_rt);
+      for (std::size_t i = 0; i < 4; ++i) {
+        EXPECT_TRUE(std::isfinite(Value(actual_rt.Get("Y"), i)));
+        EXPECT_NEAR(Value(actual_rt.Get("Y"), i), Value(reference_rt.Get("Y"), i), 1.0e-7);
+      }
+    }
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, LpNormalizationFloat32ContiguousPreservesDoubleReduction) {
   const onnx_light_cpu::LpNormalizationKernel kernel(MakeContext(22));
   for (std::int64_t width : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 127, 128, 129}) {

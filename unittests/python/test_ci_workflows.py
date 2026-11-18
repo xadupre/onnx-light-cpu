@@ -151,6 +151,21 @@ def test_standalone_source_build_uses_clang():
     assert "      CXX: clang++\n" in environment
 
 
+def test_linux_integration_and_legacy_isa_use_supported_runtime():
+    source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
+        "  report_pr_benchmark:", 1
+    )[0]
+    assert source_job.count("os: ubuntu-24.04") == 2
+    assert "os: ubuntu-latest" not in source_job
+    release_job = _CORE_WORKFLOW.split("  onnx_light_release:\n", 1)[1]
+    assert "    runs-on: ubuntu-24.04\n" in release_job
+    fallback_job = _STANDALONE_WORKFLOW.split("  fallback_isa:\n", 1)[1].split(
+        "  standalone_inference:\n", 1
+    )[0]
+    assert "    runs-on: ubuntu-24.04\n" in fallback_job
+    assert "for cpu in Opteron_G1 SandyBridge; do" in fallback_job
+
+
 def test_onnx_light_build_workflows_install_cmake_four_or_newer():
     for name, build_command in (
         ("ci_core.yml", "git clone --depth 1 --branch main"),
@@ -367,7 +382,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
     )[0]
-    for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+    for os_name in ("ubuntu-24.04", "windows-latest", "macos-latest"):
         assert f"os: {os_name}" in source_job
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
