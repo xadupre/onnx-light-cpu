@@ -443,20 +443,22 @@ jobs:
         run: cmake --build build-sve --parallel --target test_gemm_kernel test_gemm_plan test_integer_gemm_vnni
 
       - name: Run GEMM tests with 512-bit SVE
+        # Keep case names/timings visible: brief output hid a 67-minute plan
+        # run. Bound each binary and report CPU time/RSS to diagnose stalls.
         run: |
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_integer_gemm_vnni --gtest_brief=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_print_time=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_print_time=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_integer_gemm_vnni --gtest_print_time=1
 
       - name: Run 128-bit SVE fallback
         run: |
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_print_time=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_print_time=1
 
       - name: Run non-power-of-two 384-bit SVE
         run: |
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
-          qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_print_time=1
+          /usr/bin/time -v timeout --kill-after=30s 10m qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_print_time=1
 
   onnx_light_release:
     name: onnx-light release (ubuntu-latest)

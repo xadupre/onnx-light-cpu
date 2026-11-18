@@ -105,6 +105,37 @@ def test_arm_sve_emulation_allows_time_for_all_vector_lengths():
         assert f"qemu-aarch64 -cpu max,sve=on,sve-max-vq={vector_length}" in sve_job
 
 
+def test_arm_sve_emulation_bounds_and_reports_each_binary():
+    sve_job = _CORE_WORKFLOW.split("  arm_gemm_sve:\n", 1)[1].split("  onnx_light_release:\n", 1)[
+        0
+    ]
+    commands = [
+        shlex.split(line.strip()) for line in sve_job.splitlines() if "qemu-aarch64 -cpu" in line
+    ]
+    expected = {
+        (vector_length, binary)
+        for vector_length in (4, 1, 3)
+        for binary in ("test_gemm_kernel", "test_gemm_plan")
+    } | {(4, "test_integer_gemm_vnni")}
+    assert len(commands) == len(expected)
+    for command in commands:
+        assert command[:7] == [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "--kill-after=30s",
+            "10m",
+            "qemu-aarch64",
+            "-cpu",
+        ]
+        assert command[8:10] == ["-L", "/usr/aarch64-linux-gnu"]
+        assert command[11:] == ["--gtest_print_time=1"]
+    assert {
+        (int(command[7].rsplit("=", 1)[1]), command[10].removeprefix("build-sve/"))
+        for command in commands
+    } == expected
+
+
 def test_standalone_source_build_uses_onnx_light_main():
     standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
     assert (
