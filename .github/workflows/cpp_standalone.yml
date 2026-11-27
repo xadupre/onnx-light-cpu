@@ -80,6 +80,8 @@ jobs:
             test_simd_level test_abs_kernel test_not_kernel \
             test_exp_log_kernel test_binary_arithmetic_kernel \
             test_binary_integer_kernel test_gemm_kernel test_compute_arithmetic_profile
+          ctest --test-dir build-fallback -R '^compute_avx_instructions$' \
+            --output-on-failure --no-tests=error
 
       - name: Exercise SSE2 and AVX fallbacks without AVX2 exposure
         run: |
