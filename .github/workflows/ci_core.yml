@@ -100,6 +100,10 @@ jobs:
       - name: Reconfigure CMake before CTest
         run: cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF
 
+      - name: Build reconfigured compute library for instruction checks
+        if: runner.os == 'Linux'
+        run: cmake --build build --config Release --target ml_cpu_compute
+
       - name: Run C++ unit tests
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
