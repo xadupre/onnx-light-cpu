@@ -46,3 +46,28 @@ require_instruction(AVX512BW AbsInt8_AVX512 vpabsb zmm)
 require_instruction(AVX512BF16 GemmMicroTile_AVX512BF16 vdpbf16ps zmm)
 require_instruction(AVX512FP16 BinaryAddFloat16_AVX512FP16 vaddph zmm)
 require_instruction(AVX512VNNI MatMulNBitsInt8TileAvx512Vnni vpdpbusd zmm)
+
+function(require_fma_destinations isa kernel register minimum)
+  if(NOT CHECK_REGISTER_ALLOCATION OR NOT "${isa}" IN_LIST ISAS)
+    return()
+  endif()
+  string(REGEX MATCH
+      "\n[0-9a-f]+ <void ml_cpu_compute::${kernel}\\([^\n]*\\)( \\[clone [^\n]+\\])?>:[ \t]*\n([ \t]+[0-9a-f]+:[^\n]*\n)*"
+      body "${assembly}")
+  if(NOT body)
+    message(FATAL_ERROR "${isa}: ${kernel} not found in ${LIBRARY}")
+  endif()
+  string(REGEX MATCHALL ":[ \t]+vfmadd[0-9]+ps[ \t]+${register}[0-9]+," destinations "${body}")
+  list(TRANSFORM destinations REPLACE ".*[ \t](${register}[0-9]+),$" "\\1")
+  list(REMOVE_DUPLICATES destinations)
+  list(LENGTH destinations count)
+  if(count LESS minimum)
+    string(TOUPPER "${register}" register_upper)
+    message(FATAL_ERROR
+        "${isa}: ${kernel} uses ${count} distinct ${register_upper} FMA destinations; expected at least ${minimum}")
+  endif()
+endfunction()
+
+# Both the AVX2 6-by-16 and AVX-512 12-by-32 tiles use two accumulators per row.
+require_fma_destinations(AVX2_FMA "GemmMicroTile_AVX2FMA_F32Impl<6ul>" ymm 12)
+require_fma_destinations(AVX512F "GemmMicroTile_AVX512_F32_MR12<true>" zmm 24)

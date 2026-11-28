@@ -40,6 +40,7 @@ if(ML_CPU_COMPUTE_BUILD_TESTS)
               "-DOBJDUMP=${CMAKE_OBJDUMP}"
               "-DLIBRARY=$<TARGET_FILE:ml_cpu_compute>"
               "-DISAS=${_avx_checks}"
+              "-DCHECK_REGISTER_ALLOCATION=$<AND:$<CONFIG:Release>,$<NOT:$<BOOL:${ML_CPU_COMPUTE_ENABLE_COVERAGE}>>>"
               -P "${CMAKE_CURRENT_SOURCE_DIR}/check_avx_instructions.cmake")
     endif()
   endif()
