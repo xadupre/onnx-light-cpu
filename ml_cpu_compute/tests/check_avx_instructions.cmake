@@ -47,22 +47,27 @@ require_instruction(AVX512BF16 GemmMicroTile_AVX512BF16 vdpbf16ps zmm)
 require_instruction(AVX512FP16 BinaryAddFloat16_AVX512FP16 vaddph zmm)
 require_instruction(AVX512VNNI MatMulNBitsInt8TileAvx512Vnni vpdpbusd zmm)
 
-if(CHECK_REGISTER_ALLOCATION AND "AVX512F" IN_LIST ISAS)
-  # The paired 12-by-32 tile has two vector accumulators per row. Count FMA
-  # destinations, not source operands or register numbers chosen by the compiler.
-  set(kernel "GemmMicroTile_AVX512_F32_MR12<true>")
+function(require_fma_destinations isa kernel register minimum)
+  if(NOT CHECK_REGISTER_ALLOCATION OR NOT "${isa}" IN_LIST ISAS)
+    return()
+  endif()
   string(REGEX MATCH
       "\n[0-9a-f]+ <void ml_cpu_compute::${kernel}\\([^\n]*\\)( \\[clone [^\n]+\\])?>:[ \t]*\n([ \t]+[0-9a-f]+:[^\n]*\n)*"
       body "${assembly}")
   if(NOT body)
-    message(FATAL_ERROR "AVX512F: ${kernel} not found in ${LIBRARY}")
+    message(FATAL_ERROR "${isa}: ${kernel} not found in ${LIBRARY}")
   endif()
-  string(REGEX MATCHALL ":[ \t]+vfmadd[0-9]+ps[ \t]+zmm[0-9]+," destinations "${body}")
-  list(TRANSFORM destinations REPLACE ".*[ \t](zmm[0-9]+),$" "\\1")
+  string(REGEX MATCHALL ":[ \t]+vfmadd[0-9]+ps[ \t]+${register}[0-9]+," destinations "${body}")
+  list(TRANSFORM destinations REPLACE ".*[ \t](${register}[0-9]+),$" "\\1")
   list(REMOVE_DUPLICATES destinations)
   list(LENGTH destinations count)
-  if(count LESS 24)
+  if(count LESS minimum)
+    string(TOUPPER "${register}" register_upper)
     message(FATAL_ERROR
-        "AVX512F: ${kernel} uses ${count} distinct ZMM FMA destinations; expected at least 24")
+        "${isa}: ${kernel} uses ${count} distinct ${register_upper} FMA destinations; expected at least ${minimum}")
   endif()
-endif()
+endfunction()
+
+# Both the AVX2 6-by-16 and AVX-512 12-by-32 tiles use two accumulators per row.
+require_fma_destinations(AVX2_FMA "GemmMicroTile_AVX2FMA_F32Impl<6ul>" ymm 12)
+require_fma_destinations(AVX512F "GemmMicroTile_AVX512_F32_MR12<true>" zmm 24)
